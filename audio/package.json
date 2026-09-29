@@ -1,0 +1,27 @@
+{
+  "name": "perch-audio",
+  "displayName": "Perch Audio",
+  "description": "Microphone capture for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
+  "version": "0.1.0",
+  "publisher": "fennets",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "activationEvents": ["onCommand:_perch.audio.available", "onCommand:_perch.audio.start"],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "perchAudio.listDevices", "title": "Perch Audio: Choose Microphone…" }
+    ],
+    "configuration": {
+      "title": "Perch Audio",
+      "properties": {
+        "perchAudio.device": { "type": "string", "default": "", "description": "The microphone to record from, by name. Empty uses the system default. Choose one with Perch Audio: Choose Microphone." },
+        "perchAudio.maxSeconds": { "type": "number", "default": 180, "minimum": 5, "maximum": 600, "description": "Recording stops by itself after this many seconds." }
+      }
+    }
+  },
+  "dependencies": { "@picovoice/pvrecorder-node": "^1.2.9" },
+  "scripts": { "test": "node test/recorder.test.js" }
+}

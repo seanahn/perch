@@ -1,8 +1,8 @@
 {
   "name": "perch",
   "displayName": "Perch",
-  "description": "Claude Code and Codex agents as tabs in one sidebar, each with its own look, plus Claude usage and backend switching. A shell, not an agent.",
-  "version": "0.5.0",
+  "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
+  "version": "0.6.0",
   "publisher": "fennets",
   "license": "MIT",
   "engines": {
@@ -104,6 +104,23 @@
       {
         "command": "perch.moveAllToSidebar",
         "title": "Perch: Move All Tabs to the Sidebar"
+      },
+      {
+        "command": "perch.voice.setup",
+        "title": "Perch: Set Up Voice Input"
+      },
+      {
+        "command": "perch.voice.toggle",
+        "title": "Perch: Start or Finish Dictation",
+        "icon": "$(mic)"
+      },
+      {
+        "command": "perch.voice.cancel",
+        "title": "Perch: Discard Dictation"
+      },
+      {
+        "command": "perch.voice.unload",
+        "title": "Perch: Unload the Speech Model (frees its memory)"
       }
     ],
     "menus": {
@@ -340,6 +357,47 @@
             "Never show them; the panel footer is enough."
           ],
           "description": "Whether Perch puts the Claude usage gauge and backend switch in the status bar."
+        },
+        "perch.voice.model": {
+          "type": "string",
+          "default": "large-v3-turbo",
+          "description": "The Whisper model for dictation. large-v3-turbo is accurate and fast on a GPU. On a machine with no GPU, small or base is quicker. Changing it fetches the new model on next use."
+        },
+        "perch.voice.device": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "cuda",
+            "cpu"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "The GPU if there is one that works, otherwise the CPU.",
+            "The NVIDIA GPU only.",
+            "The CPU only."
+          ],
+          "description": "Where speech-to-text runs, on the machine that has the workspace."
+        },
+        "perch.voice.language": {
+          "type": "string",
+          "default": "",
+          "description": "The language you dictate in, as a code such as en or ko. Empty detects it each time."
+        },
+        "perch.voice.vocabulary": {
+          "type": "string",
+          "default": "",
+          "description": "Words and names to expect, such as project or product names, to help them be spelled right. A short phrase or list."
+        },
+        "perch.voice.idleMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "description": "Unload the speech model after this many minutes without dictation, freeing its memory (about 2.5 GB on a GPU). 0 keeps it loaded."
+        },
+        "perch.voice.python": {
+          "type": "string",
+          "default": "",
+          "description": "The Python interpreter used to create the private environment. Empty uses python3."
         }
       }
     }
@@ -349,10 +407,10 @@
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
-    "check": "for f in src/*.js test/*.js; do node --check \"$f\" || exit 1; done",
+    "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

@@ -115,6 +115,16 @@ ${glyphCss}
   #send svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   #send.stop svg { fill: currentColor; stroke: none; width: 12px; height: 12px; }
 
+  /* dictation: the microphone carries a ring that swells with your voice, and a running time */
+  #t-mic { position: relative; }
+  #t-mic .ring { position: absolute; left: 5px; top: 4px; width: 16px; height: 16px; border-radius: 50%; background: var(--vscode-charts-red); opacity: 0; transform: scale(1); transition: transform 90ms linear; pointer-events: none; }
+  #t-mic .ic, #t-mic .tm { position: relative; }
+  #t-mic .tm { font-variant-numeric: tabular-nums; }
+  #t-mic.rec { color: var(--vscode-charts-red); } #t-mic.rec .ring { opacity: .28; }
+  #t-mic.silent { color: var(--vscode-charts-yellow); }
+  #t-mic.busy .ic { animation: pulse 1s infinite; }
+  #composer.listening { border-color: var(--vscode-charts-red); }
+
   /* Claude Code: a squared box, a rule above the tools, the model in a pill, a salmon square to send */
   #composer.claude #t-model { background: var(--vscode-badge-background, rgba(128,128,128,.2)); color: var(--vscode-foreground); border-radius: 12px; padding: 0 10px; }
   #composer.claude #t-model .e { color: var(--vscode-descriptionForeground); }
@@ -124,7 +134,7 @@ ${glyphCss}
   #composer.codex #input { padding: 12px 16px 6px; min-height: 40px; }
   #composer.codex #tools { border-top: none; padding: 2px 8px 8px 10px; gap: 4px; }
   #composer.codex #t-add { order: 1; } #composer.codex #t-mode { order: 2; } #composer.codex #t-model { order: 3; }
-  #composer.codex .sep { order: 4; } #composer.codex #t-ide { order: 5; } #composer.codex .sp { order: 6; } #composer.codex #send { order: 7; }
+  #composer.codex .sep { order: 4; } #composer.codex #t-ide { order: 5; } #composer.codex .sp { order: 6; } #composer.codex #t-mic { order: 7; } #composer.codex #send { order: 8; }
   #composer.codex #t-model { color: var(--vscode-foreground); }
   #composer.codex #t-model .e { color: #b48ead; }
   #composer.codex #t-model .chev { display: block; width: 12px; height: 12px; opacity: .7; }
@@ -181,6 +191,7 @@ ${glyphCss}
       <button class="tb" id="t-ide" hidden aria-pressed="false"></button>
       <span class="sp"></span>
       <button class="tb" id="t-mode" disabled></button>
+      <button class="tb" id="t-mic" title="Dictate" disabled aria-pressed="false"><span class="ring"></span><span class="ic"></span><span class="tm"></span></button>
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
@@ -191,7 +202,7 @@ ${glyphCss}
   const $ = (id) => document.getElementById(id);
   const $tabs = $('tabs'), $add = $('add'), $panes = $('panes'), $empty = $('empty');
   const $composer = $('composer'), $input = $('input'), $send = $('send');
-  const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $sep = document.querySelector('#tools .sep'), $where = $('m-where');
+  const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $tMic = $('t-mic'), $sep = document.querySelector('#tools .sep'), $where = $('m-where');
   const panes = new Map();   // sid -> pane state
   const commands = { claude: [], codex: [] };
   let tabs = [], active = null, menu = null, menuOwner = null;
@@ -205,6 +216,7 @@ ${glyphCss}
     bolt: '<svg viewBox="0 0 16 16"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/></svg>',
     up: '<svg viewBox="0 0 16 16"><path d="M8 13V3.5M3.5 8L8 3.5 12.5 8"/></svg>',
     stop: '<svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2"/></svg>',
+    mic: '<svg viewBox="0 0 16 16"><rect x="5.8" y="1.8" width="4.4" height="7.6" rx="2.2"/><path d="M3.5 7.6a4.5 4.5 0 0 0 9 0M8 12.1v2.1"/></svg>',
     shield: '<svg viewBox="0 0 16 16"><path d="M8 1.8l5 1.8v4.1c0 3-2 5.2-5 6.5-3-1.3-5-3.5-5-6.5V3.600z"/><path d="M8 5.200v3.300M8 10.800v.100"/></svg>',
     chev: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.500l3 3 3-3"/></svg>',
     cursor: '<svg viewBox="0 0 16 16"><path d="M6.5 6.500l2.7 7 1.1-3.1 3.1-1.100z"/><path d="M4.2 1.800l.600 1.700M1.8 4.200l1.7.600M1.7 8.300l1.6-.700M8.3 1.700l-.700 1.6"/></svg>',
@@ -217,6 +229,7 @@ ${glyphCss}
     'read-only': ['Read only', 'Read files; change nothing'], 'workspace-write': ['Workspace', 'Edit files in the workspace'], 'danger-full-access': ['Full access', 'No sandbox'],
   };
   $tAdd.innerHTML = SVG.plus; $tSlash.innerHTML = SVG.slash; $tCtx.innerHTML = SVG.ring; $tModel.querySelector('.chev').innerHTML = SVG.chev;
+  $tMic.querySelector('.ic').innerHTML = SVG.mic;
   $tIde.innerHTML = SVG.cursor; $tIde.append(el0('span', 'IDE context'));
   $where.innerHTML = SVG.laptop; $where.append(el0('span', 'Work locally')); $where.title = 'Perch runs Codex on this machine, through the Codex SDK. Cloud tasks are not available here.';
   function el0(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
@@ -277,7 +290,7 @@ ${glyphCss}
     if (prev && panes.has(prev)) panes.get(prev).draft = $input.value;
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
-    for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
+    for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); voice.delete(id); }
     for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; }
     $empty.hidden = tabs.length > 0 || single;
     renderTabs();
@@ -296,14 +309,14 @@ ${glyphCss}
   function syncComposer() {
     const t = cur(), claude = !!t && t.kind === 'claude';
     $composer.className = (t ? t.kind : 'off');
-    $input.disabled = !t; $tAdd.disabled = !t; $tModel.disabled = !t; $tMode.disabled = !t;
+    $input.disabled = !t; $tAdd.disabled = !t; $tModel.disabled = !t; $tMode.disabled = !t; $tMic.disabled = !t;
     $input.placeholder = !t ? 'Open a tab with +' : t.busy ? 'Queue another message…' : claude ? 'Message Claude…' : 'Do anything';
     $tIde.hidden = !t || claude; $sep.hidden = $tIde.hidden;
     $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
     $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
     $tSlash.hidden = !claude || !commands.claude.length;
     $tCtx.hidden = !claude; $tCache.hidden = !claude;
-    if (!t) { $tModel.querySelector('.m').textContent = ''; $tModel.querySelector('.e').textContent = ''; $tMode.textContent = ''; $send.disabled = true; $send.className = ''; $send.innerHTML = SVG.up; return; }
+    if (!t) { syncVoice(); $tModel.querySelector('.m').textContent = ''; $tModel.querySelector('.e').textContent = ''; $tMode.textContent = ''; $send.disabled = true; $send.className = ''; $send.innerHTML = SVG.up; return; }
 
     const model = resolved(t.models, t.model) || (claude ? 'Claude' : 'Codex');
     const hasEffort = (t.efforts || []).length > 1, effort = hasEffort ? cap(resolved(t.efforts, t.effort)) : '';
@@ -323,6 +336,7 @@ ${glyphCss}
     $tCtx.title = c ? 'Context ' + c.percent + '% used · ' + fmtTok(c.used) + ' of ' + fmtTok(c.max) + ' tokens' : 'Context usage appears once the session starts';
     tickCache();
 
+    syncVoice();
     $send.disabled = false;
     $send.className = t.busy ? 'stop' : '';
     $send.innerHTML = t.busy ? SVG.stop : SVG.up;
@@ -342,6 +356,30 @@ ${glyphCss}
       : 'The prompt cache stays warm for ' + c.minutes + ' minutes after each answer.';
   }
   setInterval(tickCache, 20000);
+
+  // ---- dictation. The host records and transcribes; the page shows what is happening and takes the words.
+  const voice = new Map();      // sid -> { phase, level, seconds, device, maxSeconds, silent }
+  const clock = (sec) => { const n = Math.max(0, Math.floor(sec || 0)); return Math.floor(n / 60) + ':' + String(n % 60).padStart(2, '0'); };
+  function syncVoice() {
+    const t = cur(), v = (t && voice.get(t.id)) || { phase: 'idle' };
+    const rec = v.phase === 'recording', work = v.phase === 'starting' || v.phase === 'transcribing';
+    $tMic.className = 'tb' + (rec ? ' rec' : '') + (work ? ' busy' : '') + (rec && v.silent ? ' silent' : '');
+    $tMic.setAttribute('aria-pressed', String(rec));
+    $tMic.querySelector('.tm').textContent = rec ? clock(v.seconds) : v.phase === 'transcribing' ? '…' : '';
+    $tMic.querySelector('.ring').style.transform = 'scale(' + (rec ? (1 + Math.min(1, v.level || 0) * 1.2).toFixed(2) : '1') + ')';
+    $tMic.title = rec ? (v.silent ? 'Nothing is being heard from ' + (v.device || 'the microphone') + '. Click to finish, Escape to discard.' : 'Listening on ' + (v.device || 'the microphone') + '. Click to finish, Escape to discard.' + (v.maxSeconds ? ' Stops at ' + clock(v.maxSeconds) + '.' : ''))
+      : v.phase === 'transcribing' ? 'Turning speech into text…' : v.phase === 'starting' ? 'Opening the microphone…' : 'Dictate';
+    $composer.classList.toggle('listening', rec);
+    if (t && rec) $input.placeholder = 'Listening… click the microphone to finish, Escape to discard';
+    else if (t && v.phase === 'transcribing') $input.placeholder = 'Turning speech into text…';
+  }
+  $tMic.addEventListener('click', () => {
+    const t = cur(); if (!t) return;
+    const v = voice.get(t.id) || { phase: 'idle' };
+    if (v.phase === 'recording') vscode.postMessage({ type: 'voiceStop', sid: t.id });
+    else if (v.phase === 'idle') vscode.postMessage({ type: 'voiceStart', sid: t.id });
+  });
+  const dictating = () => { const t = cur(), v = t && voice.get(t.id); return !!v && (v.phase === 'recording' || v.phase === 'starting'); };
 
   function grow() { $input.style.height = 'auto'; $input.style.height = Math.min(180, Math.max(22, $input.scrollHeight)) + 'px'; }
   function insert(text) {
@@ -363,6 +401,7 @@ ${glyphCss}
   $input.addEventListener('keydown', (e) => {
     if (menu && menuOwner === 'slash' && (e.key === 'Enter' || e.key === 'Tab')) { const first = menu.querySelector('.it:not(.dis)'); if (first) { e.preventDefault(); first.click(); return; } }
     if (e.key === 'Escape' && menu) { e.preventDefault(); closeMenu(); return; }
+    if (e.key === 'Escape' && dictating()) { e.preventDefault(); vscode.postMessage({ type: 'voiceCancel' }); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
   $input.addEventListener('input', () => {
@@ -459,13 +498,14 @@ ${glyphCss}
     });
   });
   document.addEventListener('click', closeMenu);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (menu) closeMenu(); else if (dictating() && e.target !== $input) vscode.postMessage({ type: 'voiceCancel' }); });
   $('e-claude').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'claude' }));
   $('e-codex').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'codex' }));
 
   // ---- transcript events
   function onEvent(sid, m) {
     const p = panes.get(sid); if (!p) return;
+    if (m.kind === 'voice') { if (m.phase === 'idle') voice.delete(sid); else voice.set(sid, m); if (sid === active) syncComposer(); return; }
     switch (m.kind) {
       case 'user': { endLive(p); const d = add(p, 'user' + (m.queued ? ' queued' : ''), ''); const tags = [m.queued ? 'queued' : '', m.tag || ''].filter(Boolean); if (tags.length) d.append(el('span', 'tag', tags.join(' · '))); d.append(m.text); break; }
       case 'delta': if (!p.live) p.live = add(p, 'assistant live', ''); p.live.textContent += m.text; p.log.scrollTop = p.log.scrollHeight; break;

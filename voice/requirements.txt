@@ -1,0 +1,6 @@
+# The speech-to-text runtime for Perch's voice input. Installed into a private environment
+# (~/.local/share/perch/voice/venv), never into the system Python.
+faster-whisper>=1.1.0,<2
+# CUDA libraries for the GPU path, from NVIDIA's wheels. Harmless on a machine with no NVIDIA GPU: the server falls back to the CPU.
+nvidia-cublas-cu12 ; platform_system == "Linux" and platform_machine == "x86_64"
+nvidia-cudnn-cu12>=9,<10 ; platform_system == "Linux" and platform_machine == "x86_64"

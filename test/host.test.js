@@ -3,7 +3,7 @@ process.env.PERCH_RESTORE_GRACE_MS = '60';   // the wait for VS Code to bring ba
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
-const { install, fakeView, created, flush, CODEX_LIMITS } = require('./stubs');
+const { install, fakeView, created, engines, flush, CODEX_LIMITS } = require('./stubs');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const vals = (list) => list.map((o) => o.value);
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
@@ -722,6 +722,150 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([k.ui.panels.length, sk.lastTabs().tabs.map((t) => t.id), sk.lastTabs().active], [0, ['L1', 'L2'], 'L1'], 'with newTabs sidebar they stay where they were');
     k.perch.dispose();
     fs.rmSync(gpt, { recursive: true, force: true });
+  }
+
+  // ======================================================================== dictation
+  {
+    const voiceOf = (v, sid) => v.events(sid).filter((e) => e.kind === 'voice');
+    const last = (list) => list[list.length - 1];
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+
+    // speak, stop, and the words arrive in the message box
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.deepStrictEqual(voiceOf(v, c).map((e) => e.phase), ['starting', 'recording']);
+    assert.deepStrictEqual([last(voiceOf(v, c)).device, last(voiceOf(v, c)).maxSeconds], ['Headset Microphone', 180]);
+    assert.deepStrictEqual(m.abox.calls.map((k) => k[0]), ['available', 'start'], 'the recorder on the user\'s machine is asked, and started');
+    assert.deepStrictEqual([m.vbox.starts, m.ui.warnings.length, m.ui.infos.length], [1, 0, 0], 'the model loads while the user is speaking; nothing is asked when it is already set up');
+    await wait(300);
+    const ticks = voiceOf(v, c).filter((e) => e.phase === 'recording' && e.seconds === 1.2);
+    assert(ticks.length >= 1 && ticks[0].level === 0.4 && ticks[0].silent === false, 'the level reaches the page while recording');
+    assert.strictEqual(voiceOf(v, x).length, 0, 'only on the tab that is dictating');
+    v.fire({ type: 'voiceStop', sid: c }); await flush(); await flush();
+    assert.deepStrictEqual(voiceOf(v, c).slice(-2).map((e) => e.phase), ['transcribing', 'idle']);
+    assert.deepStrictEqual(last(m.abox.calls), ['stop', 'rec-1']);
+    assert.deepStrictEqual([m.vbox.requests.length, m.vbox.requests[0].sampleRate, m.vbox.requests[0].pcm.length, m.vbox.requests[0].language, m.vbox.requests[0].prompt], [1, 16000, m.abox.stop.pcm.length, null, null]);
+    assert.deepStrictEqual(last(v.events(c).filter((e) => e.kind === 'insert')), { kind: 'insert', text: 'hello world ' }, 'at the cursor, with a space after, ready for more');
+    const n = m.abox.calls.length; await wait(200); assert.strictEqual(m.abox.calls.length, n, 'nothing is asked of the recorder once it has stopped');
+
+    // settings reach the engine
+    m.changeConfig({ 'voice.language': 'ko', 'voice.vocabulary': 'Perch, Whisper' });
+    m.vbox.text = '  안녕하세요  '; v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); v.fire({ type: 'voiceStop', sid: x }); await flush(); await flush();
+    assert.deepStrictEqual([last(m.vbox.requests).language, last(m.vbox.requests).prompt, last(v.events(x).filter((e) => e.kind === 'insert')).text], ['ko', 'Perch, Whisper', '안녕하세요 ']);
+    const e0 = engines.length; m.changeConfig({ 'voice.model': 'small', 'voice.device': 'cpu', 'voice.idleMinutes': 0 });
+    v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); v.fire({ type: 'voiceStop', sid: x }); await flush(); await flush();
+    assert.deepStrictEqual([engines.length, last(engines).o.model, last(engines).o.device, last(engines).o.idleMs, m.vbox.stops], [e0 + 1, 'small', 'cpu', 0, 1], 'a change of model replaces the engine, and the old one is stopped');
+    m.vbox.text = 'hello world';
+
+    // pressing the microphone again finishes; escape discards
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.deepStrictEqual([last(voiceOf(v, c)).phase, last(m.abox.calls)[0]], ['idle', 'stop'], 'the button that starts it also finishes it');
+    const r0 = m.vbox.requests.length;
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush(); v.fire({ type: 'voiceCancel' }); await flush();
+    assert.deepStrictEqual([last(voiceOf(v, c)).phase, last(m.abox.calls), m.vbox.requests.length], ['idle', ['cancel', 'rec-1'], r0], 'discarded: the recorder lets go, and nothing is transcribed');
+    v.fire({ type: 'voiceCancel' }); v.fire({ type: 'voiceStop', sid: c }); await flush(); assert.strictEqual(m.vbox.requests.length, r0, 'with nothing recording, these do nothing');
+
+    // one dictation at a time; a tab that closes takes its dictation with it
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    v.fire({ type: 'voiceStart', sid: x }); await flush();
+    assert.strictEqual(last(v.events(x).filter((e) => e.kind === 'error')).text, 'Voice input: another tab is dictating.');
+    v.fire({ type: 'voiceStop', sid: x }); await flush(); assert.strictEqual(last(voiceOf(v, c)).phase, 'recording', 'another tab cannot finish it');
+    // a page rebuilt mid-dictation is told at once
+    const v2 = fakeView(); m.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(voiceOf(v2, c).slice(0, 1).map((e) => [e.phase, e.device]), [['recording', 'Headset Microphone']]);
+    v2.fire({ type: 'close', sid: c }); await flush();
+    assert.deepStrictEqual([last(m.abox.calls), m.vbox.requests.length], [['cancel', 'rec-1'], r0]);
+    v2.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); assert.strictEqual(last(voiceOf(v2, x)).phase, 'recording', 'and the microphone is free for another tab');
+
+    // the recording ends by itself at the limit, and is transcribed
+    m.abox.levels.push({ ok: true, level: 0.2, seconds: 180, ended: 'max', silent: false }); m.abox.stop = Object.assign({}, m.abox.stop, { ended: 'max' });
+    await wait(300); await flush();
+    assert.strictEqual(last(voiceOf(v2, x)).phase, 'idle'); assert.strictEqual(last(v2.events(x).filter((e) => e.kind === 'insert')).text, 'hello world ');
+    assert.strictEqual(last(v2.events(x).filter((e) => e.kind === 'note')).text, 'Dictation stopped at the 180 second limit. Set perchAudio.maxSeconds to change it.');
+    m.abox.stop = Object.assign({}, m.abox.stop, { ended: null });
+
+    // nothing heard, nothing said, too short
+    const errs = () => v2.events(x).filter((e) => e.kind === 'error').map((e) => e.text);
+    const once = async (patch, vpatch) => { const keep = m.abox.stop, keepText = m.vbox.text, keepFail = m.vbox.failTranscribe; m.abox.stop = Object.assign({}, keep, patch); Object.assign(m.vbox, vpatch); const i0 = v2.events(x).filter((e) => e.kind === 'insert').length; v2.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); v2.fire({ type: 'voiceStop', sid: x }); await flush(); await flush(); m.abox.stop = keep; m.vbox.text = keepText; m.vbox.failTranscribe = keepFail; return v2.events(x).filter((e) => e.kind === 'insert').length - i0; };
+    assert.strictEqual(await once({ silent: true }), 0);
+    assert.strictEqual(last(errs()), 'Voice input: nothing was heard from "Headset Microphone". It may be muted, or the wrong input. Choose another with Perch Audio: Choose Microphone.');
+    const r1 = m.vbox.requests.length; assert.strictEqual(await once({ seconds: 0.1 }), 0); assert.strictEqual(m.vbox.requests.length, r1, 'a slip of the finger is not sent to the model');
+    assert.strictEqual(await once({}, { text: '   ' }), 0); assert.strictEqual(last(v2.events(x).filter((e) => e.kind === 'note')).text, 'Voice input heard no words.');
+    assert.strictEqual(await once({}, { failTranscribe: 'CUDA out of memory' }), 0); assert.strictEqual(last(errs()), 'Voice input: CUDA out of memory');
+    assert.strictEqual(await once({ ok: false, error: 'No such recording.', code: 'unknown' }), 0); assert.strictEqual(last(errs()), 'Voice input: No such recording.');
+    assert.strictEqual(last(voiceOf(v2, x)).phase, 'idle', 'every failure leaves the microphone ready to try again');
+    assert.strictEqual(await once({}), 1);
+
+    // the recorder is lost mid-recording
+    v2.fire({ type: 'voiceStart', sid: x }); await flush(); await flush();
+    m.abox.levels.push({ ok: false, error: 'No such recording.', code: 'unknown' }); await wait(300);
+    assert.deepStrictEqual([last(voiceOf(v2, x)).phase, last(errs())], ['idle', 'Voice input: the recording was lost: No such recording.']);
+
+    // words for a page that is not there wait for it
+    m.perch.deliver(x, 'first'); assert.strictEqual(last(v2.events(x).filter((e) => e.kind === 'insert')).text, 'first');
+    v2.destroy(); m.perch.deliver(x, 'while away'); m.perch.deliver(x, 'and more');
+    const v3 = fakeView(); m.registered['perch.main'].resolveWebviewView(v3.view); v3.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v3.events(x).filter((e) => e.kind === 'fill').map((e) => e.text), ['while away and more']);
+    m.perch.dispose();
+  }
+  {
+    // no microphone where the user sits, and no companion at all
+    const NOMIC = 'No microphone is connected to this computer: nothing is plugged into its audio input. Plug in a microphone or a headset, or dictate from a computer that has one, connected to this workspace over Remote-SSH with Perch Audio installed there.';
+    const m = install(undefined, { audio: { available: { ok: false, code: 'no-microphone', error: NOMIC, api: 1 } } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'voice').map((e) => e.phase), ['starting', 'idle']);
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: ' + NOMIC, 'the reason is passed on as the recorder gave it');
+    assert.deepStrictEqual([m.abox.calls.map((k) => k[0]), m.vbox.starts, m.vbox.installs], [['available'], 0, []], 'and nothing is started or installed');
+    m.abox.available = { ok: true, api: 2, devices: ['Mic'], device: 'Mic' }; v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: Perch Audio is a different version from Perch. Update both.');
+    m.abox.available = { ok: true, api: 1, devices: ['Mic'], device: 'Mic' }; m.abox.start = { ok: false, code: 'capture-failed', error: 'Could not open the microphone: Failed to open device.' };
+    v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: Could not open the microphone: Failed to open device.');
+    m.abox.missing = true; v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    const e = v.events(c).filter((x) => x.kind === 'error').pop().text;
+    assert(/^Voice input: Perch Audio is not installed on this computer\. It records from your microphone, so it has to be installed where you are sitting, even when the workspace is remote\./.test(e), e);
+    assert(/make install-audio/.test(e) && /make package-audio/.test(e), 'and says how to get it');
+    assert.strictEqual(v.events(c).filter((x) => x.kind === 'voice').pop().phase, 'idle');
+    m.perch.dispose();
+  }
+  {
+    // first use: the one-time setup is asked for, says where it installs, and can be declined
+    const m = install(undefined, { voice: { installed: false } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush();
+    assert.strictEqual(m.ui.infos.pop(), 'Set up voice input on this machine?');
+    assert(/private Python environment and fetches the large-v3-turbo model, about 4 GB in all, under .*perch.voice\. Nothing is installed system-wide, and nothing you say leaves this machine\./.test(m.ui.details.pop()));
+    assert.deepStrictEqual([m.vbox.installs, m.abox.calls.map((k) => k[0]), v.events(x).filter((e) => e.kind === 'voice').pop().phase, v.events(x).filter((e) => e.kind === 'error').length], [[], ['available'], 'idle', 0], 'declined: nothing is installed, nothing is recorded, and it is not an error');
+    m.ui.answers.push('Set Up'); v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.vbox.installs, m.ui.progress], [['large-v3-turbo'], ['Perch voice input', 'Creating a private Python environment', 'Installing the speech-to-text runtime', 'Ready']]);
+    assert.strictEqual(v.events(x).filter((e) => e.kind === 'voice').pop().phase, 'recording', 'and dictation begins once it is ready');
+    v.fire({ type: 'voiceCancel' }); await flush();
+    const asked = m.ui.infos.length; v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); assert.strictEqual(m.ui.infos.length, asked, 'it is asked once'); v.fire({ type: 'voiceCancel' }); await flush();
+    await m.commands['perch.voice.setup'](); assert.strictEqual(m.ui.infos.pop(), 'Perch: voice input is already set up here.');
+    m.commands['perch.voice.unload'](); assert.strictEqual(m.vbox.stops, 1, 'the model can be unloaded by hand, to free its memory');
+    m.perch.dispose();
+
+    const f = install(undefined, { voice: { installed: false, failInstall: 'No matching distribution found for faster-whisper' } }); await flush();
+    const fv = fakeView(); f.registered['perch.main'].resolveWebviewView(fv.view); fv.fire({ type: 'ready' }); await flush();
+    fv.fire({ type: 'new', kind: 'claude' }); const c = fv.lastTabs().active;
+    f.ui.answers.push('Set Up'); fv.fire({ type: 'voiceStart', sid: c }); await flush(); await flush(); await flush();
+    assert.strictEqual(f.ui.errors.pop(), 'Perch: voice input could not be set up. No matching distribution found for faster-whisper');
+    assert.deepStrictEqual([fv.events(c).filter((e) => e.kind === 'voice').pop().phase, f.abox.calls.map((k) => k[0])], ['idle', ['available']]);
+    f.perch.dispose();
+
+    // over Remote-SSH the question names the machine it will install on
+    const r = install(undefined, { voice: { installed: false }, remote: 'ssh-remote' }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    rv.fire({ type: 'new', kind: 'claude' }); rv.fire({ type: 'voiceStart', sid: rv.lastTabs().active }); await flush(); await flush();
+    assert.strictEqual(r.ui.infos.pop(), `Set up voice input on ${require('os').hostname()}, the remote machine?`);
+    assert(/nothing you say leaves your machines\./.test(r.ui.details.pop()), 'audio crosses from the laptop to the workspace machine, and no further');
+    r.perch.dispose();
   }
 
   console.log('HOST OK');

@@ -1,0 +1,4 @@
+node_modules/@picovoice/pvrecorder-node/lib/raspberry-pi/**
+test/**
+.git/**
+*.vsix

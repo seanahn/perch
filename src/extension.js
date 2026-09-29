@@ -6,6 +6,7 @@ const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
 const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./models');
 const { MeterHost } = require('./meterHost');
+const { VoiceHost } = require('./voiceHost');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -334,6 +335,11 @@ class PerchView {
     this.closing = false;
     this.graceTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
+    this.voice = new VoiceHost({
+      root: (context.extensionUri && (context.extensionUri.fsPath || context.extensionUri.path)) || context.extensionPath || require('path').join(__dirname, '..'),
+      send: (sid, ev) => this.sendEvent(sid, ev),
+      deliver: (sid, text) => this.deliver(sid, text),
+    });
     this.restore();
   }
 
@@ -359,6 +365,13 @@ class PerchView {
     if (JSON.stringify(next) === JSON.stringify(this.commands[kind])) return;
     this.commands[kind] = next;
     this.raw({ type: 'commands', kind, list: next });
+  }
+
+  /** Put text into a session's message box, at the cursor. If its page is not there to take it, it waits. */
+  deliver(sid, text) {
+    const s = this.get(sid); if (!s || !text) return;
+    const f = this.surface(s);
+    if (f && f.ready) this.sendEvent(sid, { kind: 'insert', text }); else s.prefill = (s.prefill ? s.prefill.replace(/\s*$/, ' ') : '') + text;
   }
 
   /** The + button: pick files, and mention them in the message by workspace-relative path. */
@@ -511,7 +524,7 @@ class PerchView {
         to.postMessage({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
         for (const k of Object.keys(this.commands)) if (this.commands[k].length) to.postMessage({ type: 'commands', kind: k, list: this.commands[k] });
         this.loadCatalogs();
-        for (const x of mine) this.replay(x);
+        for (const x of mine) { this.replay(x); this.voice.resend(x.id); }
         return;
       }
       case 'send': if (s) s.send(msg.text); return;
@@ -525,6 +538,9 @@ class PerchView {
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
       case 'meterToggle': this.meter.toggleBackend(); return;
       case 'meterLogin': this.meter.login(); return;
+      case 'voiceStart': if (s) this.voice.start(s.id); return;
+      case 'voiceStop': if (s) this.voice.stop(s.id); return;
+      case 'voiceCancel': this.voice.cancel(); return;
       case 'activate': this.activate(msg.sid); return;
       case 'new': this.addSession(msg.kind); return;
       case 'close': this.closeSession(msg.sid); return;
@@ -556,6 +572,7 @@ class PerchView {
     const i = this.sessions.findIndex((s) => s.id === id);
     if (i < 0) return;
     const s = this.sessions[i];
+    this.voice.closed(id);
     s.dispose();
     this.sessions.splice(i, 1);
     const e = this.panels.get(id);
@@ -621,6 +638,7 @@ class PerchView {
     clearTimeout(this.graceTimer);
     for (const s of this.sessions) s.dispose();
     this.meter.dispose();
+    this.voice.dispose();
   }
 }
 
@@ -644,6 +662,10 @@ function activate(context) {
     vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
     vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
     vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),
+    vscode.commands.registerCommand('perch.voice.setup', async () => { if (perch.voice.getEngine().isInstalled()) { vscode.window.showInformationMessage('Perch: voice input is already set up here.'); return; } if (await perch.voice.setup(true)) vscode.window.showInformationMessage('Perch: voice input is ready.'); }),
+    vscode.commands.registerCommand('perch.voice.toggle', () => { const s = perch.active(); if (s) perch.voice.start(s.id); }),
+    vscode.commands.registerCommand('perch.voice.cancel', () => perch.voice.cancel()),
+    vscode.commands.registerCommand('perch.voice.unload', () => { if (perch.voice.engine) perch.voice.engine.stop(); }),
     { dispose: () => perch.dispose() },
   );
   perch.start();

@@ -46,10 +46,10 @@ assert.deepStrictEqual(out.shift(), { type: 'ready' }, 'page announces ready');
 // ---- nothing open
 host({ type: 'tabs', tabs: [], active: null });
 assert(shown($('#empty')), 'a fresh page shows the empty state'); assert.strictEqual($$('.tab').length, 0);
-assert.deepStrictEqual([$('#input').disabled, $('#send').disabled, $('#t-model').disabled, $('#t-mode').disabled, $('#t-add').disabled], [true, true, true, true, true], 'the composer is inert with no tab');
+assert.deepStrictEqual([$('#input').disabled, $('#send').disabled, $('#t-model').disabled, $('#t-mode').disabled, $('#t-add').disabled, $('#t-mic').disabled], [true, true, true, true, true, true], 'the composer is inert with no tab');
 assert.strictEqual($('#composer').className, 'off');
 assert(!shown($('#t-slash')) && !shown($('#t-ctx')) && !shown($('#t-cache')));
-$('#send').click(); $('#t-model').click(); $('#t-mode').click(); key($('#input'), 'Enter');
+$('#send').click(); $('#t-model').click(); $('#t-mode').click(); $('#t-mic').click(); key($('#input'), 'Enter'); key($('#input'), 'Escape');
 assert.deepStrictEqual([out.length, $('#menu')], [0, null], 'and does nothing');
 
 // ---- tabs and panes
@@ -149,7 +149,7 @@ assert(/^Sandbox: Edit files in the workspace\. Approvals: on-failure$/.test($('
 
 // the Codex look: the sandbox beside the +, behind a shield; the model with a chevron; IDE context; a round button
 const order = (n) => Number(window.getComputedStyle(n).order) || 0;
-assert.deepStrictEqual(['#t-add', '#t-mode', '#t-model', '#tools .sep', '#t-ide', '#tools .sp', '#send'].map((q) => order($(q))), [1, 2, 3, 4, 5, 6, 7], 'tools are laid out in Codex order');
+assert.deepStrictEqual(['#t-add', '#t-mode', '#t-model', '#tools .sep', '#t-ide', '#tools .sp', '#t-mic', '#send'].map((q) => order($(q))), [1, 2, 3, 4, 5, 6, 7, 8], 'tools are laid out in Codex order');
 assert(/M8 1\.8l5 1\.8/.test($('#t-mode').innerHTML), 'a shield, not a bolt');
 assert(shown($('#t-model .chev')) && shown($('#t-ide')) && shown($('#tools .sep')));
 assert.strictEqual(window.getComputedStyle($('#send')).borderRadius, '50%');
@@ -281,6 +281,45 @@ type('');
 host({ type: 'tabs', tabs: [A, B], active: 'b' });
 type('/'); assert.strictEqual($('#menu'), null, 'a slash in a codex tab is just a character');
 type(''); host({ type: 'tabs', tabs: [A, B], active: 'a' });
+
+// ---- dictation
+const mic = $('#t-mic');
+assert.deepStrictEqual([mic.disabled, mic.className, mic.getAttribute('aria-pressed'), mic.title, mic.querySelector('.tm').textContent], [false, 'tb', 'false', 'Dictate', '']);
+assert(/<rect/.test(mic.querySelector('.ic').innerHTML), 'a microphone');
+mic.click(); assert.deepStrictEqual(out.pop(), { type: 'voiceStart', sid: 'a' });
+ev('a', { kind: 'voice', phase: 'starting' });
+assert.deepStrictEqual([mic.className, mic.title], ['tb busy', 'Opening the microphone…']);
+mic.click(); assert.strictEqual(out.length, 0, 'while it is opening, another press does nothing');
+ev('a', { kind: 'voice', phase: 'recording', level: 0, seconds: 0, device: 'Headset Microphone', maxSeconds: 180 });
+assert.deepStrictEqual([mic.className, mic.getAttribute('aria-pressed'), mic.querySelector('.tm').textContent, $('#composer').classList.contains('listening')], ['tb rec', 'true', '0:00', true]);
+assert.strictEqual($('#input').placeholder, 'Listening… click the microphone to finish, Escape to discard');
+assert.strictEqual(mic.title, 'Listening on Headset Microphone. Click to finish, Escape to discard. Stops at 3:00.');
+ev('a', { kind: 'voice', phase: 'recording', level: 0.5, seconds: 67.4, device: 'Headset Microphone', maxSeconds: 180 });
+assert.deepStrictEqual([mic.querySelector('.tm').textContent, mic.querySelector('.ring').style.transform], ['1:07', 'scale(1.60)'], 'the time runs, and the ring swells with the voice');
+ev('a', { kind: 'voice', phase: 'recording', level: 9, seconds: 68 }); assert.strictEqual(mic.querySelector('.ring').style.transform, 'scale(2.20)', 'within bounds');
+ev('a', { kind: 'voice', phase: 'recording', level: 0, seconds: 3, device: 'Headset Microphone', silent: true });
+assert.deepStrictEqual([mic.className, /^Nothing is being heard from Headset Microphone\./.test(mic.title)], ['tb rec silent', true], 'a microphone that hears nothing is flagged while there is time to notice');
+assert.strictEqual(paneA.querySelectorAll('.msg').length, [...paneA.querySelectorAll('.msg')].length); const before = paneA.querySelectorAll('.msg').length;
+host({ type: 'tabs', tabs: [A, B], active: 'b' });
+assert.deepStrictEqual([mic.className, $('#composer').classList.contains('listening'), $('#input').placeholder], ['tb', false, 'Do anything'], 'it is the other tab that is dictating');
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
+assert.deepStrictEqual([mic.className, mic.querySelector('.tm').textContent], ['tb rec silent', '0:03'], 'and it still is, on returning');
+key($('#input'), 'Escape'); assert.deepStrictEqual(out.pop(), { type: 'voiceCancel' }, 'escape discards');
+$('#t-model').click(); key($('#input'), 'Escape'); assert.deepStrictEqual([$('#menu'), out.length], [null, 0], 'with a menu open, escape closes the menu first');
+key(d.body, 'Escape'); assert.deepStrictEqual(out.pop(), { type: 'voiceCancel' }, 'wherever the focus is');
+mic.click(); assert.deepStrictEqual(out.pop(), { type: 'voiceStop', sid: 'a' }, 'pressing it again finishes');
+ev('a', { kind: 'voice', phase: 'transcribing', device: 'Headset Microphone' });
+assert.deepStrictEqual([mic.className, mic.querySelector('.tm').textContent, mic.title, $('#input').placeholder, $('#composer').classList.contains('listening')], ['tb busy', '…', 'Turning speech into text…', 'Turning speech into text…', false]);
+mic.click(); key($('#input'), 'Escape'); assert.strictEqual(out.length, 0, 'there is nothing to stop or discard while it is being transcribed');
+type('so far '); ev('a', { kind: 'voice', phase: 'idle' }); ev('a', { kind: 'insert', text: 'hello world ' });
+assert.deepStrictEqual([mic.className, mic.title, $('#input').value, $('#input').placeholder], ['tb', 'Dictate', 'so far hello world ', 'Message Claude…'], 'the words join what was already written');
+assert.strictEqual(paneA.querySelectorAll('.msg').length, before, 'dictation leaves no trace in the transcript');
+key($('#input'), 'Escape'); assert.strictEqual(out.length, 0);
+type('');
+host({ type: 'tabs', tabs: [A, B], active: 'b' });
+assert.strictEqual(order($('#t-mic')) < order($('#send')) && order($('#t-mic')) > order($('#t-ide')), true, 'in a Codex tab the microphone sits where Codex puts it, before the send button');
+mic.click(); assert.deepStrictEqual(out.pop(), { type: 'voiceStart', sid: 'b' });
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
 
 // ---- mentioning files
 $('#t-add').click(); assert.deepStrictEqual(out.pop(), { type: 'attach', sid: 'a' });

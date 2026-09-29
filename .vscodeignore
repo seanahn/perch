@@ -2,3 +2,5 @@
 test/**
 *.vsix
 Makefile
+audio/**
+voice/__pycache__/**

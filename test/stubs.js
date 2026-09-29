@@ -28,6 +28,7 @@ const HOUR = 3600000;
 const LIMITS = () => [{ kind: 'session', percent: 9, resetsAt: new Date(Date.now() + HOUR + 60000).toISOString(), model: null }, { kind: 'weekly_all', percent: 5, resetsAt: new Date(Date.now() + 150 * HOUR).toISOString(), model: null }];
 
 const created = [];   // every FakeAgent constructed, in order
+const engines = [];   // every FakeEngine constructed, in order
 // Answers at once, unless the message starts with "hold": then it stays busy until finish() is called, which is how
 // the tests get a turn that is still running. As Claude it queues further messages itself, as the real agent does.
 class FakeAgent {
@@ -65,7 +66,7 @@ class FakeAgent {
   dispose() { this.disposed = true; }
 }
 
-function install(state, { extensions, config, catalogs, meter, globals } = {}) {
+function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote } = {}) {
   const cfgBox = Object.assign({}, config);                 // mutable, so a test can change a setting and fire the change event
   const cats = Object.assign({}, CATALOGS, catalogs);     // pass { claude: null } to simulate an agent that cannot list models
   const loads = { claude: 0, codex: 0 };
@@ -74,6 +75,25 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     'openai.chatgpt': { icon: 'resources/blossom.dark.png', contributes: { viewsContainers: { activitybar: [{ id: 'x', icon: 'resources/blossom-white.svg' }] } } },
   };
   const registered = {}; const commands = {}; const picks = [];
+  // the speech-to-text engine on the workspace machine, and the recorder on the machine the user sits at
+  const vbox = Object.assign({ installed: true, text: 'hello world', installs: [], starts: 0, stops: 0, requests: [], failInstall: null, failTranscribe: null, failStart: null }, voice);
+  class FakeEngine {
+    constructor(o) { this.o = o; this.model = o.model; this.home = '/home/u/.local/share/perch/voice'; engines.push(this); }
+    isInstalled() { return vbox.installed; }
+    async install(onStep) { vbox.installs.push(this.o.model); onStep('Creating a private Python environment', 5); onStep('Installing the speech-to-text runtime', 15); if (vbox.failInstall) throw new Error(vbox.failInstall); onStep('Ready', 100); vbox.installed = true; return { ready: true, device: 'cuda' }; }
+    start() { vbox.starts++; return vbox.failStart ? Promise.reject(new Error(vbox.failStart)) : Promise.resolve({ device: 'cuda' }); }
+    async transcribe(a) { vbox.requests.push(a); if (vbox.failTranscribe) throw new Error(vbox.failTranscribe); return { text: typeof vbox.text === 'function' ? vbox.text(a) : vbox.text, language: 'en', seconds: 2, took_ms: 9 }; }
+    stop() { vbox.stops++; }
+  }
+  const abox = Object.assign({ missing: false, calls: [], available: { ok: true, api: 1, devices: ['Headset Microphone'], device: 'Headset Microphone', busy: false }, start: { ok: true, id: 'rec-1', device: 'Headset Microphone', sampleRate: 16000, maxSeconds: 180, picked: 'first-input' },
+    levels: [], level: { ok: true, level: 0.4, seconds: 1.2, ended: null, silent: false }, stop: { ok: true, pcm: Buffer.alloc(64000).toString('base64'), sampleRate: 16000, seconds: 2, silent: false, device: 'Headset Microphone', ended: null } }, audio);
+  const companion = async (id, ...args) => {
+    const op = id.slice('_perch.audio.'.length); abox.calls.push([op, ...args]);
+    if (abox.missing) throw new Error(`command '${id}' not found`);
+    if (op === 'level') return abox.levels.length ? abox.levels.shift() : abox.level;
+    if (op === 'cancel') return { ok: true };
+    const v = abox[op]; if (v instanceof Error) throw v; return v;
+  };
   // the machine the meter looks at: which backend is configured, what credentials exist, what the usage endpoint says
   const box = Object.assign({ bedrock: false, apiCreds: true, login: true, usage: { limits: LIMITS(), error: null }, cost: null, writes: [], fetches: 0, failWrite: null,
     codex: { limits: CODEX_LIMITS(4, 1), error: null, plan: 'plus', at: Date.now() - 60000 }, codexReads: 0 }, meter);
@@ -85,7 +105,7 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, panels: [], serializers: {}, listeners: { config: [], extensions: [] } };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] } };
   // an editor tab: a page of its own, which VS Code can hide, focus, close, and bring back after a reload
   const makePanel = (viewType, title, show, options) => {
     const got = []; let onMsg = () => {}; const gone = [], changed = [];
@@ -111,7 +131,7 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     return panel;
   };
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
-  const say = (list) => (msg, ...rest) => { list.push(msg); const a = ui.answers.shift(); return Promise.resolve(a); };
+  const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
     workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
@@ -119,13 +139,16 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
       createStatusBarItem: (id, align, prio) => { const it = { id, prio, text: '', tooltip: '', shown: false, disposed: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() { this.disposed = true; this.shown = false; } }; ui.bars.push(it); return it; },
+      withProgress: async (o, task) => { ui.progress.push(o.title); return task({ report: (r) => ui.progress.push(r.message) }); },
       showOpenDialog: async (o) => { ui.dialogs.push(o); return ui.picked; },
       createWebviewPanel: (viewType, title, show, options) => makePanel(viewType, title, show, options),
       registerWebviewPanelSerializer: (viewType, z) => { ui.serializers[viewType] = z; return { dispose() {} }; },
       get activeTextEditor() { return ui.editor; },
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
-    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id) => { ui.executed.push(id); } },
+    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); ui.executed.push(id); } },
+    env: { remoteName: remote },
+    ProgressLocation: { Notification: 15 },
     extensions: {
       getExtension: (id) => { const e = installed[String(id).toLowerCase()]; const root = e && e.__root ? e.__root : '/ext/' + id; return e ? { extensionUri: { path: root, fsPath: root }, extensionPath: root, packageJSON: e } : undefined; },
       onDidChange: (f) => { ui.listeners.extensions.push(f); return { dispose() {} }; },
@@ -141,12 +164,14 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     if (req === './claudeAgent') return { ClaudeAgent: FakeAgent };
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
     if (req === './meter') return Object.assign({}, realMeter, { createMeter: () => fakeMeter });   // real formatting and summary, fake machine
+    if (req === './voice') return { VoiceEngine: FakeEngine, DEFAULT_HOME: '/home/u/.local/share/perch/voice' };
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];
   delete require.cache[require.resolve('../src/meterHost.js')];
+  delete require.cache[require.resolve('../src/voiceHost.js')];
   const ext = require('../src/extension.js');
   const memento = makeMemento(state);
   const globalState = makeMemento(globals);
@@ -154,7 +179,7 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
   const changeConfig = (patch) => { Object.assign(cfgBox, patch); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => Object.keys(patch).some((k) => ('perch.' + k).startsWith(sec)) }); };
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
-  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel };
+  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, vbox, abox };
 }
 
 function fakeView() {
@@ -169,4 +194,4 @@ function fakeView() {
     view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 
-module.exports = { install, fakeView, created, FakeAgent, flush, CATALOGS, CODEX_LIMITS };
+module.exports = { install, fakeView, created, engines, FakeAgent, flush, CATALOGS, CODEX_LIMITS };
