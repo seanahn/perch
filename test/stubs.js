@@ -22,12 +22,15 @@ class FakeAgent {
   dispose() { this.disposed = true; }
 }
 
-function install(state) {
+function install(state, { extensions } = {}) {
+  const installed = extensions || { 'anthropic.claude-code': { icon: 'resources/claude-logo.png' }, 'openai.chatgpt': { icon: 'resources/blossom.dark.png' } };
   const registered = {}; const commands = {}; const picks = [];
   const vscodeStub = {
     workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => ({ 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }[k] || '') }) },
     window: { registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; }, showInformationMessage() {}, showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; } },
+    extensions: { getExtension: (id) => { const e = installed[String(id).toLowerCase()]; return e ? { extensionUri: { path: '/ext/' + id }, packageJSON: e } : undefined; } },
+    Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/') }) },
   };
   Module._load = function (req, parent, isMain) {
     if (req === 'vscode') return vscodeStub;
@@ -38,7 +41,7 @@ function install(state) {
   delete require.cache[require.resolve('../src/extension.js')];
   const ext = require('../src/extension.js');
   const memento = makeMemento(state);
-  const perch = ext.activate({ subscriptions: [], workspaceState: memento });
+  const perch = ext.activate({ subscriptions: [], workspaceState: memento, extensionUri: { path: '/ext/fennets.perch' } });
   return { perch, registered, commands, memento, picks };
 }
 
@@ -47,7 +50,7 @@ function fakeView() {
   return { got, fire: (m) => onMsg(m), destroy: () => onDispose(),
     events: (sid) => got.filter((m) => m.type === 'event' && m.sid === sid).map((m) => m.ev),
     lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
-    view: { webview: { options: {}, cspSource: 'x', html: '', postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
+    view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 
 module.exports = { install, fakeView, created, FakeAgent };

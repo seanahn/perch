@@ -4,7 +4,9 @@ const assert = require('assert');
 const { JSDOM } = require('jsdom');
 const { getHtml } = require('../src/webview');
 
-const html = getHtml({ nonce: 'n', cspSource: 'x' }).replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
+const ICONS = { claude: 'vscode-resource://host/claude.png', codex: 'vscode-resource://host/chatgpt.png' };
+const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
+const html = getHtml({ nonce: 'n', cspSource: 'x', icons: ICONS }).replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
 const out = [];
 const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
 const { window } = dom; const d = window.document;
@@ -26,7 +28,7 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
 assert.strictEqual($$('.tab').length, 2, 'two tabs rendered');
 assert.strictEqual($$('.tab.active .t')[0].textContent, 'Claude 1');
 assert.strictEqual($$('.pane').length, 2); assert.strictEqual(visiblePane().length, 1, 'only the active pane is visible');
-assert.deepStrictEqual($$('.tab .k').map((k) => k.textContent), ['C', 'X'], 'kind badges');
+assert.deepStrictEqual($$('.tab .k').map((k) => [k.tagName, k.getAttribute('src')]), [['IMG', ICONS.claude], ['IMG', ICONS.codex]], 'tabs carry the vendor icons');
 
 // events land in their own pane
 ev('a', { kind: 'status', text: 'ready · a' }); ev('b', { kind: 'status', text: 'idle · sandbox workspace-write' });
@@ -88,7 +90,8 @@ assert.deepStrictEqual(out.pop(), { type: 'setMode', sid: 'a', value: 'plan' });
 
 // new-tab menu and close
 $('#add').click();
-assert.deepStrictEqual($$('#menu div').map((r) => r.textContent), ['CNew Claude tab', 'XNew Codex tab']);
+assert.deepStrictEqual($$('#menu div').map((r) => r.textContent), ['New Claude tab', 'New Codex tab']);
+assert.deepStrictEqual($$('#menu img').map((i) => i.getAttribute('src')), [ICONS.claude, ICONS.codex], 'menu rows carry the vendor icons');
 $$('#menu div')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'codex' });
 assert.strictEqual($('#menu'), null, 'menu closes after choosing');
 $$('.tab .x')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'close', sid: 'b' });
@@ -100,10 +103,28 @@ ev('a', { kind: 'fill', text: 'handed off' }); assert.strictEqual($('#input').va
 ev('a', { kind: 'clear' }); assert.strictEqual(paneA.querySelectorAll('.msg').length, 0);
 host({ type: 'tabs', tabs: [], active: null });
 assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strictEqual($('#input').disabled, true);
-assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['CNew Claude tab', 'XNew Codex tab'], 'empty state offers both kinds, each with its badge');
+assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
+assert.deepStrictEqual($$('#empty img').map((i) => i.getAttribute('src')), [ICONS.claude, ICONS.codex], 'empty state carries the vendor icons');
 $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
 host({ type: 'tabs', tabs: [A], active: 'a' });
 assert(!shown($('#empty')), 'empty state hides once a tab exists');
+
+// an image that fails to load is replaced by its letter
+const broken = $$('.tab img.k')[0]; broken.dispatchEvent(new window.Event('error'));
+assert.deepStrictEqual($$('.tab .k').map((k) => [k.tagName, k.textContent]), [['SPAN', 'C']], 'failed image falls back to the letter');
+
+// with no vendor icons the page uses letters everywhere, and an icon URI cannot break out of the script
+{
+  const out2 = [];
+  const w2 = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons: { codex: 'x</script><script>window.pwned=1</script>' } })), { runScripts: 'dangerously', beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out2.push(m) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } }).window;
+  assert.strictEqual(w2.pwned, undefined, 'icon URI is escaped inside the script');
+  assert.strictEqual(out2.length, 1, 'page script still ran');
+  w2.dispatchEvent(new w2.MessageEvent('message', { data: { type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'Claude 1' })], active: 'a' } }));
+  const k = w2.document.querySelector('.tab .k');
+  assert.deepStrictEqual([k.tagName, k.textContent], ['SPAN', 'C'], 'letters when the vendor icon is absent');
+  assert.strictEqual(w2.document.querySelector('#e-claude .k').textContent, 'C');
+  w2.close();
+}
 
 console.log('PAGE OK');
 window.close();

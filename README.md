@@ -21,6 +21,10 @@ many as you like of either kind. A tab is titled from its first message.
 A dot on a tab means it is working; a red dot means it is waiting on a
 permission prompt. Middle-click or × closes a tab and stops its agent.
 
+Tab icons are the vendors' own, read at runtime from the Claude Code and
+ChatGPT extensions if they are installed. perch ships no logos. A tab
+falls back to a letter, C or X, when its vendor extension is absent.
+
 Agents start lazily: an open tab costs nothing until you send a message.
 
 Tabs survive a window reload. perch saves each tab's session id and the

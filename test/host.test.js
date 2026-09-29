@@ -11,6 +11,13 @@ const { install, fakeView, created } = require('./stubs');
 
   // first open in a fresh workspace: no tabs, no agents, nothing saved
   const v1 = fakeView(); p.resolveWebviewView(v1.view); v1.fire({ type: 'ready' });
+
+  // vendor icons come from the installed vendor extensions, and the webview may read only those folders
+  const html = v1.view.webview.html;
+  assert(html.includes('src="vscode-resource://host/ext/anthropic.claude-code/resources/claude-logo.png"'), 'claude icon from its extension');
+  assert(html.includes('src="vscode-resource://host/ext/openai.chatgpt/resources/blossom.dark.png"'), 'chatgpt icon from its extension');
+  assert(/img-src x;/.test(html), 'CSP allows images from the webview origin only');
+  assert.deepStrictEqual(v1.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code', '/ext/openai.chatgpt']);
   let t = v1.lastTabs();
   assert.deepStrictEqual(t.tabs, [], 'starts with no tabs');
   assert.strictEqual(t.active, null, 'nothing active');
@@ -124,6 +131,16 @@ const { install, fakeView, created } = require('./stubs');
   assert.deepStrictEqual(v4.lastTabs().tabs, [], 'stays empty after reload; no tabs are re-created for you');
   v4.fire({ type: 'new', kind: 'claude' });
   assert.strictEqual(v4.lastTabs().tabs[0].title, 'Claude 1', 'numbering starts over after a reload too');
+
+  // a vendor extension that is not installed, or ships no icon, falls back to the letter badge
+  const partial = install(undefined, { extensions: { 'anthropic.claude-code': { icon: 'resources/claude-logo.png' }, 'openai.chatgpt': {} } });
+  const v5 = fakeView(); partial.registered['perch.main'].resolveWebviewView(v5.view);
+  assert(v5.view.webview.html.includes('claude-logo.png'), 'installed vendor keeps its icon');
+  assert(v5.view.webview.html.includes('<span class="k codex">X</span>'), 'missing icon falls back to a letter');
+  assert.deepStrictEqual(v5.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code']);
+  const none = install(undefined, { extensions: {} });
+  const v6 = fakeView(); none.registered['perch.main'].resolveWebviewView(v6.view);
+  assert(!/<img/.test(v6.view.webview.html), 'no vendor extensions, no images');
 
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

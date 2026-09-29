@@ -2,10 +2,18 @@
 // The Perch page: a tab bar over per-session panes. The host owns all state; this page
 // only renders what it is sent and can be rebuilt from a replay at any time.
 
-function getHtml({ nonce, cspSource }) {
+const LETTER = { claude: 'C', codex: 'X' };
+function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function getHtml({ nonce, cspSource, icons = {} }) {
+  // static badge for markup written in this template; the script builds the rest with badge()
+  const badge = (kind) => icons[kind]
+    ? `<img class="k img" data-kind="${kind}" alt="" src="${esc(icons[kind])}">`
+    : `<span class="k ${kind}">${LETTER[kind]}</span>`;
+  const iconsJson = JSON.stringify(icons).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style nonce="${nonce}">
   :root { color-scheme: light dark; }
@@ -16,6 +24,7 @@ function getHtml({ nonce, cspSource }) {
   .tab.active { color: var(--vscode-tab-activeForeground); border-bottom-color: var(--vscode-focusBorder); background: var(--vscode-editor-background); }
   .k { flex: none; width: 15px; height: 15px; border-radius: 3px; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; color: #fff; }
   .k.claude { background: #c96442; } .k.codex { background: #10a37f; }
+  img.k { background: none; object-fit: cover; display: inline-block; }
   .tab .t { overflow: hidden; text-overflow: ellipsis; }
   .tab .b { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
   .tab.busy .b { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
@@ -64,7 +73,7 @@ function getHtml({ nonce, cspSource }) {
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
-  <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude"><span class="k claude">C</span>New Claude tab</button><button id="e-codex"><span class="k codex">X</span>New Codex tab</button></div></div></div>
+  <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div></div></div>
   <div id="compose"><textarea id="input" rows="2" disabled placeholder="Open a tab with +"></textarea><button id="send" class="primary" disabled>Send</button></div>
 <script nonce="${nonce}">
 (function () {
@@ -73,6 +82,17 @@ function getHtml({ nonce, cspSource }) {
   const $input = document.getElementById('input'), $send = document.getElementById('send');
   const panes = new Map();   // sid -> pane state
   let tabs = [], active = null, menu = null;
+  const ICONS = ${iconsJson}, LETTER = { claude: 'C', codex: 'X' };
+
+  // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
+  function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
+  function badge(kind) {
+    if (!ICONS[kind]) return letter(kind);
+    const i = document.createElement('img'); i.className = 'k img'; i.alt = ''; i.dataset.kind = kind; i.src = ICONS[kind];
+    i.addEventListener('error', () => i.replaceWith(letter(kind)), { once: true });
+    return i;
+  }
+  document.querySelectorAll('img.k').forEach((i) => i.addEventListener('error', () => i.replaceWith(letter(i.dataset.kind)), { once: true }));
 
   function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
   function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
@@ -99,7 +119,7 @@ function getHtml({ nonce, cspSource }) {
     for (const t of tabs) {
       const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (t.attention ? ' attn' : ''));
       d.title = t.title + ' · ' + t.kind;
-      const k = el('span', 'k ' + t.kind, t.kind === 'claude' ? 'C' : 'X'), tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
+      const k = badge(t.kind), tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
       x.title = 'Close tab';
       x.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'close', sid: t.id }); });
       d.addEventListener('click', () => { if (t.id !== active) vscode.postMessage({ type: 'activate', sid: t.id }); });
@@ -170,8 +190,8 @@ function getHtml({ nonce, cspSource }) {
   $add.addEventListener('click', (e) => {
     e.stopPropagation(); if (menu) { closeMenu(); return; }
     menu = el('div'); menu.id = 'menu';
-    for (const [kind, label, letter] of [['claude', 'New Claude tab', 'C'], ['codex', 'New Codex tab', 'X']]) {
-      const row = el('div'); row.append(el('span', 'k ' + kind, letter), label);
+    for (const [kind, label] of [['claude', 'New Claude tab'], ['codex', 'New Codex tab']]) {
+      const row = el('div'); row.append(badge(kind), label);
       row.addEventListener('click', () => { closeMenu(); vscode.postMessage({ type: 'new', kind }); });
       menu.append(row);
     }

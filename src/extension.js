@@ -10,6 +10,23 @@ const MODES = {
   codex: ['read-only', 'workspace-write', 'danger-full-access'],
 };
 const STATE_KEY = 'perch.sessions.v1';
+// Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
+const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
+
+/** @returns {{ icons: Record<string,string>, roots: any[] }} webview-safe icon URIs and the folders they live in */
+function vendorIcons(webview) {
+  const icons = {}; const roots = [];
+  for (const [kind, id] of Object.entries(VENDOR_EXTENSIONS)) {
+    try {
+      const ext = vscode.extensions.getExtension(id);
+      const rel = ext && ext.packageJSON && ext.packageJSON.icon;
+      if (!rel) continue;                                  // not installed, or ships no icon: the page falls back to a letter
+      icons[kind] = webview.asWebviewUri(vscode.Uri.joinPath(ext.extensionUri, rel)).toString();
+      roots.push(ext.extensionUri);
+    } catch (_) { /* fall back to the letter badge */ }
+  }
+  return { icons, roots };
+}
 const MAX_HISTORY = 2000;
 
 function cwd() {
@@ -146,8 +163,9 @@ class PerchView {
   resolveWebviewView(webviewView) {
     this.view = webviewView;
     const w = webviewView.webview;
-    w.options = { enableScripts: true };
-    w.html = getHtml({ nonce: randomBytes(16).toString('hex'), cspSource: w.cspSource });
+    const { icons, roots } = vendorIcons(w);
+    w.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri, ...roots].filter(Boolean) };
+    w.html = getHtml({ nonce: randomBytes(16).toString('hex'), cspSource: w.cspSource, icons });
     w.onDidReceiveMessage((msg) => this.onMessage(msg));
     webviewView.onDidDispose(() => { this.ready = false; this.view = null; });
   }
