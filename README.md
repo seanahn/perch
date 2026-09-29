@@ -22,8 +22,11 @@ A dot on a tab means it is working; a red dot means it is waiting on a
 permission prompt. Middle-click or × closes a tab and stops its agent.
 
 Tab icons are the vendors' own, read at runtime from the Claude Code and
-ChatGPT extensions if they are installed. perch ships no logos. A tab
-falls back to a letter, C or X, when its vendor extension is absent.
+ChatGPT extensions if they are installed. perch ships no logos. It uses
+each extension's glyph, tinted as the vendor tints it on its own tabs:
+Claude's spark in orange, the ChatGPT blossom in the theme's text colour.
+Without a glyph it uses the marketplace image, and without the extension
+a letter, C or X.
 
 Agents start lazily: an open tab costs nothing until you send a message.
 
@@ -56,6 +59,19 @@ resolve by policy (`perch.codex.approvalPolicy`) and the sandbox
 (`perch.codex.sandboxMode`). There is no per-command prompt. A Codex
 thread keeps the sandbox it started with, so choose it before the first
 message.
+
+## Effort
+
+Each tab has an **effort** selector beside its mode selector. `default`
+leaves the choice to the agent.
+
+Claude: low, medium, high, xhigh, max. A change applies from the next
+message, on the running session, the same way `/effort` does. The default
+for new tabs is `perch.claude.effort`.
+
+Codex: minimal, low, medium, high, xhigh. A Codex thread keeps the effort
+it started with, so choose it before the first message. The default for
+new tabs is `perch.codex.reasoningEffort`.
 
 ## Cost
 

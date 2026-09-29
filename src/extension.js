@@ -9,19 +9,37 @@ const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
   codex: ['read-only', 'workspace-write', 'danger-full-access'],
 };
+// '' means "leave it to the agent's default"
+const EFFORTS = {
+  claude: ['', 'low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+};
 const STATE_KEY = 'perch.sessions.v1';
 // Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
 const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
 
-/** @returns {{ icons: Record<string,string>, roots: any[] }} webview-safe icon URIs and the folders they live in */
+/**
+ * Each vendor extension ships a glyph (its activity-bar icon, a single-colour shape) and a
+ * marketplace image (the glyph inverted on a filled tile). The glyph is what the vendor shows
+ * on its own tabs, so it is preferred; the image is the fallback.
+ * @returns {{ icons: Record<string,{glyph?:string,image?:string}>, roots: any[] }}
+ */
 function vendorIcons(webview) {
   const icons = {}; const roots = [];
   for (const [kind, id] of Object.entries(VENDOR_EXTENSIONS)) {
     try {
       const ext = vscode.extensions.getExtension(id);
-      const rel = ext && ext.packageJSON && ext.packageJSON.icon;
-      if (!rel) continue;                                  // not installed, or ships no icon: the page falls back to a letter
-      icons[kind] = webview.asWebviewUri(vscode.Uri.joinPath(ext.extensionUri, rel)).toString();
+      if (!ext || !ext.packageJSON) continue;               // not installed: the page falls back to a letter
+      const pj = ext.packageJSON;
+      const containers = (pj.contributes && pj.contributes.viewsContainers) || {};
+      const bar = [...(containers.activitybar || []), ...(containers.secondarySidebar || []), ...(containers.panel || [])]
+        .map((c) => c && c.icon).find((i) => typeof i === 'string' && /\.svg$/i.test(i));
+      const uri = (rel) => webview.asWebviewUri(vscode.Uri.joinPath(ext.extensionUri, rel)).toString();
+      const entry = {};
+      if (bar) entry.glyph = uri(bar);
+      if (typeof pj.icon === 'string' && pj.icon) entry.image = uri(pj.icon);
+      if (!entry.glyph && !entry.image) continue;
+      icons[kind] = entry;
       roots.push(ext.extensionUri);
     } catch (_) { /* fall back to the letter badge */ }
   }
@@ -34,17 +52,19 @@ function cwd() {
   return f && f.length ? f[0].uri.fsPath : require('os').homedir();
 }
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
+function defaultEffort(kind) { const v = (kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''; return EFFORTS[kind].includes(v) ? v : ''; }
 function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionMode') || 'default') : (cfg('codex.sandboxMode') || 'workspace-write'); }
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, mode, resume }) {
+  constructor(view, { id, kind, title, titled, mode, effort, resume }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
     this.title = title;
     this.titled = !!titled;          // true once the title came from the first message
     this.mode = mode || defaultMode(kind);
+    this.effort = EFFORTS[kind].includes(effort) ? effort : defaultEffort(kind);
     this.agentSessionId = resume || null;
     this.agent = null;               // started lazily on first message
     this.history = [];
@@ -55,7 +75,7 @@ class Session {
     if (resume) this.history.push({ kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` });
   }
 
-  idleStatus() { return this.kind === 'claude' ? `idle · mode ${this.mode}` : `idle · sandbox ${this.mode}`; }
+  idleStatus() { return (this.kind === 'claude' ? `idle · mode ${this.mode}` : `idle · sandbox ${this.mode}`) + (this.effort ? ` · effort ${this.effort}` : ''); }
 
   post(ev) {
     switch (ev.kind) {
@@ -85,6 +105,7 @@ class Session {
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
         model: cfg('claude.model') || undefined,
+        effort: this.effort || undefined,
         executable: cfg('claude.executable') || undefined,
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
@@ -94,7 +115,7 @@ class Session {
         sandboxMode: this.mode,
         approvalPolicy: cfg('codex.approvalPolicy'),
         model: cfg('codex.model') || undefined,
-        reasoningEffort: cfg('codex.reasoningEffort') || undefined,
+        reasoningEffort: this.effort || undefined,
       });
     }
     return this.agent;
@@ -119,6 +140,15 @@ class Session {
     else this.post({ kind: 'note', text: `sandbox ${value} applies to a new Codex tab; this thread keeps the sandbox it started with` });
   }
 
+  setEffort(value) {
+    if (!EFFORTS[this.kind].includes(value)) return;
+    this.effort = value;
+    this.view.persist();
+    if (!this.agent) { this.post({ kind: 'status', text: this.idleStatus() }); return; }
+    if (this.kind === 'claude') this.agent.setEffort(value);          // live: applies from the next request
+    else this.post({ kind: 'note', text: `effort ${value || 'default'} applies to a new Codex tab; this thread keeps the effort it started with` });
+  }
+
   interrupt() { if (this.agent) this.agent.interrupt(); }
   lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
 
@@ -128,8 +158,8 @@ class Session {
     this.pending.clear();
   }
 
-  toTab() { return { id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, mode: this.mode, modes: MODES[this.kind] }; }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, resume: this.agentSessionId }; }
+  toTab() { return { id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, mode: this.mode, modes: MODES[this.kind], effort: this.effort, efforts: EFFORTS[this.kind] }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, resume: this.agentSessionId }; }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
@@ -193,6 +223,7 @@ class PerchView {
       case 'stop': if (s) s.interrupt(); return;
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision); return;
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
+      case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
       case 'activate': this.activate(msg.sid); return;
       case 'new': this.addSession(msg.kind); return;
       case 'close': this.closeSession(msg.sid); return;

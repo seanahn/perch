@@ -5,12 +5,23 @@
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+// Glyphs are single-colour shapes, drawn as a CSS mask and tinted the way each vendor tints its own tab:
+// Claude in its orange, ChatGPT in the theme's text colour so it reads on light and dark themes.
+const TINT = { claude: '#D97757', codex: 'currentColor' };
+function cssUrl(v) { return String(v).replace(/[^A-Za-z0-9:/._~?#@!$&*+,;=%-]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' '); }
+
 function getHtml({ nonce, cspSource, icons = {} }) {
+  const kinds = Object.keys(LETTER);
+  const glyphCss = kinds.filter((k) => icons[k] && icons[k].glyph).map((k) =>
+    `  .k.glyph.${k} { -webkit-mask: url("${cssUrl(icons[k].glyph)}") center / contain no-repeat; mask: url("${cssUrl(icons[k].glyph)}") center / contain no-repeat; background-color: ${TINT[k]}; }`).join('\n');
+  // what the page script needs: which kinds have a glyph rule, and the image URI to fall back to
+  const forPage = {}; for (const k of kinds) if (icons[k]) forPage[k] = { glyph: !!icons[k].glyph, image: icons[k].image || '' };
   // static badge for markup written in this template; the script builds the rest with badge()
-  const badge = (kind) => icons[kind]
-    ? `<img class="k img" data-kind="${kind}" alt="" src="${esc(icons[kind])}">`
-    : `<span class="k ${kind}">${LETTER[kind]}</span>`;
-  const iconsJson = JSON.stringify(icons).replace(/</g, '\\u003c');
+  const badge = (kind) => { const i = icons[kind] || {};
+    if (i.glyph) return `<span class="k glyph ${kind}"></span>`;
+    if (i.image) return `<img class="k img" data-kind="${kind}" alt="" src="${esc(i.image)}">`;
+    return `<span class="k ${kind}">${LETTER[kind]}</span>`; };
+  const iconsJson = JSON.stringify(forPage).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
@@ -25,6 +36,8 @@ function getHtml({ nonce, cspSource, icons = {} }) {
   .k { flex: none; width: 15px; height: 15px; border-radius: 3px; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; color: #fff; }
   .k.claude { background: #c96442; } .k.codex { background: #10a37f; }
   img.k { background: none; object-fit: cover; display: inline-block; }
+  .k.glyph { border-radius: 0; color: var(--vscode-foreground); }
+${glyphCss}
   .tab .t { overflow: hidden; text-overflow: ellipsis; }
   .tab .b { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
   .tab.busy .b { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
@@ -39,6 +52,7 @@ function getHtml({ nonce, cspSource, icons = {} }) {
   @keyframes pulse { 50% { opacity: .3; } }
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .bar label { flex: none; white-space: nowrap; }
   .bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar select { font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
@@ -87,10 +101,12 @@ function getHtml({ nonce, cspSource, icons = {} }) {
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
   function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
   function badge(kind) {
-    if (!ICONS[kind]) return letter(kind);
-    const i = document.createElement('img'); i.className = 'k img'; i.alt = ''; i.dataset.kind = kind; i.src = ICONS[kind];
-    i.addEventListener('error', () => i.replaceWith(letter(kind)), { once: true });
-    return i;
+    const i = ICONS[kind];
+    if (i && i.glyph) { const s = document.createElement('span'); s.className = 'k glyph ' + kind; return s; }
+    if (!i || !i.image) return letter(kind);
+    const img = document.createElement('img'); img.className = 'k img'; img.alt = ''; img.dataset.kind = kind; img.src = i.image;
+    img.addEventListener('error', () => img.replaceWith(letter(kind)), { once: true });
+    return img;
   }
   document.querySelectorAll('img.k').forEach((i) => i.addEventListener('error', () => i.replaceWith(letter(i.dataset.kind)), { once: true }));
 
@@ -104,10 +120,16 @@ function getHtml({ nonce, cspSource, icons = {} }) {
     for (const m of tab.modes) { const o = el('option', null, m); o.value = m; sel.append(o); }
     sel.value = tab.mode;
     sel.addEventListener('change', () => vscode.postMessage({ type: 'setMode', sid: tab.id, value: sel.value }));
-    bar.append(dot, status, label);
+    const elabel = el('label'), eff = el('select');
+    elabel.append('effort ', eff);
+    for (const v of (tab.efforts || [''])) { const o = el('option', null, v || 'default'); o.value = v; eff.append(o); }
+    eff.value = tab.effort || '';
+    eff.title = tab.kind === 'claude' ? 'Reasoning effort. Changes apply from the next message.' : 'Reasoning effort. Set it before the first message in this tab.';
+    eff.addEventListener('change', () => vscode.postMessage({ type: 'setEffort', sid: tab.id, value: eff.value }));
+    bar.append(dot, status, elabel, label);
     const log = el('div', 'log');
     root.append(bar, log); $panes.append(root);
-    const p = { root, log, dot, status, sel, live: null, tools: {}, draft: '', kind: tab.kind };
+    const p = { root, log, dot, status, sel, eff, live: null, tools: {}, draft: '', kind: tab.kind };
     panes.set(tab.id, p); return p;
   }
 
@@ -135,7 +157,7 @@ function getHtml({ nonce, cspSource, icons = {} }) {
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
-    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.sel.value = t.mode; p.root.hidden = t.id !== active; }
+    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.sel.value = t.mode; p.eff.value = t.effort || ''; p.root.hidden = t.id !== active; }
     $empty.hidden = tabs.length > 0;
     renderTabs();
     const cur = tabs.find((t) => t.id === active), p = panes.get(active);

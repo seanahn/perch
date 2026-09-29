@@ -12,10 +12,12 @@ const { install, fakeView, created } = require('./stubs');
   // first open in a fresh workspace: no tabs, no agents, nothing saved
   const v1 = fakeView(); p.resolveWebviewView(v1.view); v1.fire({ type: 'ready' });
 
-  // vendor icons come from the installed vendor extensions, and the webview may read only those folders
+  // vendor icons come from the installed vendor extensions: the glyph is preferred, tinted as the vendor tints it
   const html = v1.view.webview.html;
-  assert(html.includes('src="vscode-resource://host/ext/anthropic.claude-code/resources/claude-logo.png"'), 'claude icon from its extension');
-  assert(html.includes('src="vscode-resource://host/ext/openai.chatgpt/resources/blossom.dark.png"'), 'chatgpt icon from its extension');
+  assert(html.includes('.k.glyph.claude { -webkit-mask: url("vscode-resource://host/ext/anthropic.claude-code/resources/claude-logo.svg")'), 'claude glyph as a mask');
+  assert(/\.k\.glyph\.claude \{[^}]*background-color: #D97757;/.test(html), 'claude glyph in its orange, not inverted on a tile');
+  assert(/\.k\.glyph\.codex \{[^}]*blossom-white\.svg[^}]*background-color: currentColor;/.test(html), 'chatgpt glyph follows the theme text colour');
+  assert(html.includes('<span class="k glyph claude"></span>') && !/<img/.test(html), 'glyphs replace the marketplace images');
   assert(/img-src x;/.test(html), 'CSP allows images from the webview origin only');
   assert.deepStrictEqual(v1.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code', '/ext/openai.chatgpt']);
   let t = v1.lastTabs();
@@ -69,6 +71,29 @@ const { install, fakeView, created } = require('./stubs');
   v1.fire({ type: 'setMode', sid: x1, value: 'bogus' });
   assert.strictEqual(v1.lastTabs().tabs[1].mode, 'read-only', 'invalid mode rejected');
 
+  // effort: claude changes live, codex is fixed at thread start, junk is rejected
+  assert.deepStrictEqual(v1.lastTabs().tabs[0].efforts, ['', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepStrictEqual(v1.lastTabs().tabs[1].efforts, ['', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  assert.strictEqual(created[0].o.effort, undefined, 'no effort sent when the tab is on default');
+  v1.fire({ type: 'setEffort', sid: c1, value: 'high' });
+  assert.deepStrictEqual(created[0].efforts, ['high'], 'running claude tab changes effort live');
+  v1.fire({ type: 'setEffort', sid: c1, value: '' });
+  assert.deepStrictEqual(created[0].efforts, ['high', ''], 'default is a live change too');
+  v1.fire({ type: 'setEffort', sid: c1, value: 'max' });
+  v1.fire({ type: 'setEffort', sid: c1, value: 'ludicrous' });
+  assert.strictEqual(v1.lastTabs().tabs[0].effort, 'max', 'invalid effort rejected');
+  v1.fire({ type: 'setEffort', sid: c1, value: 'minimal' });
+  assert.strictEqual(v1.lastTabs().tabs[0].effort, 'max', 'a codex-only level is rejected on a claude tab');
+  v1.fire({ type: 'setEffort', sid: x1, value: 'low' });
+  assert.deepStrictEqual(created[3].efforts, [], 'a started codex thread is not changed');
+  assert(v1.events(x1).some((e) => e.kind === 'note' && /applies to a new Codex tab/.test(e.text)), 'and says so');
+  v1.fire({ type: 'new', kind: 'codex' }); const x3 = v1.lastTabs().active;
+  v1.fire({ type: 'setEffort', sid: x3, value: 'xhigh' });
+  assert(v1.events(x3).some((e) => e.kind === 'status' && /idle · sandbox workspace-write · effort xhigh/.test(e.text)), 'idle status shows the chosen effort');
+  v1.fire({ type: 'send', sid: x3, text: 'think hard' });
+  assert.strictEqual(created[created.length - 1].o.reasoningEffort, 'xhigh', 'effort chosen before start is used');
+  v1.fire({ type: 'close', sid: x3 });
+
   // permission on a background tab raises attention; answering clears it
   v1.fire({ type: 'activate', sid: x1 });
   const s1 = perch.get(c1);
@@ -114,9 +139,11 @@ const { install, fakeView, created } = require('./stubs');
   assert.strictEqual(rt.tabs.length, 4, 'tabs restored after reload');
   assert.strictEqual(rt.tabs[0].title, 'explain the flush bug in det', 'titles restored');
   assert.strictEqual(rt.tabs[0].mode, 'plan', 'modes restored');
+  assert.strictEqual(rt.tabs[0].effort, 'max', 'effort restored');
   assert(v3.events(rt.tabs[0].id).some((e) => e.kind === 'note' && /resumed claude session/.test(e.text)), 'resume note shown');
   v3.fire({ type: 'send', sid: rt.tabs[0].id, text: 'continue' });
   assert.strictEqual(created[before].o.resume, 'sess-0', 'agent resumed with its saved session id');
+  assert.strictEqual(created[before].o.effort, 'max', 'resumed agent starts at the saved effort');
   v3.fire({ type: 'new', kind: 'claude' });
   assert.strictEqual(v3.lastTabs().tabs.slice(-1)[0].title, 'Claude 3', 'numbering continues after reload');
 
@@ -132,15 +159,24 @@ const { install, fakeView, created } = require('./stubs');
   v4.fire({ type: 'new', kind: 'claude' });
   assert.strictEqual(v4.lastTabs().tabs[0].title, 'Claude 1', 'numbering starts over after a reload too');
 
-  // a vendor extension that is not installed, or ships no icon, falls back to the letter badge
+  // fallbacks: no glyph -> marketplace image; nothing usable or not installed -> letter
   const partial = install(undefined, { extensions: { 'anthropic.claude-code': { icon: 'resources/claude-logo.png' }, 'openai.chatgpt': {} } });
   const v5 = fakeView(); partial.registered['perch.main'].resolveWebviewView(v5.view);
-  assert(v5.view.webview.html.includes('claude-logo.png'), 'installed vendor keeps its icon');
-  assert(v5.view.webview.html.includes('<span class="k codex">X</span>'), 'missing icon falls back to a letter');
+  assert(v5.view.webview.html.includes('<img class="k img" data-kind="claude" alt="" src="vscode-resource://host/ext/anthropic.claude-code/resources/claude-logo.png">'), 'image when there is no glyph');
+  assert(v5.view.webview.html.includes('<span class="k codex">X</span>'), 'letter when the extension ships no icon');
+  assert(!/\.k\.glyph\.(claude|codex) \{/.test(v5.view.webview.html), 'no glyph rules without glyphs');
   assert.deepStrictEqual(v5.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code']);
   const none = install(undefined, { extensions: {} });
   const v6 = fakeView(); none.registered['perch.main'].resolveWebviewView(v6.view);
-  assert(!/<img/.test(v6.view.webview.html), 'no vendor extensions, no images');
+  assert(!/<img/.test(v6.view.webview.html) && !/class="k glyph/.test(v6.view.webview.html), 'no vendor extensions, letters only');
+
+  // settings give new tabs their default effort; an invalid setting is ignored
+  const cfgd = install(undefined, { config: { 'claude.effort': 'high', 'codex.reasoningEffort': 'nonsense' } });
+  const v7 = fakeView(); cfgd.registered['perch.main'].resolveWebviewView(v7.view); v7.fire({ type: 'ready' });
+  v7.fire({ type: 'new', kind: 'claude' }); v7.fire({ type: 'new', kind: 'codex' });
+  assert.deepStrictEqual(v7.lastTabs().tabs.map((x) => x.effort), ['high', ''], 'defaults from settings');
+  v7.fire({ type: 'send', sid: v7.lastTabs().tabs[0].id, text: 'go' });
+  assert.strictEqual(created[created.length - 1].o.effort, 'high', 'claude starts at the configured effort');
 
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

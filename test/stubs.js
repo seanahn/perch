@@ -7,7 +7,7 @@ function makeMemento(initial) { const m = new Map(Object.entries(initial || {}))
 
 const created = [];   // every FakeAgent constructed, in order
 class FakeAgent {
-  constructor(o) { this.o = o; this.emit = o.emit; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; created.push(this); }
+  constructor(o) { this.o = o; this.emit = o.emit; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; created.push(this); }
   send(t) {
     this.sent.push(t);
     this.emit({ kind: 'user', text: t }); this.emit({ kind: 'busy', busy: true });
@@ -19,14 +19,18 @@ class FakeAgent {
   }
   interrupt() { this.interrupted++; }
   setPermissionMode(m) { this.modes.push(m); }
+  setEffort(e) { this.efforts.push(e); }
   dispose() { this.disposed = true; }
 }
 
-function install(state, { extensions } = {}) {
-  const installed = extensions || { 'anthropic.claude-code': { icon: 'resources/claude-logo.png' }, 'openai.chatgpt': { icon: 'resources/blossom.dark.png' } };
+function install(state, { extensions, config } = {}) {
+  const installed = extensions || {
+    'anthropic.claude-code': { icon: 'resources/claude-logo.png', contributes: { viewsContainers: { activitybar: [{ id: 'c', icon: 'resources/claude-logo.svg' }] } } },
+    'openai.chatgpt': { icon: 'resources/blossom.dark.png', contributes: { viewsContainers: { activitybar: [{ id: 'x', icon: 'resources/blossom-white.svg' }] } } },
+  };
   const registered = {}; const commands = {}; const picks = [];
   const vscodeStub = {
-    workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => ({ 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }[k] || '') }) },
+    workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => (Object.assign({ 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, config)[k] || '') }) },
     window: { registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; }, showInformationMessage() {}, showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; } },
     extensions: { getExtension: (id) => { const e = installed[String(id).toLowerCase()]; return e ? { extensionUri: { path: '/ext/' + id }, packageJSON: e } : undefined; } },

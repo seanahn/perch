@@ -19,15 +19,21 @@ function waitFor(coll, kind, ms) {
 let failed = 0;
 {
   const c = collector('claude');
-  const a = new ClaudeAgent({ cwd: process.cwd(), emit: c.emit, permissionMode: 'default', askPermission: async () => ({ decision: 'deny' }) });
+  const a = new ClaudeAgent({ cwd: process.cwd(), emit: c.emit, permissionMode: 'default', effort: 'low', askPermission: async () => ({ decision: 'deny' }) });
   a.send('Reply with exactly: perch claude ok');
   try { await waitFor(c, 'result', 90000); console.log('claude:', JSON.stringify(c.text), '| events:', [...new Set(c.seen)].join(',')); if (!/perch claude ok/i.test(c.text)) failed++; }
   catch (e) { console.log('claude FAILED:', e.message); failed++; }
+  // live effort change on the running session, then one more turn to prove the session accepted it
+  const errs = []; const prev = a.emit; a.emit = (ev) => { if (ev.kind === 'error') errs.push(ev.text); prev(ev); };
+  await a.setEffort('medium');
+  c.seen.length = 0; a.send('Reply with exactly: perch effort ok');
+  try { await waitFor(c, 'result', 90000); console.log('claude after setEffort:', JSON.stringify(c.text), '| errors:', errs.length); if (errs.length || !/perch effort ok/i.test(c.text)) failed++; }
+  catch (e) { console.log('claude effort FAILED:', e.message); failed++; }
   a.dispose();
 }
 {
   const c = collector('codex');
-  const a = new CodexAgent({ cwd: process.cwd(), emit: c.emit, sandboxMode: 'read-only', approvalPolicy: 'never' });
+  const a = new CodexAgent({ cwd: process.cwd(), emit: c.emit, sandboxMode: 'read-only', approvalPolicy: 'never', reasoningEffort: 'low' });
   await a.send('Reply with exactly: perch codex ok');
   console.log('codex:', JSON.stringify(c.text), '| events:', [...new Set(c.seen)].join(','));
   if (!/perch codex ok/i.test(c.text)) failed++;

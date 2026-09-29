@@ -28,6 +28,7 @@ class AsyncQueue {
  * @param {(req: object) => Promise<object>} opts.askPermission  resolves to {decision:'allow'|'always'|'deny', message?}
  * @param {string} [opts.permissionMode]
  * @param {string} [opts.model]
+ * @param {string} [opts.effort]                      low | medium | high | xhigh | max; empty uses the model default
  * @param {string} [opts.resume]                      session id to resume
  * @param {string} [opts.executable]                  path to claude CLI
  */
@@ -66,6 +67,7 @@ class ClaudeAgent {
       },
     };
     if (this.opts.model) options.model = this.opts.model;
+    if (this.opts.effort) options.effort = this.opts.effort;
     if (this.opts.resume) options.resume = this.opts.resume;
     if (this.opts.executable) options.pathToClaudeCodeExecutable = this.opts.executable;
     if (options.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
@@ -139,6 +141,8 @@ class ClaudeAgent {
 
   async interrupt() { if (this.query && this.running) { try { await this.query.interrupt(); } catch (_) { /* older CLI */ } } }
   async setPermissionMode(mode) { if (this.query) { try { await this.query.setPermissionMode(mode); this.emit({ kind: 'status', text: 'mode: ' + mode }); } catch (err) { this.emit({ kind: 'error', text: String(err.message || err) }); } } }
+  /** Live, session-scoped: the same layer /effort uses. An empty value returns to the model's default. */
+  async setEffort(level) { if (this.query) { try { await this.query.applyFlagSettings({ effortLevel: level || null }); this.emit({ kind: 'status', text: 'effort: ' + (level || 'default') }); } catch (err) { this.emit({ kind: 'error', text: 'could not set effort: ' + String(err.message || err) }); } } }
   async setModel(model) { if (this.query) { try { await this.query.setModel(model || undefined); this.emit({ kind: 'status', text: 'model: ' + (model || 'default') }); } catch (err) { this.emit({ kind: 'error', text: String(err.message || err) }); } } }
 
   dispose() { this.queue.close(); this.abort.abort(); }

@@ -4,7 +4,8 @@ const assert = require('assert');
 const { JSDOM } = require('jsdom');
 const { getHtml } = require('../src/webview');
 
-const ICONS = { claude: 'vscode-resource://host/claude.png', codex: 'vscode-resource://host/chatgpt.png' };
+const ICONS = { claude: { glyph: 'vscode-resource://host/claude.svg', image: 'vscode-resource://host/claude.png' }, codex: { glyph: 'vscode-resource://host/blossom.svg', image: 'vscode-resource://host/chatgpt.png' } };
+const IMAGES_ONLY = { claude: { image: ICONS.claude.image }, codex: { image: ICONS.codex.image } };
 const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
 const html = getHtml({ nonce: 'n', cspSource: 'x', icons: ICONS }).replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
 const out = [];
@@ -16,7 +17,7 @@ const $ = (s) => d.querySelector(s), $$ = (s) => [...d.querySelectorAll(s)];
 // rendered visibility, not the attribute: an author display rule can override [hidden]
 const shown = (n) => window.getComputedStyle(n).display !== 'none';
 const visiblePane = () => $$('.pane').filter(shown);
-const tab = (o) => Object.assign({ busy: false, attention: false, mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'plan'] : ['read-only', 'workspace-write'] }, o);
+const tab = (o) => Object.assign({ effort: '', efforts: o.kind === 'claude' ? ['', 'low', 'high', 'max'] : ['', 'minimal', 'high'], busy: false, attention: false, mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'plan'] : ['read-only', 'workspace-write'] }, o);
 
 assert.deepStrictEqual(out.shift(), { type: 'ready' }, 'page announces ready');
 
@@ -28,7 +29,11 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
 assert.strictEqual($$('.tab').length, 2, 'two tabs rendered');
 assert.strictEqual($$('.tab.active .t')[0].textContent, 'Claude 1');
 assert.strictEqual($$('.pane').length, 2); assert.strictEqual(visiblePane().length, 1, 'only the active pane is visible');
-assert.deepStrictEqual($$('.tab .k').map((k) => [k.tagName, k.getAttribute('src')]), [['IMG', ICONS.claude], ['IMG', ICONS.codex]], 'tabs carry the vendor icons');
+assert.deepStrictEqual($$('.tab .k').map((k) => [k.tagName, k.className]), [['SPAN', 'k glyph claude'], ['SPAN', 'k glyph codex']], 'tabs carry the vendor glyphs');
+const css = [...d.querySelectorAll('style')].map((x) => x.textContent).join('\n');
+assert(/\.k\.glyph\.claude \{[^}]*claude\.svg[^}]*background-color: #D97757/.test(css), 'claude glyph is orange on transparent');
+assert(/\.k\.glyph\.codex \{[^}]*blossom\.svg[^}]*background-color: currentColor/.test(css), 'chatgpt glyph follows the text colour');
+assert.strictEqual($$('img').length, 0, 'no marketplace images when glyphs exist');
 
 // events land in their own pane
 ev('a', { kind: 'status', text: 'ready · a' }); ev('b', { kind: 'status', text: 'idle · sandbox workspace-write' });
@@ -84,14 +89,27 @@ ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, ca
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));
 
 // mode selector is per tab and per kind
-assert.deepStrictEqual([...paneB.querySelectorAll('select option')].map((o) => o.value), ['read-only', 'workspace-write']);
-const sel = paneA.querySelector('select'); sel.value = 'plan'; sel.dispatchEvent(new window.Event('change'));
+assert.deepStrictEqual([...paneB.querySelectorAll('select')[1].options].map((o) => o.value), ['read-only', 'workspace-write']);
+const sel = paneA.querySelectorAll('select')[1]; sel.value = 'plan'; sel.dispatchEvent(new window.Event('change'));
 assert.deepStrictEqual(out.pop(), { type: 'setMode', sid: 'a', value: 'plan' });
+
+// effort selector is per tab and per kind; 'default' is the empty value
+assert.deepStrictEqual([...paneA.querySelectorAll('select')].map((x) => x.parentElement.textContent.split(' ')[0]), ['effort', 'mode'], 'claude pane has effort and mode');
+assert.deepStrictEqual([...paneB.querySelectorAll('select')].map((x) => x.parentElement.textContent.split(' ')[0]), ['effort', 'sandbox']);
+const effA = paneA.querySelectorAll('select')[0];
+assert.deepStrictEqual([...effA.options].map((o) => [o.value, o.textContent]), [['', 'default'], ['low', 'low'], ['high', 'high'], ['max', 'max']]);
+assert.deepStrictEqual([...paneB.querySelectorAll('select')[0].options].map((o) => o.value), ['', 'minimal', 'high']);
+effA.value = 'high'; effA.dispatchEvent(new window.Event('change'));
+assert.deepStrictEqual(out.pop(), { type: 'setEffort', sid: 'a', value: 'high' });
+host({ type: 'tabs', tabs: [Object.assign({}, A, { effort: 'max' }), B], active: 'a' });
+assert.strictEqual(effA.value, 'max', 'selector follows the host');
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
+assert.strictEqual(effA.value, '', 'and returns to default');
 
 // new-tab menu and close
 $('#add').click();
 assert.deepStrictEqual($$('#menu div').map((r) => r.textContent), ['New Claude tab', 'New Codex tab']);
-assert.deepStrictEqual($$('#menu img').map((i) => i.getAttribute('src')), [ICONS.claude, ICONS.codex], 'menu rows carry the vendor icons');
+assert.deepStrictEqual($$('#menu .k').map((i) => i.className), ['k glyph claude', 'k glyph codex'], 'menu rows carry the vendor glyphs');
 $$('#menu div')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'codex' });
 assert.strictEqual($('#menu'), null, 'menu closes after choosing');
 $$('.tab .x')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'close', sid: 'b' });
@@ -104,20 +122,30 @@ ev('a', { kind: 'clear' }); assert.strictEqual(paneA.querySelectorAll('.msg').le
 host({ type: 'tabs', tabs: [], active: null });
 assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strictEqual($('#input').disabled, true);
 assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
-assert.deepStrictEqual($$('#empty img').map((i) => i.getAttribute('src')), [ICONS.claude, ICONS.codex], 'empty state carries the vendor icons');
+assert.deepStrictEqual($$('#empty .k').map((i) => i.className), ['k glyph claude', 'k glyph codex'], 'empty state carries the vendor glyphs');
 $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
 host({ type: 'tabs', tabs: [A], active: 'a' });
 assert(!shown($('#empty')), 'empty state hides once a tab exists');
 
-// an image that fails to load is replaced by its letter
-const broken = $$('.tab img.k')[0]; broken.dispatchEvent(new window.Event('error'));
-assert.deepStrictEqual($$('.tab .k').map((k) => [k.tagName, k.textContent]), [['SPAN', 'C']], 'failed image falls back to the letter');
+// no glyph available: the marketplace image is used, and a failed image falls back to its letter
+{
+  const w3 = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons: IMAGES_ONLY })), { runScripts: 'dangerously', beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage() {} }); w.HTMLElement.prototype.scrollIntoView = function () {}; } }).window;
+  w3.dispatchEvent(new w3.MessageEvent('message', { data: { type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'Claude 1' }), tab({ id: 'b', kind: 'codex', title: 'Codex 1' })], active: 'a' } }));
+  const q = (sel) => [...w3.document.querySelectorAll(sel)];
+  assert.deepStrictEqual(q('.tab .k').map((k) => [k.tagName, k.getAttribute('src')]), [['IMG', IMAGES_ONLY.claude.image], ['IMG', IMAGES_ONLY.codex.image]], 'images when there are no glyphs');
+  assert.deepStrictEqual(q('#empty img').map((i) => i.getAttribute('src')), [IMAGES_ONLY.claude.image, IMAGES_ONLY.codex.image]);
+  q('.tab img.k')[0].dispatchEvent(new w3.Event('error'));
+  assert.deepStrictEqual(q('.tab .k').map((k) => [k.tagName, k.textContent]), [['SPAN', 'C'], ['IMG', '']], 'failed image falls back to the letter');
+  q('#empty img')[1].dispatchEvent(new w3.Event('error'));
+  assert.strictEqual(w3.document.querySelector('#e-codex .k').textContent, 'X', 'static badges fall back too');
+  w3.close();
+}
 
 // with no vendor icons the page uses letters everywhere, and an icon URI cannot break out of the script
 {
   const out2 = [];
-  const w2 = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons: { codex: 'x</script><script>window.pwned=1</script>' } })), { runScripts: 'dangerously', beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out2.push(m) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } }).window;
-  assert.strictEqual(w2.pwned, undefined, 'icon URI is escaped inside the script');
+  const w2 = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons: { codex: { image: 'x</script><script>window.pwned=1</script>', glyph: 'y"); } </style><script>window.pwned=2</script>' } } })), { runScripts: 'dangerously', beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out2.push(m) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } }).window;
+  assert.strictEqual(w2.pwned, undefined, 'icon URIs are escaped inside the script and the stylesheet');
   assert.strictEqual(out2.length, 1, 'page script still ran');
   w2.dispatchEvent(new w2.MessageEvent('message', { data: { type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'Claude 1' })], active: 'a' } }));
   const k = w2.document.querySelector('.tab .k');

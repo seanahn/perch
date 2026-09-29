@@ -114,6 +114,19 @@
           "default": "",
           "description": "Claude model id for new sessions. Empty uses Claude Code's default."
         },
+        "perch.claude.effort": {
+          "type": "string",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "",
+          "description": "Claude reasoning effort for new tabs. Empty uses the model's default. Each tab can change it live."
+        },
         "perch.claude.executable": {
           "type": "string",
           "default": "",
@@ -156,7 +169,7 @@
             "xhigh"
           ],
           "default": "",
-          "description": "Codex reasoning effort. Empty uses Codex's default."
+          "description": "Codex reasoning effort for new tabs. Empty uses Codex's default. Set per tab before its first message."
         }
       }
     }
