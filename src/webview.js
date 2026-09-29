@@ -72,6 +72,7 @@ function getHtml({ agent, nonce, cspSource, modes, modeLabel, initialMode }) {
         break; }
       case 'result': endLive(); { const u = m.usage || {}; add('result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.cost !== undefined ? ' · $' + Number(m.cost).toFixed(2) : '')); } break;
       case 'status': status.textContent = m.text; break;
+      case 'note': endLive(); add('status', m.text); break;
       case 'session': status.title = 'session ' + m.id; break;
       case 'busy': dot.className = m.busy ? 'busy' : ''; break;
       case 'error': endLive(); add('error', m.text); break;

@@ -5,58 +5,162 @@
   "version": "0.1.0",
   "publisher": "fennets",
   "license": "MIT",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["AI", "Chat"],
-  "extensionKind": ["workspace"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./src/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "perch", "title": "Perch", "icon": "media/perch.svg" }
+        {
+          "id": "perch",
+          "title": "Perch",
+          "icon": "media/perch.svg"
+        }
       ]
     },
     "views": {
       "perch": [
-        { "type": "webview", "id": "perch.claude", "name": "Claude" },
-        { "type": "webview", "id": "perch.codex", "name": "Codex" }
+        {
+          "type": "webview",
+          "id": "perch.claude",
+          "name": "Claude"
+        },
+        {
+          "type": "webview",
+          "id": "perch.codex",
+          "name": "Codex"
+        }
       ]
     },
     "commands": [
-      { "command": "perch.claude.newSession", "title": "Perch: New Claude Session", "icon": "$(add)" },
-      { "command": "perch.claude.stop", "title": "Perch: Stop Claude", "icon": "$(debug-stop)" },
-      { "command": "perch.codex.newSession", "title": "Perch: New Codex Session", "icon": "$(add)" },
-      { "command": "perch.codex.stop", "title": "Perch: Stop Codex", "icon": "$(debug-stop)" },
-      { "command": "perch.handoff.toCodex", "title": "Perch: Send Claude's last answer to Codex" },
-      { "command": "perch.handoff.toClaude", "title": "Perch: Send Codex's last answer to Claude" }
+      {
+        "command": "perch.claude.newSession",
+        "title": "Perch: New Claude Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "perch.claude.stop",
+        "title": "Perch: Stop Claude",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "perch.codex.newSession",
+        "title": "Perch: New Codex Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "perch.codex.stop",
+        "title": "Perch: Stop Codex",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "perch.handoff.toCodex",
+        "title": "Perch: Send Claude's last answer to Codex"
+      },
+      {
+        "command": "perch.handoff.toClaude",
+        "title": "Perch: Send Codex's last answer to Claude"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "perch.claude.newSession", "when": "view == perch.claude", "group": "navigation@1" },
-        { "command": "perch.claude.stop", "when": "view == perch.claude", "group": "navigation@2" },
-        { "command": "perch.codex.newSession", "when": "view == perch.codex", "group": "navigation@1" },
-        { "command": "perch.codex.stop", "when": "view == perch.codex", "group": "navigation@2" }
+        {
+          "command": "perch.claude.newSession",
+          "when": "view == perch.claude",
+          "group": "navigation@1"
+        },
+        {
+          "command": "perch.claude.stop",
+          "when": "view == perch.claude",
+          "group": "navigation@2"
+        },
+        {
+          "command": "perch.codex.newSession",
+          "when": "view == perch.codex",
+          "group": "navigation@1"
+        },
+        {
+          "command": "perch.codex.stop",
+          "when": "view == perch.codex",
+          "group": "navigation@2"
+        }
       ]
     },
     "configuration": {
       "title": "Perch",
       "properties": {
         "perch.claude.permissionMode": {
-          "type": "string", "enum": ["default", "acceptEdits", "plan", "auto", "bypassPermissions"], "default": "default",
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto",
+            "bypassPermissions"
+          ],
+          "default": "default",
           "description": "Claude Code permission mode for new sessions. bypassPermissions skips all prompts."
         },
-        "perch.claude.model": { "type": "string", "default": "", "description": "Claude model id for new sessions. Empty uses Claude Code's default." },
-        "perch.claude.executable": { "type": "string", "default": "", "description": "Path to a claude CLI to use instead of the one bundled with the Agent SDK." },
+        "perch.claude.model": {
+          "type": "string",
+          "default": "",
+          "description": "Claude model id for new sessions. Empty uses Claude Code's default."
+        },
+        "perch.claude.executable": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a claude CLI to use instead of the one bundled with the Agent SDK."
+        },
         "perch.codex.approvalPolicy": {
-          "type": "string", "enum": ["never", "on-request", "on-failure", "untrusted"], "default": "on-failure",
+          "type": "string",
+          "enum": [
+            "never",
+            "on-request",
+            "on-failure",
+            "untrusted"
+          ],
+          "default": "on-failure",
           "description": "Codex approval policy. The Codex SDK runs non-interactively, so approvals resolve by policy, not by prompt."
         },
         "perch.codex.sandboxMode": {
-          "type": "string", "enum": ["read-only", "workspace-write", "danger-full-access"], "default": "workspace-write",
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "default": "workspace-write",
           "description": "Codex sandbox mode for new threads."
         },
-        "perch.codex.model": { "type": "string", "default": "", "description": "Codex model id for new threads. Empty uses Codex's default." },
-        "perch.codex.reasoningEffort": { "type": "string", "enum": ["", "minimal", "low", "medium", "high", "xhigh"], "default": "", "description": "Codex reasoning effort. Empty uses Codex's default." }
+        "perch.codex.model": {
+          "type": "string",
+          "default": "",
+          "description": "Codex model id for new threads. Empty uses Codex's default."
+        },
+        "perch.codex.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "default": "",
+          "description": "Codex reasoning effort. Empty uses Codex's default."
+        }
       }
     }
   },
@@ -65,8 +169,8 @@
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
-    "check": "node --check src/extension.js && node --check src/claudeAgent.js && node --check src/codexAgent.js && node --check src/webview.js",
-    "test": "node test/harness.mjs",
+    "check": "node --check src/extension.js && node --check src/claudeAgent.js && node --check src/codexAgent.js && node --check src/webview.js && node --check test/replay.test.js",
+    "test": "node test/replay.test.js && node test/harness.mjs",
     "package": "vsce package --no-dependencies"
   }
 }

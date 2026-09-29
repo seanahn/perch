@@ -21,7 +21,9 @@ class AgentView {
     this.view = null;
     this.agent = null;
     this.pending = new Map();      // permission id -> resolve
-    this.buffer = [];              // events emitted before the webview is ready
+    this.history = [];             // transcript events, replayed when the webview is (re)created
+    this.lastStatus = null;        // status bar text survives webview re-creation
+    this.busy = false;
     this.ready = false;
     this.mode = this.kind === 'claude' ? this.cfg('claude.permissionMode') : this.cfg('codex.sandboxMode');
   }
@@ -44,13 +46,35 @@ class AgentView {
     webviewView.onDidDispose(() => { this.ready = false; this.view = null; });
   }
 
-  post(ev) { if (this.ready && this.view) this.view.webview.postMessage({ type: 'event', ev }); else this.buffer.push(ev); }
+  // VS Code destroys and recreates the webview when a view is moved between sidebars or
+  // the window reloads. The host is the source of truth: it records every event and
+  // replays the transcript, status, and busy state when the page says it is ready.
+  post(ev) {
+    switch (ev.kind) {
+      case 'status': this.lastStatus = ev.text; break;
+      case 'busy': this.busy = !!ev.busy; break;
+      case 'clear': this.history = []; break;
+      case 'delta': case 'tool_start': case 'stderr': case 'session': case 'mode': case 'fill': break;
+      default: this.history.push(ev); if (this.history.length > 2000) this.history.splice(0, this.history.length - 2000);
+    }
+    this.send(ev);
+  }
+
+  send(ev) { if (this.ready && this.view) this.view.webview.postMessage({ type: 'event', ev }); }
+
+  replay() {
+    this.send({ kind: 'clear' });
+    for (const ev of this.history) this.send(ev);
+    this.send({ kind: 'mode', value: this.mode });
+    this.send({ kind: 'busy', busy: this.busy });
+    if (this.lastStatus) this.send({ kind: 'status', text: this.lastStatus });
+  }
 
   onMessage(msg) {
     switch (msg.type) {
       case 'ready':
         this.ready = true;
-        for (const ev of this.buffer.splice(0)) this.post(ev);
+        this.replay();
         if (!this.agent) this.start();
         return;
       case 'send':
@@ -60,6 +84,9 @@ class AgentView {
       case 'permission': {
         const r = this.pending.get(msg.id);
         if (r) { this.pending.delete(msg.id); r({ decision: msg.decision }); }
+        // an answered prompt must not come back as a live prompt on replay
+        const i = this.history.findIndex((h) => h.kind === 'permission' && h.id === msg.id);
+        if (i >= 0) this.history[i] = { kind: 'note', text: `${this.history[i].tool}: ${msg.decision}` };
         return;
       }
       case 'setMode':
@@ -98,6 +125,8 @@ class AgentView {
     if (this.agent) { this.agent.dispose(); this.agent = null; }
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session closed' });
     this.pending.clear();
+    this.history = this.history.map((h) => (h.kind === 'permission' ? { kind: 'note', text: `${h.tool}: session closed` } : h));
+    this.busy = false;
   }
 
   newSession() { this.post({ kind: 'clear' }); this.start(); this.post({ kind: 'status', text: 'new session' }); }

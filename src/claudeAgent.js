@@ -70,6 +70,7 @@ class ClaudeAgent {
     if (this.opts.executable) options.pathToClaudeCodeExecutable = this.opts.executable;
     if (options.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
 
+    this.emit({ kind: 'status', text: `ready · mode ${options.permissionMode}` });
     try {
       this.query = sdk.query({ prompt: this.queue, options });
       for await (const m of this.query) this._onMessage(m);
