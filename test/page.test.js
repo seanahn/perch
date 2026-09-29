@@ -18,10 +18,10 @@ const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>
 }
 
 function page(icons) {
-  const out = [];
-  const dom = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons })), { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
+  const out = [], states = [];
+  const dom = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons })), { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))), setState: (x) => states.push(JSON.parse(JSON.stringify(x))), getState: () => states[states.length - 1] }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
   const w = dom.window, d = w.document;
-  return { w, d, out, host: (m) => w.dispatchEvent(new w.MessageEvent('message', { data: m })), $: (s) => d.querySelector(s), $$: (s) => [...d.querySelectorAll(s)], shown: (n) => !!n && w.getComputedStyle(n).display !== 'none' && (!n.parentElement || n.parentElement === d.body || w.getComputedStyle(n.parentElement).display !== 'none') };
+  return { w, d, out, states, host: (m) => w.dispatchEvent(new w.MessageEvent('message', { data: m })), $: (s) => d.querySelector(s), $$: (s) => [...d.querySelectorAll(s)], shown: (n) => !!n && w.getComputedStyle(n).display !== 'none' && (!n.parentElement || n.parentElement === d.body || w.getComputedStyle(n.parentElement).display !== 'none') };
 }
 const P = page(ICONS);
 const { w: window, d, out, host, $, $$, shown } = P;
@@ -365,8 +365,27 @@ $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new',
 host({ type: 'tabs', tabs: [A], active: 'a' });
 assert(!shown($('#empty')), 'empty state hides once a tab exists');
 assert.strictEqual(out.length, 0, 'nothing was sent that the tests did not ask for');
+assert.deepStrictEqual([d.body.classList.contains('single'), P.states], [false, []], 'the sidebar page keeps its tab bar and stores nothing');
 window.close();
 
+// ---- an editor tab: one session, no tab bar of its own, and the page remembers which session it shows
+{
+  const e = page(ICONS);
+  e.host({ type: 'tabs', tabs: [tab({ id: 'solo', kind: 'claude', title: 'Claude 1' })], active: 'solo', single: true });
+  assert(e.d.body.classList.contains('single'));
+  assert(!e.shown(e.$('#tabs')), 'VS Code\'s own tab is the tab');
+  assert(!e.shown(e.$('#empty')) && e.shown(e.$('.pane')) && e.shown(e.$('#composer')));
+  assert.deepStrictEqual(e.states, [{ sid: 'solo' }], 'so VS Code can hand the right session back after a reload');
+  assert.strictEqual(e.$('#input').placeholder, 'Message Claude…'); assert.strictEqual(e.$('#input').disabled, false);
+  e.$('#input').value = 'hi'; e.$('#send').click();
+  assert.deepStrictEqual(e.out.pop(), { type: 'send', sid: 'solo', text: 'hi' });
+  e.host({ type: 'tabs', tabs: [tab({ id: 'solo', kind: 'claude', title: 'Claude 1', busy: true })], active: 'solo', single: true });
+  assert.strictEqual(e.states.length, 2);
+  e.host({ type: 'tabs', tabs: [], active: null, single: true });
+  assert(!e.shown(e.$('#empty')), 'an editor tab never offers to open tabs inside itself');
+  assert.strictEqual(e.states.length, 2, 'and does not forget its session when it is momentarily without one');
+  e.w.close();
+}
 // ---- no glyph available: the marketplace image is used, and a failed image falls back to its letter
 {
   const p3 = page(IMAGES_ONLY);

@@ -18,6 +18,9 @@ const EFFORTS = {
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 const STATE_KEY = 'perch.sessions.v1';
+const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
+// how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
+const RESTORE_GRACE_MS = Number(process.env.PERCH_RESTORE_GRACE_MS) > 0 ? Number(process.env.PERCH_RESTORE_GRACE_MS) : 4000;
 // Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
 const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
 
@@ -49,6 +52,28 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+
+/**
+ * The icon of an editor tab. VS Code tints nothing here, so the file must carry its own colour: Claude's glyph is
+ * already orange; ChatGPT's comes in a black and a white version, for light and dark themes.
+ */
+function tabIcon(kind) {
+  try {
+    const ext = vscode.extensions.getExtension(VENDOR_EXTENSIONS[kind]);
+    if (!ext || !ext.packageJSON) return undefined;
+    const pj = ext.packageJSON, containers = (pj.contributes && pj.contributes.viewsContainers) || {};
+    const glyph = [...(containers.activitybar || []), ...(containers.secondarySidebar || []), ...(containers.panel || [])].map((c) => c && c.icon).find((i) => typeof i === 'string' && /\.svg$/i.test(i));
+    const at = (rel) => vscode.Uri.joinPath(ext.extensionUri, rel);
+    const exists = (rel) => { try { return require('fs').existsSync(require('path').join(ext.extensionUri.fsPath || ext.extensionPath || '', rel)); } catch (_) { return false; } };
+    if (glyph && /white/i.test(glyph)) {            // a white glyph is for dark themes; look for its dark twin
+      const black = glyph.replace(/white/i, (m) => (m === 'White' ? 'Black' : m === 'WHITE' ? 'BLACK' : 'black'));
+      if (exists(black)) return { light: at(black), dark: at(glyph) };
+      return typeof pj.icon === 'string' && pj.icon ? at(pj.icon) : at(glyph);
+    }
+    if (glyph) return at(glyph);
+    return typeof pj.icon === 'string' && pj.icon ? at(pj.icon) : undefined;
+  } catch (_) { return undefined; }
+}
 
 function cwd() {
   const f = vscode.workspace.workspaceFolders;
@@ -87,7 +112,7 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, mode, effort, model, ide, resume }) {
+  constructor(view, { id, kind, title, titled, mode, effort, model, ide, resume, location, paneled }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -102,6 +127,9 @@ class Session {
     this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
     this.queue = [];                 // codex only: messages waiting for the current turn to end
     this.ide = kind === 'codex' && !!ide;   // codex only: attach the active file and selection to each message
+    this.location = location === 'sidebar' || location === 'editor' ? location : view.where();   // which surface shows this tab
+    this.paneled = !!paneled;        // an editor tab has been opened for it at some point, so VS Code will restore that tab
+    this.prefill = '';               // text waiting for a page that is not ready yet
     this.reconcile();
     this.agentSessionId = resume || null;
     this.agent = null;               // started lazily on first message
@@ -168,7 +196,7 @@ class Session {
         if (!this.titled) { this.title = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28) || this.title; this.titled = true; this.view.sendTabs(); this.view.persist(); }
         this.history.push(ev); break;
       case 'permission':
-        if (this.view.activeId !== this.id) { this.attention = true; this.view.sendTabs(); }
+        if (!this.view.isVisible(this)) { this.attention = true; this.view.sendTabs(); }
         this.history.push(ev); break;
       default: this.history.push(ev);
     }
@@ -283,24 +311,38 @@ class Session {
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : ''), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled }; }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
+/**
+ * Perch itself. Sessions are shown on surfaces: the sidebar view, which has its own tab bar and shows every session that
+ * lives there, and editor tabs, one session each, which are native VS Code tabs. Every surface is a page that can be
+ * destroyed and rebuilt at any time, so all state lives here and is replayed to a page when it says it is ready.
+ */
 class PerchView {
   constructor(context) {
     this.context = context;
-    this.view = null;
-    this.ready = false;
+    this.sidebar = { view: null, ready: false };
+    this.panels = new Map();         // session id -> { panel, ready }
     this.sessions = [];
-    this.activeId = null;
+    this.activeId = null;            // the active tab of the sidebar view
     this.counters = { claude: 0, codex: 0 };
     this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
     this.loading = null;
     this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
+    this.closing = false;
+    this.graceTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
     this.restore();
   }
+
+  /** Where a new tab opens: as an editor tab, or in the sidebar view. */
+  where() { return cfg('newTabs') === 'sidebar' ? 'sidebar' : 'editor'; }
+
+  // kept for callers and tests that think of the sidebar as "the view"
+  get view() { return this.sidebar.view; }
+  get ready() { return this.sidebar.ready; }
 
   // ---- Claude usage and backend
   onMeter(state, why, codex) {
@@ -355,47 +397,123 @@ class PerchView {
     for (const s of saved.sessions) {
       if (s.kind !== 'claude' && s.kind !== 'codex') continue;
       this.counters[s.kind]++;
-      this.sessions.push(new Session(this, s));
+      this.sessions.push(new Session(this, s));       // a tab saved before editor tabs existed has no location: it goes where new tabs go
     }
     // counters are saved so a new tab never reuses the name of one that is still open
     for (const k of Object.keys(this.counters)) this.counters[k] = Math.max(this.counters[k], Number(saved.counters && saved.counters[k]) || 0);
-    this.activeId = this.sessions.some((s) => s.id === saved.active) ? saved.active : (this.sessions[0] && this.sessions[0].id);
+    const side = this.sessions.filter((s) => s.location === 'sidebar');
+    this.activeId = side.some((s) => s.id === saved.active) ? saved.active : (side[0] ? side[0].id : null);
   }
   persist() { this.context.workspaceState.update(STATE_KEY, { active: this.activeId, counters: this.counters, sessions: this.sessions.map((s) => s.toState()) }); }
 
-  // ---- webview plumbing
-  resolveWebviewView(webviewView) {
-    this.view = webviewView;
-    const w = webviewView.webview;
-    const { icons, roots } = vendorIcons(w);
-    w.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri, ...roots].filter(Boolean) };
-    w.html = getHtml({ nonce: randomBytes(16).toString('hex'), cspSource: w.cspSource, icons });
-    w.onDidReceiveMessage((msg) => this.onMessage(msg));
-    webviewView.onDidDispose(() => { this.ready = false; this.view = null; });
+  /**
+   * Called once the extension is active. VS Code brings back the editor tabs that were open, through the serializer.
+   * A tab that has never had an editor tab (it was moved here from the sidebar by a change of setting) is opened now;
+   * one that VS Code fails to bring back is opened after a short wait, so no session is left without a surface.
+   */
+  start() {
+    for (const s of this.sessions) if (s.location === 'editor' && !s.paneled) this.openPanel(s, { preserveFocus: true });
+    if (this.sessions.some((s) => s.location === 'editor' && s.paneled)) {
+      this.graceTimer = setTimeout(() => { this.graceTimer = null; for (const s of this.sessions) if (s.location === 'editor' && !this.panels.has(s.id)) this.openPanel(s, { preserveFocus: true }); }, RESTORE_GRACE_MS);
+      if (this.graceTimer.unref) this.graceTimer.unref();
+    }
   }
-  raw(msg) { if (this.ready && this.view) this.view.webview.postMessage(msg); }
-  sendEvent(sid, ev) { this.raw({ type: 'event', sid, ev }); }
-  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId }); }
+
+  // ---- surfaces
+  mount(webview) {
+    const { icons, roots } = vendorIcons(webview);
+    webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri, ...roots].filter(Boolean) };
+    webview.html = getHtml({ nonce: randomBytes(16).toString('hex'), cspSource: webview.cspSource, icons });
+  }
+
+  resolveWebviewView(webviewView) {
+    this.sidebar = { view: webviewView, ready: false };
+    this.mount(webviewView.webview);
+    webviewView.webview.onDidReceiveMessage((msg) => this.onMessage(msg, null));
+    webviewView.onDidDispose(() => { if (this.sidebar.view === webviewView) this.sidebar = { view: null, ready: false }; });
+  }
+
+  /** The column new editor tabs open in: beside the other Perch tabs if there are any, otherwise beside the editor. */
+  column() {
+    for (const { panel } of this.panels.values()) if (panel.viewColumn !== undefined) return panel.viewColumn;
+    return vscode.ViewColumn.Beside;
+  }
+  panelTitle(s) { return (s.attention ? '● ' : '') + s.title + (s.busy ? ' …' : ''); }
+
+  openPanel(s, { preserveFocus } = {}) {
+    if (this.panels.has(s.id)) { this.panels.get(s.id).panel.reveal(undefined, !!preserveFocus); return; }
+    const panel = vscode.window.createWebviewPanel(PANEL_TYPE, this.panelTitle(s), { viewColumn: this.column(), preserveFocus: !!preserveFocus }, { enableScripts: true, retainContextWhenHidden: true });
+    this.attachPanel(s, panel);
+  }
+
+  attachPanel(s, panel) {
+    const entry = { panel, ready: false };
+    this.panels.set(s.id, entry);
+    s.paneled = true;
+    panel.title = this.panelTitle(s);
+    const icon = tabIcon(s.kind); if (icon) panel.iconPath = icon;
+    this.mount(panel.webview);
+    panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg, s.id));
+    panel.onDidChangeViewState(() => { if (panel.visible && s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } });
+    // closing the editor tab closes the session, unless the tab is going away for another reason (a move, or shutdown)
+    panel.onDidDispose(() => { if (this.panels.get(s.id) !== entry) return; this.panels.delete(s.id); if (!this.closing && this.get(s.id) && s.location === 'editor') this.closeSession(s.id); });
+    this.persist();
+  }
+
+  /** VS Code restoring an editor tab after a reload. The page remembers which session it showed. */
+  deserializeWebviewPanel(panel, state) {
+    const s = state && state.sid ? this.get(state.sid) : null;
+    if (!s || s.location !== 'editor' || this.panels.has(s.id)) { panel.dispose(); return Promise.resolve(); }   // the session is gone, moved, or already has a tab
+    this.attachPanel(s, panel);
+    return Promise.resolve();
+  }
+
+  surface(s) { if (!s) return null; if (s.location === 'editor') { const e = this.panels.get(s.id); return e ? { webview: e.panel.webview, ready: e.ready } : null; } return this.sidebar.view ? { webview: this.sidebar.view.webview, ready: this.sidebar.ready } : null; }
+  isVisible(s) { if (s.location === 'editor') { const e = this.panels.get(s.id); return !!(e && e.panel.visible); } return this.activeId === s.id && !!(this.sidebar.view && this.sidebar.view.visible !== false); }
+
+  /** To every page: things that are not about one session. */
+  raw(msg) {
+    if (this.sidebar.ready && this.sidebar.view) this.sidebar.view.webview.postMessage(msg);
+    for (const e of this.panels.values()) if (e.ready) e.panel.webview.postMessage(msg);
+  }
+  sendEvent(sid, ev) { const f = this.surface(this.get(sid)); if (f && f.ready) f.webview.postMessage({ type: 'event', sid, ev }); }
+  sendTabs() {
+    if (this.sidebar.ready && this.sidebar.view) this.sidebar.view.webview.postMessage({ type: 'tabs', tabs: this.sessions.filter((s) => s.location === 'sidebar').map((s) => s.toTab()), active: this.activeId });
+    for (const [sid, e] of this.panels) {
+      const s = this.get(sid); if (!s) continue;
+      const title = this.panelTitle(s); if (e.panel.title !== title) e.panel.title = title;
+      if (e.ready) e.panel.webview.postMessage({ type: 'tabs', tabs: [s.toTab()], active: sid, single: true });
+    }
+  }
   replay(s) {
     this.sendEvent(s.id, { kind: 'clear' });
     for (const ev of s.history) this.sendEvent(s.id, ev);
     this.sendEvent(s.id, { kind: 'busy', busy: s.busy });
     this.sendEvent(s.id, { kind: 'status', text: s.lastStatus });
+    if (s.prefill) { this.sendEvent(s.id, { kind: 'fill', text: s.prefill }); s.prefill = ''; }
   }
   get(id) { return this.sessions.find((s) => s.id === id); }
-  active() { return this.get(this.activeId); }
+  /** The session the user is looking at: the focused editor tab if there is one, otherwise the sidebar's active tab. */
+  active() {
+    for (const [sid, e] of this.panels) if (e.panel.active) return this.get(sid);
+    return this.get(this.activeId) || null;
+  }
 
-  onMessage(msg) {
+  /** @param {string|null} from  the session id of the editor tab the message came from, or null for the sidebar */
+  onMessage(msg, from) {
     const s = msg.sid ? this.get(msg.sid) : null;
     switch (msg.type) {
-      case 'ready':
-        this.ready = true;
+      case 'ready': {
+        const mine = from ? this.sessions.filter((x) => x.id === from) : this.sessions.filter((x) => x.location === 'sidebar');
+        if (from) { const e = this.panels.get(from); if (!e) return; e.ready = true; } else this.sidebar.ready = true;
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
-        this.raw({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
-        for (const k of Object.keys(this.commands)) if (this.commands[k].length) this.raw({ type: 'commands', kind: k, list: this.commands[k] });
+        const to = from ? this.panels.get(from).panel.webview : this.sidebar.view.webview;
+        to.postMessage({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
+        for (const k of Object.keys(this.commands)) if (this.commands[k].length) to.postMessage({ type: 'commands', kind: k, list: this.commands[k] });
         this.loadCatalogs();
-        for (const x of this.sessions) this.replay(x);
+        for (const x of mine) this.replay(x);
         return;
+      }
       case 'send': if (s) s.send(msg.text); return;
       case 'stop': if (s) s.interrupt(); return;
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision); return;
@@ -415,38 +533,69 @@ class PerchView {
   }
 
   // ---- session management
-  addSession(kind, { fill } = {}) {
+  addSession(kind, { fill, location } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
     const n = ++this.counters[kind];
-    const s = new Session(this, { kind, title: `${kind === 'claude' ? 'Claude' : 'Codex'} ${n}` });
+    const s = new Session(this, { kind, title: `${kind === 'claude' ? 'Claude' : 'Codex'} ${n}`, location: location || this.where() });
     this.sessions.push(s);
+    if (fill) s.prefill = fill;
+    if (s.location === 'editor') { this.openPanel(s); this.sendTabs(); return s; }     // its page asks for the replay when it is ready
     this.activeId = s.id;
     this.persist();
     this.sendTabs();
     this.replay(s);
-    if (fill) this.sendEvent(s.id, { kind: 'fill', text: fill });
     return s;
+  }
+
+  async pickNew() {
+    const pick = await vscode.window.showQuickPick([{ label: 'Claude', description: 'New Claude Code tab', kind: 'claude' }, { label: 'Codex', description: 'New Codex tab', kind: 'codex' }], { placeHolder: 'New Perch tab' });
+    return pick ? this.addSession(pick.kind) : null;
   }
 
   closeSession(id) {
     const i = this.sessions.findIndex((s) => s.id === id);
     if (i < 0) return;
-    this.sessions[i].dispose();
+    const s = this.sessions[i];
+    s.dispose();
     this.sessions.splice(i, 1);
-    if (this.activeId === id) { const next = this.sessions[Math.min(i, this.sessions.length - 1)]; this.activeId = next ? next.id : null; }
+    const e = this.panels.get(id);
+    if (e) { this.panels.delete(id); e.panel.dispose(); }
+    if (this.activeId === id) { const side = this.sessions.filter((x) => x.location === 'sidebar'); const at = this.sessions.slice(0, i).filter((x) => x.location === 'sidebar').length; const next = side[Math.min(at, side.length - 1)]; this.activeId = next ? next.id : null; }
     if (!this.sessions.length) this.counters = { claude: 0, codex: 0 };   // nothing open, nothing to collide with: numbering starts over
     this.persist();
     this.sendTabs();
   }
 
+  /** Bring a tab to the front, wherever it lives. */
   activate(id) {
     const s = this.get(id);
     if (!s) return;
+    if (s.location === 'editor') { this.openPanel(s); if (s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } return; }
     this.activeId = id;
     if (s.attention && !s.pending.size) s.attention = false;
     this.persist();
     this.sendTabs();
   }
+
+  /** Move a tab between the sidebar and the editor area. The session, its agent, and its transcript are untouched. */
+  move(id, location) {
+    const s = this.get(id);
+    if (!s || s.location === location || (location !== 'editor' && location !== 'sidebar')) return;
+    if (location === 'editor') {
+      s.location = 'editor';
+      if (this.activeId === id) { const side = this.sessions.filter((x) => x.location === 'sidebar'); this.activeId = side[0] ? side[0].id : null; }
+      this.openPanel(s);
+    } else {
+      const e = this.panels.get(id);
+      s.location = 'sidebar'; s.paneled = false;
+      if (e) { this.panels.delete(id); e.panel.dispose(); }
+      this.activeId = id;
+    }
+    this.persist();
+    this.sendTabs();
+    if (location === 'sidebar') { this.replay(s); if (this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true); }
+  }
+  moveAll(location) { for (const s of this.sessions.slice()) this.move(s.id, location); }
 
   async handoff() {
     const from = this.active();
@@ -459,12 +608,20 @@ class PerchView {
     ];
     const pick = await vscode.window.showQuickPick(items, { placeHolder: `Send the last answer from "${from.title}" to…` });
     if (!pick) return;
-    if (pick.sid) { this.activate(pick.sid); this.sendEvent(pick.sid, { kind: 'fill', text }); }
-    else this.addSession(pick.kind, { fill: text });
-    if (this.view) this.view.show(true);
+    if (!pick.sid) { this.addSession(pick.kind, { fill: text, location: from.location }); return; }
+    const to = this.get(pick.sid);
+    this.activate(pick.sid);
+    const f = this.surface(to);
+    if (f && f.ready) this.sendEvent(pick.sid, { kind: 'fill', text }); else to.prefill = text;
+    if (to.location === 'sidebar' && this.sidebar.view) this.sidebar.view.show(true);
   }
 
-  dispose() { for (const s of this.sessions) s.dispose(); this.meter.dispose(); }
+  dispose() {
+    this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
+    clearTimeout(this.graceTimer);
+    for (const s of this.sessions) s.dispose();
+    this.meter.dispose();
+  }
 }
 
 function activate(context) {
@@ -472,17 +629,24 @@ function activate(context) {
   perch.meter.start();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('perch.main', perch, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.window.registerWebviewPanelSerializer(PANEL_TYPE, perch),
+    vscode.commands.registerCommand('perch.new', () => perch.pickNew()),
     vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
     vscode.commands.registerCommand('perch.newCodex', () => perch.addSession('codex')),
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
-    vscode.commands.registerCommand('perch.closeTab', () => { if (perch.activeId) perch.closeSession(perch.activeId); }),
+    vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    vscode.commands.registerCommand('perch.moveToEditor', () => { const s = perch.active(); if (s) perch.move(s.id, 'editor'); }),
+    vscode.commands.registerCommand('perch.moveToSidebar', () => { const s = perch.active(); if (s) perch.move(s.id, 'sidebar'); }),
+    vscode.commands.registerCommand('perch.moveAllToEditor', () => perch.moveAll('editor')),
+    vscode.commands.registerCommand('perch.moveAllToSidebar', () => perch.moveAll('sidebar')),
     vscode.commands.registerCommand('perch.refreshModels', () => perch.loadCatalogs(true)),
     vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
     vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
     vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),
     { dispose: () => perch.dispose() },
   );
+  perch.start();
   return perch;   // exposed for tests
 }
 

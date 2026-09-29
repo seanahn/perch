@@ -2,7 +2,7 @@
   "name": "perch",
   "displayName": "Perch",
   "description": "Claude Code and Codex agents as tabs in one sidebar, each with its own look, plus Claude usage and backend switching. A shell, not an agent.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "fennets",
   "license": "MIT",
   "engines": {
@@ -16,7 +16,8 @@
     "workspace"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:perch.session"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -80,6 +81,29 @@
       {
         "command": "perch.meter.login",
         "title": "Perch: Log in to Claude (subscription)"
+      },
+      {
+        "command": "perch.new",
+        "title": "Perch: New Tab\u2026",
+        "icon": "$(add)"
+      },
+      {
+        "command": "perch.moveToEditor",
+        "title": "Perch: Move Tab to the Editor Area",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "perch.moveToSidebar",
+        "title": "Perch: Move Tab to the Sidebar",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "perch.moveAllToEditor",
+        "title": "Perch: Move All Tabs to the Editor Area"
+      },
+      {
+        "command": "perch.moveAllToSidebar",
+        "title": "Perch: Move All Tabs to the Sidebar"
       }
     ],
     "menus": {
@@ -123,12 +147,77 @@
           "command": "perch.meter.refresh",
           "when": "view == perch.main",
           "group": "3_meter@2"
+        },
+        {
+          "command": "perch.moveToEditor",
+          "when": "view == perch.main",
+          "group": "2_models@2"
+        },
+        {
+          "command": "perch.moveAllToEditor",
+          "when": "view == perch.main",
+          "group": "2_models@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "perch.new",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "perch.handoff",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "perch.newClaude",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "1_new@1"
+        },
+        {
+          "command": "perch.newCodex",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "1_new@2"
+        },
+        {
+          "command": "perch.moveToSidebar",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "2_move@1"
+        },
+        {
+          "command": "perch.refreshModels",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "3_models@1"
+        },
+        {
+          "command": "perch.meter.toggleBackend",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "4_meter@1"
+        },
+        {
+          "command": "perch.meter.refresh",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "4_meter@2"
         }
       ]
     },
     "configuration": {
       "title": "Perch",
       "properties": {
+        "perch.newTabs": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "sidebar"
+          ],
+          "default": "editor",
+          "enumDescriptions": [
+            "Each session is an editor tab, like a file. No sidebar title rows; tabs can be dragged, split, and reordered.",
+            "Sessions are tabs inside the Perch sidebar view."
+          ],
+          "description": "Where Perch opens new tabs. Tabs saved before this setting existed follow it too."
+        },
         "perch.claude.permissionMode": {
           "type": "string",
           "enum": [

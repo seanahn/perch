@@ -1,5 +1,5 @@
-EXT_ID = fennets.perch-0.4.0
-OLD_IDS = fennets.perch-0.1.0 fennets.perch-0.2.0 fennets.perch-0.3.0
+EXT_ID = fennets.perch-0.5.0
+OLD_IDS = fennets.perch-0.1.0 fennets.perch-0.2.0 fennets.perch-0.3.0 fennets.perch-0.4.0
 EXT_DIRS = /home/sahn/.vscode/extensions /home/sahn/.local/share/code-server/extensions /home/sahn/.vscode-server/extensions
 
 ## Install node dependencies (both agent SDKs; the Codex SDK pulls in the codex binary)

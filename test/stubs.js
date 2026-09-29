@@ -85,28 +85,56 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, listeners: { config: [], extensions: [] } };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, panels: [], serializers: {}, listeners: { config: [], extensions: [] } };
+  // an editor tab: a page of its own, which VS Code can hide, focus, close, and bring back after a reload
+  const makePanel = (viewType, title, show, options) => {
+    const got = []; let onMsg = () => {}; const gone = [], changed = [];
+    const col = show && typeof show === 'object' ? show.viewColumn : show;
+    const panel = {
+      viewType, title, iconPath: undefined, options, disposed: false, reveals: 0,
+      viewColumn: col === -2 ? (ui.panels.filter((x) => !x.disposed).length ? 2 : 2) : col, visible: true, active: !(show && show.preserveFocus),
+      webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => { got.push(JSON.parse(JSON.stringify(m))); return Promise.resolve(true); }, onDidReceiveMessage: (f) => { onMsg = f; return { dispose() {} }; } },
+      onDidDispose: (f) => { gone.push(f); return { dispose() {} }; },
+      onDidChangeViewState: (f) => { changed.push(f); return { dispose() {} }; },
+      reveal(_c, preserveFocus) { this.reveals++; this.visible = true; if (!preserveFocus) focus(this); for (const f of changed) f({ webviewPanel: this }); },
+      dispose() { if (this.disposed) return; this.disposed = true; this.visible = false; this.active = false; for (const f of gone) f(); },
+      // test helpers
+      got, fire: (m) => onMsg(m),
+      events: (sid) => got.filter((m) => m.type === 'event' && (!sid || m.sid === sid)).map((m) => m.ev),
+      lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
+      lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
+      commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
+      show(visible, active) { this.visible = visible; if (active) focus(this); else this.active = false; for (const f of changed) f({ webviewPanel: this }); },
+    };
+    if (panel.active) focus(panel);
+    ui.panels.push(panel);
+    return panel;
+  };
+  const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
       createStatusBarItem: (id, align, prio) => { const it = { id, prio, text: '', tooltip: '', shown: false, disposed: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() { this.disposed = true; this.shown = false; } }; ui.bars.push(it); return it; },
       showOpenDialog: async (o) => { ui.dialogs.push(o); return ui.picked; },
+      createWebviewPanel: (viewType, title, show, options) => makePanel(viewType, title, show, options),
+      registerWebviewPanelSerializer: (viewType, z) => { ui.serializers[viewType] = z; return { dispose() {} }; },
       get activeTextEditor() { return ui.editor; },
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id) => { ui.executed.push(id); } },
     extensions: {
-      getExtension: (id) => { const e = installed[String(id).toLowerCase()]; return e ? { extensionUri: { path: '/ext/' + id }, extensionPath: '/ext/' + id, packageJSON: e } : undefined; },
+      getExtension: (id) => { const e = installed[String(id).toLowerCase()]; const root = e && e.__root ? e.__root : '/ext/' + id; return e ? { extensionUri: { path: root, fsPath: root }, extensionPath: root, packageJSON: e } : undefined; },
       onDidChange: (f) => { ui.listeners.extensions.push(f); return { dispose() {} }; },
     },
     StatusBarAlignment: { Left: 1, Right: 2 },
+    ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
     ThemeColor: class { constructor(id) { this.id = id; } },
     MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } appendCodeblock(v) { this.value += '\n```\n' + v + '\n```\n'; return this; } },
-    Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/') }) },
+    Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), fsPath: [base.path, ...parts].join('/') }) },
   };
   Module._load = function (req, parent, isMain) {
     if (req === 'vscode') return vscodeStub;
@@ -124,8 +152,9 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
   const globalState = makeMemento(globals);
   const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, extensionUri: { path: '/ext/fennets.perch' } });
   const changeConfig = (patch) => { Object.assign(cfgBox, patch); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => Object.keys(patch).some((k) => ('perch.' + k).startsWith(sec)) }); };
+  const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
-  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions };
+  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel };
 }
 
 function fakeView() {

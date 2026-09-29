@@ -52,6 +52,9 @@ ${glyphCss}
   #add:hover { color: var(--vscode-foreground); }
   @keyframes pulse { 50% { opacity: .3; } }
 
+  body.single #tabs { display: none; }
+  body.single { background: var(--vscode-editor-background); }
+
   /* panes */
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -264,14 +267,19 @@ ${glyphCss}
       if (t.id === active) d.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
   }
-  function applyTabs(next, nextActive) {
+  // An editor tab shows one session: VS Code's own tab is its tab, so the page has no tab bar. The page remembers which
+  // session it shows, which is how VS Code hands the right one back after a reload.
+  let single = false;
+  function applyTabs(next, nextActive, one) {
+    if (!!one !== single) { single = !!one; document.body.classList.toggle('single', single); }
+    if (single && nextActive) { try { vscode.setState({ sid: nextActive }); } catch (_) { /* no state store */ } }
     const prev = active;
     if (prev && panes.has(prev)) panes.get(prev).draft = $input.value;
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
     for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; }
-    $empty.hidden = tabs.length > 0;
+    $empty.hidden = tabs.length > 0 || single;
     renderTabs();
     const p = panes.get(active);
     if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) p.log.scrollTop = p.log.scrollHeight; }
@@ -521,7 +529,7 @@ ${glyphCss}
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
-    if (m.type === 'tabs') applyTabs(m.tabs, m.active);
+    if (m.type === 'tabs') applyTabs(m.tabs, m.active, m.single);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }

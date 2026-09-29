@@ -1,4 +1,5 @@
 'use strict';
+process.env.PERCH_RESTORE_GRACE_MS = '60';   // the wait for VS Code to bring back editor tabs, shortened
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
@@ -577,6 +578,150 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: x, text: 'hold' }); v2.fire({ type: 'send', sid: x, text: 'q' });
     v2.fire({ type: 'close', sid: x }); cx.finish(); await flush();
     assert.deepStrictEqual([cx.disposed, cx.sent.includes('q')], [true, false]);
+  }
+
+  // ======================================================================== sessions as editor tabs
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const gpt = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-ext-')); fs.mkdirSync(path.join(gpt, 'resources'));
+    for (const f of ['blossom-white.svg', 'blossom-black.svg']) fs.writeFileSync(path.join(gpt, 'resources', f), '<svg/>');
+    const extensions = {
+      'anthropic.claude-code': { icon: 'resources/claude-logo.png', contributes: { viewsContainers: { activitybar: [{ id: 'c', icon: 'resources/claude-logo.svg' }] } } },
+      'openai.chatgpt': { __root: gpt, icon: 'resources/blossom.dark.png', contributes: { viewsContainers: { activitybar: [{ id: 'x', icon: 'resources/blossom-white.svg' }] } } },
+    };
+    const m = install(undefined, { config: { newTabs: 'editor' }, extensions }); await flush();
+    const side = fakeView(); m.registered['perch.main'].resolveWebviewView(side.view); side.fire({ type: 'ready' }); await flush();
+    assert(m.ui.serializers['perch.session'], 'VS Code is told how to bring editor tabs back');
+    assert.strictEqual(m.ui.panels.length, 0, 'nothing opens by itself');
+
+    // a new tab is a native editor tab, beside the editor, with the vendor's icon
+    await m.commands['perch.newClaude']();
+    const p1 = m.ui.panels[0], c = m.perch.sessions[0].id;
+    assert.deepStrictEqual([p1.viewType, p1.title, p1.viewColumn, p1.active, p1.options.retainContextWhenHidden, p1.options.enableScripts], ['perch.session', 'Claude 1', 2, true, true, true]);
+    assert.strictEqual(p1.iconPath.path, '/ext/anthropic.claude-code/resources/claude-logo.svg', 'Claude\'s glyph carries its own colour');
+    assert.deepStrictEqual(p1.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code', gpt]);
+    assert.deepStrictEqual(side.lastTabs().tabs, [], 'it is not a tab of the sidebar view');
+    assert.deepStrictEqual(m.memento._dump()['perch.sessions.v1'].sessions.map((x) => [x.location, x.paneled]), [['editor', true]]);
+
+    // its page shows that one session, with no tab bar of its own
+    assert.strictEqual(p1.got.length, 0, 'nothing is sent to a page that has not said it is ready');
+    p1.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual([p1.lastTabs().single, p1.lastTabs().active, p1.lastTabs().tabs.map((t) => t.id)], [true, c, [c]]);
+    assert.strictEqual(p1.lastMeter().vendor, 'Claude'); assert.strictEqual(p1.commands('claude').length, 1, 'meter and slash commands reach every page');
+    assert.deepStrictEqual(p1.events(c).map((e) => e.kind), ['clear', 'busy', 'status']);
+
+    // messages go to the page that shows the session, and nowhere else
+    const n0 = side.got.filter((x) => x.type === 'event').length;
+    p1.fire({ type: 'send', sid: c, text: 'hold the line please' });
+    assert(p1.events(c).some((e) => e.kind === 'user' && e.text === 'hold the line please'));
+    assert.strictEqual(side.got.filter((x) => x.type === 'event').length, n0, 'the sidebar page hears nothing of it');
+    assert.strictEqual(p1.title, 'hold the line please …', 'the native tab is titled from the first message, and shows that the agent is working');
+    const a1 = created[created.length - 1]; a1.finish(); await flush();
+    assert.strictEqual(p1.title, 'hold the line please');
+
+    // a second tab opens beside the first; ChatGPT's icon has a light and a dark version
+    await m.commands['perch.newCodex']();
+    const p2 = m.ui.panels[1], x = m.perch.sessions[1].id;
+    assert.deepStrictEqual([p2.title, p2.viewColumn], ['Codex 1', 2], 'in the column the Perch tabs already use');
+    assert.deepStrictEqual([p2.iconPath.light.path, p2.iconPath.dark.path], [gpt + '/resources/blossom-black.svg', gpt + '/resources/blossom-white.svg']);
+    p2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(p2.lastTabs().tabs.map((t) => t.id), [x]); assert.deepStrictEqual(p1.lastTabs().tabs.map((t) => t.id), [c], 'each page has its own session only');
+    p2.fire({ type: 'send', sid: x, text: 'hi codex' }); await flush();
+    assert(!p1.events().some((e) => e.text === 'hi codex'));
+
+    // the + in the editor title asks which kind
+    m.picks.push((i) => i.kind === 'codex'); await m.commands['perch.new']();
+    assert.deepStrictEqual([m.ui.panels.length, m.ui.panels[2].title], [3, 'Codex 2']);
+    await m.commands['perch.new'](); assert.strictEqual(m.ui.panels.length, 3, 'dismissing the question opens nothing');
+    const p3 = m.ui.panels[2], x2 = m.perch.sessions[2].id; p3.fire({ type: 'ready' });
+
+    // commands act on the editor tab that has the focus
+    p1.show(true, true);
+    p1.fire({ type: 'send', sid: c, text: 'hold again' });
+    m.commands['perch.stop'](); assert.strictEqual(a1.interrupted, 1, 'stop reaches the focused tab');
+    await flush();
+    p2.show(true, true); m.picks.push((i) => i.sid === c); await m.commands['perch.handoff']();
+    assert.deepStrictEqual(p1.events(c).filter((e) => e.kind === 'fill').pop(), { kind: 'fill', text: 'answer to hi codex' }, 'handoff from the focused tab into the chosen one');
+    assert.strictEqual(p1.reveals, 1, 'which is brought to the front');
+    p2.show(true, true); m.picks.push((i) => i.kind === 'claude'); await m.commands['perch.handoff']();
+    const p4 = m.ui.panels[3], c2 = m.perch.sessions[3].id;
+    assert.strictEqual(p4.events().length, 0); p4.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(p4.events(c2).filter((e) => e.kind === 'fill'), [{ kind: 'fill', text: 'answer to hi codex' }], 'a handoff into a new tab waits for its page');
+    p4.fire({ type: 'ready' }); await flush();
+    assert.strictEqual(p4.events(c2).filter((e) => e.kind === 'fill').length, 1, 'and is not repeated if the page reloads');
+
+    // a prompt in a tab that is not showing marks the native tab
+    p1.show(false, false);
+    const s1 = m.perch.get(c); const ans = new Promise((res) => s1.pending.set('p1', res)); s1.post({ kind: 'permission', id: 'p1', tool: 'Write', input: {} });
+    assert.strictEqual(p1.title, '● hold the line please', 'marked while hidden');
+    p1.show(true, true);
+    assert.strictEqual(p1.title, '● hold the line please', 'still marked while the prompt is unanswered');
+    p1.fire({ type: 'permission', sid: c, id: 'p1', decision: 'deny' }); assert.deepStrictEqual(await ans, { decision: 'deny' });
+    assert.strictEqual(p1.title, 'hold the line please');
+    const ans2 = new Promise((res) => s1.pending.set('p2', res)); s1.post({ kind: 'permission', id: 'p2', tool: 'Write', input: {} });
+    assert.strictEqual(p1.title, 'hold the line please', 'a prompt in a tab that is showing needs no mark');
+    p1.fire({ type: 'permission', sid: c, id: 'p2', decision: 'allow' }); await ans2;
+
+    // closing the editor tab closes the session
+    const ax2 = created.find((a) => a.o.emit && a.sent.includes('hi codex'));
+    p2.dispose(); await flush();
+    assert.deepStrictEqual([!!m.perch.get(x), ax2.disposed, m.memento._dump()['perch.sessions.v1'].sessions.map((t) => t.id).includes(x)], [false, true, false], 'the agent is stopped and the tab forgotten');
+    // and closing the session closes the editor tab
+    p3.show(true, true); m.commands['perch.closeTab']();
+    assert.deepStrictEqual([p3.disposed, !!m.perch.get(x2)], [true, false]);
+
+    // ---- moving between the editor area and the sidebar keeps the session, its agent, and its transcript
+    p1.show(true, true); m.commands['perch.moveToSidebar']();
+    assert.deepStrictEqual([p1.disposed, !!m.perch.get(c), a1.disposed], [true, true, false], 'the editor tab goes, the session stays');
+    assert.deepStrictEqual([side.lastTabs().tabs.map((t) => t.id), side.lastTabs().active], [[c], c]);
+    assert(side.events(c).some((e) => e.kind === 'user' && e.text === 'hold the line please'), 'the transcript is replayed in the sidebar');
+    side.fire({ type: 'send', sid: c, text: 'still here' }); assert.strictEqual(a1.sent.pop(), 'still here', 'the same agent');
+    m.perch.activeId = c; p4.show(true, false); m.commands['perch.moveToEditor']();
+    const p5 = m.ui.panels[m.ui.panels.length - 1];
+    assert.deepStrictEqual([side.lastTabs().tabs, p5.title, m.perch.get(c).location], [[], 'hold the line please', 'editor']);
+    p5.fire({ type: 'ready' }); await flush();
+    assert(p5.events(c).some((e) => e.kind === 'user' && e.text === 'still here'));
+    m.commands['perch.moveAllToSidebar'](); assert.deepStrictEqual([side.lastTabs().tabs.length, m.ui.panels.filter((p) => !p.disposed).length, m.perch.sessions.length], [2, 0, 2]);
+    m.commands['perch.moveAllToEditor'](); assert.deepStrictEqual([side.lastTabs().tabs.length, m.ui.panels.filter((p) => !p.disposed).length], [0, 2]);
+    for (const p of m.ui.panels.filter((q) => !q.disposed)) p.fire({ type: 'ready' });
+
+    // the setting decides where new tabs go; the sidebar's own buttons follow it
+    side.fire({ type: 'new', kind: 'claude' }); assert.strictEqual(m.ui.panels.filter((p) => !p.disposed).length, 3, 'with newTabs editor, the sidebar\'s button opens an editor tab');
+    m.changeConfig({ newTabs: 'sidebar' }); side.fire({ type: 'new', kind: 'codex' });
+    assert.deepStrictEqual([m.ui.panels.filter((p) => !p.disposed).length, side.lastTabs().tabs.map((t) => t.kind)], [3, ['codex']]);
+
+    // ---- window reload: VS Code brings the editor tabs back, and each page says which session it showed
+    const saved = m.memento._dump(); const ids = saved['perch.sessions.v1'].sessions.filter((t) => t.location === 'editor').map((t) => t.id);
+    m.perch.dispose();
+    assert(m.perch.sessions.length > 0 && m.memento._dump()['perch.sessions.v1'].sessions.length === 4, 'shutting down does not close the sessions');
+    const r = install(saved, { config: { newTabs: 'editor' }, extensions });
+    assert.strictEqual(r.ui.panels.length, 0, 'tabs that VS Code will restore are not opened a second time');
+    const q1 = r.restorePanel(ids[0]);
+    assert.deepStrictEqual([q1.disposed, q1.title, !!q1.iconPath], [false, 'hold the line please', true], 'a restored tab gets its title and icon back');
+    q1.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual([q1.lastTabs().tabs[0].id, q1.lastTabs().single], [ids[0], true]);
+    assert(q1.events(ids[0]).some((e) => e.kind === 'note' && /resumed claude session/.test(e.text)));
+    assert.deepStrictEqual([r.restorePanel(ids[0]).disposed, r.restorePanel('gone').disposed, r.restorePanel(undefined).disposed, r.restorePanel(saved['perch.sessions.v1'].sessions.find((t) => t.location === 'sidebar').id).disposed], [true, true, true, true], 'a second tab for the same session, a tab for a session that no longer exists, a tab with no memory, and a tab for a session that lives in the sidebar are all closed');
+    assert.strictEqual(r.perch.sessions.length, 4, 'closing those stray tabs closes no session');
+    const before = r.ui.panels.filter((p) => !p.disposed).length;
+    await wait(120);
+    const late = r.ui.panels.filter((p) => !p.disposed);
+    assert.deepStrictEqual([late.length - before, late.slice(before).map((p) => p.active)], [2, [false, false]], 'tabs VS Code did not bring back are opened after a short wait, without taking the focus');
+    r.perch.dispose();
+
+    // ---- tabs saved before editor tabs existed follow the setting
+    const legacy = { 'perch.sessions.v1': { active: 'L1', counters: { claude: 1, codex: 1 }, sessions: [{ id: 'L1', kind: 'claude', title: 'hello', titled: true, mode: 'default', effort: '', model: '', resume: 'aa0af10b' }, { id: 'L2', kind: 'codex', title: 'hello', titled: true, mode: 'workspace-write', effort: '', model: '', ide: false, resume: '01a0ee91' }] } };
+    const g = install(legacy, { config: { newTabs: 'editor' }, extensions });
+    assert.deepStrictEqual(g.ui.panels.map((p) => [p.title, p.active]), [['hello', false], ['hello', false]], 'with newTabs editor they become editor tabs at once');
+    g.ui.panels[1].fire({ type: 'ready' }); await flush();
+    g.ui.panels[1].fire({ type: 'send', sid: 'L2', text: 'continue' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.resume, '01a0ee91', 'still the same conversation');
+    await wait(120); assert.strictEqual(g.ui.panels.length, 2, 'and are not opened twice');
+    g.perch.dispose();
+    const k = install(legacy); const sk = fakeView(); k.registered['perch.main'].resolveWebviewView(sk.view); sk.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual([k.ui.panels.length, sk.lastTabs().tabs.map((t) => t.id), sk.lastTabs().active], [0, ['L1', 'L2'], 'L1'], 'with newTabs sidebar they stay where they were');
+    k.perch.dispose();
+    fs.rmSync(gpt, { recursive: true, force: true });
   }
 
   console.log('HOST OK');

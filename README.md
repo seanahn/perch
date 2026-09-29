@@ -1,7 +1,7 @@
 # perch
 
-Claude Code and Codex as tabs in one VS Code sidebar. Any number of sessions,
-with Claude usage and backend switching built in.
+Claude Code and Codex as tabs in VS Code, in the editor area or the sidebar.
+Any number of sessions, with usage and backend switching built in.
 
 perch is a **shell, not an agent**. Each tab spawns the vendor's own
 agent through its SDK, so prompt caching, context compaction,
@@ -14,9 +14,34 @@ similar harnesses replace the agent; perch keeps it.
 | Claude | Claude Code | `@anthropic-ai/claude-agent-sdk`, streaming input, `canUseTool` for permission prompts | your existing `claude` login |
 | Codex | Codex | `@openai/codex-sdk`, which bundles the `codex` binary | your existing `codex` login |
 
+## Where tabs live
+
+`perch.newTabs` decides where a new tab opens.
+
+**`editor`** (the default): each session is a native editor tab, like a
+file. The tab row is the first line: there is no container icon row and no
+view title above it, because those belong to VS Code's sidebars and an
+extension cannot remove them. Tabs carry the vendor's icon, can be dragged,
+split, and reordered, and open beside your editor. The **+** in the editor
+title bar opens a new one. A working tab's title ends in `…`, and a tab
+waiting on a permission prompt while hidden starts with `●`. Closing the
+editor tab closes the session.
+
+**`sidebar`**: sessions are tabs inside the Perch view, under the Perch
+icon in the activity bar.
+
+Both can be used at once. `Perch: Move Tab to the Editor Area` and
+`Perch: Move Tab to the Sidebar` move the active tab; the session, its
+agent, and its transcript are untouched. There are `Move All` versions of
+both. Tabs saved before this setting existed follow it on the next reload.
+
+After a window reload VS Code brings the editor tabs back where they were,
+and each resumes its session.
+
 ## Tabs
 
-Press **+** to open a Claude or a Codex tab. Each tab is its own session
+Press **+** to open a Claude or a Codex tab: in the editor title bar, or in
+the sidebar view's tab bar. Each tab is its own session
 with its own agent process, context, mode, draft, and transcript. Open as
 many as you like of either kind. A tab is titled from its first message.
 A dot on a tab means it is working; a red dot means it is waiting on a
@@ -46,8 +71,8 @@ only bridge, on purpose: shared context would defeat each agent's caching.
 make install     # npm install, syntax check, symlink into the extension dirs
 ```
 
-Reload the window and click the Perch icon in the activity bar. Drag the
-view into the secondary sidebar to keep it beside the editor.
+Reload the window, then run `Perch: New Tab…` from the command palette, or
+click the Perch icon in the activity bar.
 
 ## Permissions
 
