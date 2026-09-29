@@ -43,6 +43,8 @@ class MeterHost {
     return m === 'cost' ? 'cost' : 'subscription';
   }
   backend() { return this.meter.bedrockConfigured() ? 'api' : 'subscription'; }
+  /** Minutes the prompt cache stays warm, for a tab on the given backend (or the backend a new tab would get). */
+  cacheMinutes(backend) { try { return this.meter.promptCacheMinutes(backend || this.backend()); } catch (_) { return 60; } }
 
   state() {
     const api = this.meter.bedrockConfigured();

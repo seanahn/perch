@@ -1,8 +1,8 @@
 {
   "name": "perch",
   "displayName": "Perch",
-  "description": "Claude Code and Codex agents as tabs in one sidebar, with Claude usage and backend switching. A shell, not an agent.",
-  "version": "0.3.0",
+  "description": "Claude Code and Codex agents as tabs in one sidebar, each with its own look, plus Claude usage and backend switching. A shell, not an agent.",
+  "version": "0.4.0",
   "publisher": "fennets",
   "license": "MIT",
   "engines": {
@@ -70,11 +70,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "perch.toggleSettings",
-        "title": "Perch: Show or Hide Model, Effort, and Mode",
-        "icon": "$(settings-gear)"
-      },
-      {
         "command": "perch.meter.refresh",
         "title": "Perch: Refresh Claude Usage"
       },
@@ -118,11 +113,6 @@
           "command": "perch.refreshModels",
           "when": "view == perch.main",
           "group": "2_models@1"
-        },
-        {
-          "command": "perch.toggleSettings",
-          "when": "view == perch.main",
-          "group": "2_models@0"
         },
         {
           "command": "perch.meter.toggleBackend",

@@ -325,6 +325,21 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
     fs.renameSync(tmp, SETTINGS);      // atomic: a crash mid-write cannot leave Claude Code with a truncated settings file
   }
 
+  /**
+   * How long Claude Code keeps the prompt cache warm for the main conversation, in minutes. An explicit choice wins
+   * (the environment variable over the settings file); otherwise one hour on a subscription and five minutes on
+   * API, Bedrock, Vertex, or Foundry.
+   */
+  function promptCacheMinutes(backend) {
+    const pick = (v) => (v === '1h' ? 60 : v === '5m' ? 5 : 0);
+    let m = pick(env.CLAUDE_CODE_PROMPT_CACHE_TTL);
+    if (m) return m;
+    for (const f of ['settings.local.json', 'settings.json']) {
+      try { const j = JSON.parse(fs.readFileSync(path.join(claudeDir, f), 'utf8')); m = pick(j && j.promptCacheTtl) || pick(j && j.env && j.env.CLAUDE_CODE_PROMPT_CACHE_TTL); if (m) return m; } catch (_) { /* missing or unparsable */ }
+    }
+    return (backend || (bedrockConfigured() ? 'api' : 'subscription')) === 'api' ? 5 : 60;
+  }
+
   /** Rough check for API/Bedrock credentials: an Anthropic API key, a Bedrock bearer token, or any AWS credential source. */
   function apiCredentialsPresent() {
     if (env.ANTHROPIC_API_KEY || env.AWS_BEARER_TOKEN_BEDROCK || env.AWS_ACCESS_KEY_ID || env.AWS_PROFILE) return true;
@@ -400,7 +415,7 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
     return stats;
   }
 
-  return { claudeDir, settingsPath: SETTINGS, readCredentials, fetchUsage, settingsBedrockValue, bedrockConfigured, envNote, setBedrockSetting, apiCredentialsPresent, collectRecords, computeCostStats };
+  return { claudeDir, settingsPath: SETTINGS, readCredentials, fetchUsage, settingsBedrockValue, bedrockConfigured, envNote, setBedrockSetting, apiCredentialsPresent, promptCacheMinutes, collectRecords, computeCostStats };
 }
 
 module.exports = { createMeter, summarize, retryAfterMs, parseUsageResponse, parseUsageLine, priceFor, recordCost, shortModel, fmtTok, fmtUsd, fmtEta, fmtResetTime, labelFor, tankBar, PROVIDER_MODEL, ERRORS };

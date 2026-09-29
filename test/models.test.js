@@ -2,7 +2,7 @@
 // Catalog parsing: Codex's files on disk and the Claude SDK's model list. No model calls.
 const assert = require('assert');
 const fs = require('fs'); const os = require('os'); const path = require('path');
-const { loadCodexModels, normalizeClaudeModels, parseTopLevelToml } = require('../src/models');
+const { loadCodexModels, normalizeClaudeModels, normalizeCommands, parseTopLevelToml } = require('../src/models');
 
 // ---- TOML: top-level string keys only, stops at the first table
 assert.deepStrictEqual(parseTopLevelToml('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "ultra"  # mine\nn = 3\nflag = true\nsq = \'single\'\n\n[profiles.x]\nmodel = "other"\n'),
@@ -61,5 +61,13 @@ assert.deepStrictEqual(cl.models.map((m) => m.efforts), [L, [], ['low', 'medium'
 assert.strictEqual(normalizeClaudeModels([{ value: 'default', resolvedModel: 'claude-x', displayName: 'Default' }]).defaultModel.label, 'claude-x', 'falls back to the resolved id');
 assert.deepStrictEqual(normalizeClaudeModels([{ value: 'opus', displayName: 'Opus' }]).defaultModel, { label: '', efforts: [], defaultEffort: '' });
 assert.strictEqual(normalizeClaudeModels([]), null); assert.strictEqual(normalizeClaudeModels(undefined), null);
+
+// ---- slash commands
+assert.deepStrictEqual(normalizeCommands([
+  { name: 'review', description: 'Review  the\n changes', argumentHint: '[pr]' }, { name: 'clear', description: '', argumentHint: '' }, { name: '__remote-workflow', description: 'internal' },
+  { name: 'review', description: 'duplicate' }, { name: '', description: 'nameless' }, { description: 'no name' }, null, { name: 'long', description: 'x'.repeat(400) },
+]), [{ name: 'clear', description: '', hint: '' }, { name: 'long', description: 'x'.repeat(160), hint: '' }, { name: 'review', description: 'Review the changes', hint: '[pr]' }], 'sorted, deduplicated, internal ones dropped, descriptions tidied');
+assert.deepStrictEqual(normalizeCommands(normalizeCommands([{ name: 'a', description: 'd', argumentHint: '[x]' }])), [{ name: 'a', description: 'd', hint: '[x]' }], 'normalising twice keeps the hint');
+assert.deepStrictEqual([normalizeCommands(undefined), normalizeCommands('x')], [[], []]);
 
 console.log('MODELS OK');

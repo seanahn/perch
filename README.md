@@ -61,13 +61,48 @@ resolve by policy (`perch.codex.approvalPolicy`) and the sandbox
 thread keeps the sandbox it started with, so choose it before the first
 message.
 
+## The composer
+
+Each kind of tab takes its own vendor's look, so a Claude tab feels like
+Claude Code and a Codex tab like Codex.
+
+**Claude tab**, left to right:
+
+| Tool | What it does |
+| --- | --- |
+| **+** | Pick files and mention them by path, as `@src/a.js`. |
+| **/** | Slash commands, read from Claude Code. Typing `/` opens the same list, filtered as you type; Enter completes. |
+| ring | How full the context window is. Amber at 80%, red at 95%. |
+| clock | Minutes until the prompt cache goes cold. A message sent before then is billed at the cached rate. One hour on a subscription, five minutes on API or Bedrock, unless you set `promptCacheTtl`. |
+| pill | Model and effort. Opens a menu for both. |
+| bolt | Permission mode: Ask, Edits, Plan, Auto, Bypass. |
+| square | Send. While Claude is working it becomes Stop. |
+
+**Codex tab**: **+**, then the sandbox behind a shield (Read only, Workspace,
+Full access, the last in amber), the model with its effort, **IDE context**,
+and a round send button. "Work locally" sits beneath, because perch runs
+Codex on this machine through the SDK.
+
+**IDE context** is off by default and remembered per tab. When on, each
+message carries the active file and, if there is one, the selection with
+its line numbers. The transcript shows your message and a tag naming what
+was attached, not the attachment itself. The context is read when you
+write the message, so a queued message keeps the file that was open then.
+
+**Queueing.** Enter always sends. While the agent is working, the message
+is queued behind the current turn and marked so. Claude Code queues it
+itself; Codex takes one turn at a time, so perch holds the queue and feeds
+it as each turn ends. Stop ends the turn and drops what is queued.
+
+Not included: Codex's microphone. A webview cannot open the microphone;
+Codex does it with a companion extension that records natively. perch could
+do the same, but dictation also needs a speech-to-text service, which is a
+choice for you to make.
+
 ## Model and effort
 
-Each tab's status bar shows its state (idle, working, ready) and a
-one-line summary such as `Opus 5.5 · high · default`. Press the **gear**
-to show the selectors: **model**, **effort**, and **mode** (Claude) or
-**sandbox** (Codex). They are hidden by default, one switch covers every
-tab, and the choice is remembered.
+The model and effort menu opens from the pill (Claude) or the model name
+(Codex).
 
 The lists come from the agents themselves, so they match your account:
 
@@ -77,15 +112,16 @@ The lists come from the agents themselves, so they match your account:
 | Codex | `~/.codex/models_cache.json` | each model's supported levels | `default · GPT-5.6-Sol` and `default · ultra` come from `~/.codex/config.toml` |
 
 The effort list follows the selected model. A model with no effort
-control disables the selector, and an effort the new model does not
-accept resets to default. `Perch: Refresh Model Lists` re-reads both.
+control says so in the menu, and an effort the new model does not accept
+resets to default. `Perch: Refresh Model Lists` re-reads both.
 
 Claude: model, effort, and mode all change live, from the next message.
 Hover the model selector to see the model actually running.
 
 Codex: a thread keeps the model, effort, and sandbox it started with, so
-choose them before the first message. Changing one later tells you it
-applies to a new tab. Hover the sandbox selector for the approval policy.
+choose them before the first message. Once it has started, the menus show
+the current choices and say why they cannot change. The sandbox menu also
+shows the approval policy.
 
 Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,

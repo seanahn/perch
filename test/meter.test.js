@@ -79,6 +79,20 @@ const stashOf = (init) => { const m = Object.assign({}, init); return { get: (k)
     fs.rmSync(home, { recursive: true, force: true });
   }
 
+  // ---- how long the prompt cache stays warm
+  {
+    const home = mk(); const mins = (env, backend) => M.createMeter({ home, env }).promptCacheMinutes(backend);
+    assert.deepStrictEqual([mins({}), mins({}, 'subscription'), mins({}, 'api')], [60, 60, 5], 'an hour on a subscription, five minutes on API or Bedrock');
+    assert.strictEqual(mins({ CLAUDE_CODE_USE_BEDROCK: '1' }), 5, 'with no backend given, the one a new session would get');
+    write(home, '.claude/settings.json', { promptCacheTtl: '5m' });
+    assert.deepStrictEqual([mins({}, 'subscription'), mins({ CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' }, 'api')], [5, 60], 'an explicit choice wins, the environment over the settings file');
+    write(home, '.claude/settings.json', { promptCacheTtl: 'forever', env: { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' } });
+    assert.strictEqual(mins({}, 'api'), 60, 'the settings env block counts; an unknown value is ignored');
+    write(home, '.claude/settings.local.json', { promptCacheTtl: '5m' });
+    assert.strictEqual(mins({}, 'subscription'), 5, 'settings.local.json overrides settings.json');
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
   // ---- API credentials
   {
     const home = mk(); const has = (env) => M.createMeter({ home, env }).apiCredentialsPresent();

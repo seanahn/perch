@@ -13,7 +13,7 @@ const CATALOGS = {
     { value: 'fable', label: 'Fable 5.1', description: 'For your toughest challenges', efforts: ALL, defaultEffort: '' },
     { value: 'haiku', label: 'Haiku 4.5', description: 'Fastest', efforts: [], defaultEffort: '' },
     { value: 'claude-opus-4-6', label: 'Opus 4.6', description: '', efforts: ['low', 'medium', 'high', 'max'], defaultEffort: '' },
-  ] },
+  ], commands: [{ name: 'compact', description: 'Summarise the conversation so far', hint: '[instructions]' }, { name: 'clear', description: 'Start over', hint: '' }] },
   codex: { defaultModel: { label: 'GPT-5.6-Sol', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' }, models: [
     { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: '', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' },
     { value: 'gpt-6-luna', label: 'GPT-6-Luna', description: '', efforts: ALL, defaultEffort: 'medium' },
@@ -22,23 +22,42 @@ const CATALOGS = {
 };
 const flush = () => new Promise((r) => setImmediate(r));   // lets the async catalog load settle
 const realMeter = origLoad.call(Module, require.resolve('../src/meter.js'), module, false);
+const realModels = origLoad.call(Module, require.resolve('../src/models.js'), module, false);   // the loaders are faked; the pure helpers are real
 const HOUR = 3600000;
 const LIMITS = () => [{ kind: 'session', percent: 9, resetsAt: new Date(Date.now() + HOUR + 60000).toISOString(), model: null }, { kind: 'weekly_all', percent: 5, resetsAt: new Date(Date.now() + 150 * HOUR).toISOString(), model: null }];
 
 const created = [];   // every FakeAgent constructed, in order
+// Answers at once, unless the message starts with "hold": then it stays busy until finish() is called, which is how
+// the tests get a turn that is still running. As Claude it queues further messages itself, as the real agent does.
 class FakeAgent {
-  constructor(o) { this.o = o; this.emit = o.emit; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; created.push(this); }
-  send(t) {
+  constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
+  send(t, shown) {
     this.sent.push(t);
-    this.emit({ kind: 'user', text: t }); this.emit({ kind: 'busy', busy: true });
+    if (shown) { this.shownAs = this.shownAs || []; this.shownAs.push(shown); t = Object.assign(new String(t), { shown }); }
+    if (this.running) { this.emit({ kind: 'user', text: t, queued: true }); this.waiting.push(t); return; }   // only Claude is ever sent a message mid-turn
+    this.emit(Object.assign({ kind: 'user', text: t.shown ? t.shown.text : String(t), queued: false }, t.shown && t.shown.tag ? { tag: t.shown.tag } : {}));
+    this.begin(String(t));
+  }
+  begin(t) {
+    this.running = true;
+    this.emit({ kind: 'busy', busy: true });
     this.emit({ kind: 'session', id: (this.o.resume || 'sess-' + created.indexOf(this)) });
     this.emit({ kind: 'status', text: 'ready · fake' });
-    if (this.o.askPermission) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
+    if (this.claude) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
+    if (/^hold/.test(t)) { this.held = t; return; }
+    this.answer(t);
+  }
+  answer(t) {
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
+    if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: 'claude-' + (this.o.model || 'opus') + '-resolved' }); }
+    this.held = null;
+    if (this.waiting.length) { this.begin(this.waiting.shift()); return; }
+    this.running = false;
     this.emit({ kind: 'busy', busy: false });
   }
-  interrupt() { this.interrupted++; }
+  finish() { if (this.held) this.answer(this.held); }
+  interrupt() { this.interrupted++; this.waiting = []; if (this.running) { this.running = false; this.held = null; this.emit({ kind: 'busy', busy: false }); } }
   setPermissionMode(m) { this.modes.push(m); }
   setEffort(e) { this.efforts.push(e); }
   setModel(m) { this.models.push(m); }
@@ -61,9 +80,10 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
     fetchUsage: async () => { box.fetches++; return box.usage; },
     computeCostStats: () => { if (box.cost instanceof Error) throw box.cost; return box.cost; },
+    promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], listeners: { config: [], extensions: [] } };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, listeners: { config: [], extensions: [] } };
   const say = (list) => (msg, ...rest) => { list.push(msg); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
     workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
@@ -72,6 +92,8 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
       createStatusBarItem: (id, align, prio) => { const it = { id, prio, text: '', tooltip: '', shown: false, disposed: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() { this.disposed = true; this.shown = false; } }; ui.bars.push(it); return it; },
+      showOpenDialog: async (o) => { ui.dialogs.push(o); return ui.picked; },
+      get activeTextEditor() { return ui.editor; },
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id) => { ui.executed.push(id); } },
@@ -89,7 +111,7 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     if (req === './claudeAgent') return { ClaudeAgent: FakeAgent };
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
     if (req === './meter') return Object.assign({}, realMeter, { createMeter: () => fakeMeter });   // real formatting and summary, fake machine
-    if (req === './models') return { loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
+    if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];
@@ -109,6 +131,8 @@ function fakeView() {
     events: (sid) => got.filter((m) => m.type === 'event' && m.sid === sid).map((m) => m.ev),
     lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
     lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
+    commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
+    tab: (id) => (got.filter((m) => m.type === 'tabs').pop().tabs.find((x) => x.id === id)),
     view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 

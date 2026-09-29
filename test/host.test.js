@@ -407,17 +407,134 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
-  // ======================================================================== the selectors are hidden until asked for
+  // ======================================================================== the composer's data
   {
     const m = install(); const pv = m.registered['perch.main'];
     const v = fakeView(); pv.resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
-    assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: false }, 'hidden by default');
-    v.fire({ type: 'ui', settingsOpen: true });
-    assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: true });
-    m.commands['perch.toggleSettings'](); assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: false }, 'the command toggles it');
-    m.commands['perch.toggleSettings']();
-    const again = install(m.memento._dump()); const v2 = fakeView(); again.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' });
-    assert.deepStrictEqual(v2.lastTabs().ui, { settingsOpen: true }, 'the choice survives a reload');
+    assert.strictEqual(v.lastTabs().ui, undefined, 'there is no selector row to open or close any more');
+    assert.strictEqual(m.commands['perch.toggleSettings'], undefined);
+
+    // slash commands arrive with the model list, before any tab has started
+    assert.deepStrictEqual(v.commands('claude'), [[{ name: 'clear', description: 'Start over', hint: '' }, { name: 'compact', description: 'Summarise the conversation so far', hint: '[instructions]' }]], 'sorted, hints kept');
+    assert.deepStrictEqual(v.commands('codex'), [], 'codex has none');
+
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    assert.deepStrictEqual([v.tab(c).context, v.tab(c).cache, v.tab(c).queued], [null, { minutes: 60, since: 0 }, 0], 'before the first message: no context figure, and the cache lifetime a new session would get');
+    const t0 = Date.now(); v.fire({ type: 'send', sid: c, text: 'hello' });
+    assert.deepStrictEqual(v.tab(c).context, { percent: 2, used: 20361, max: 1000000 }, 'context usage, rounded');
+    created[created.length - 1].emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: 'claude-fable-5-1' });
+    assert.strictEqual(v.tab(c).actualModel, 'claude-fable-5-1', 'the context report names the model really running');
+    assert(v.tab(c).cache.since >= t0 && v.tab(c).cache.minutes === 60, 'the cache is warm from the last answer');
+    const agent = created[created.length - 1];
+    agent.emit({ kind: 'commands', list: [{ name: 'compact', description: 'Summarise   the\nconversation so far', argumentHint: '[instructions]' }, { name: 'clear', description: 'Start over' }, { name: '__internal', description: 'x' }, { name: 'clear', description: 'dup' }] });
+    assert.strictEqual(v.commands('claude').length, 1, 'the same list from a running session is not sent again');
+    agent.emit({ kind: 'commands', list: [{ name: 'review', description: 'Review', argumentHint: '' }] });
+    assert.deepStrictEqual(v.commands('claude').pop(), [{ name: 'review', description: 'Review', hint: '' }], 'a changed list is');
+    agent.emit({ kind: 'context', percent: 140, used: 1, max: 1 }); assert.strictEqual(v.tab(c).context.percent, 100, 'clamped');
+
+    // on API or Bedrock the cache lasts five minutes; a running tab keeps the lifetime of the backend it started on
+    m.box.bedrock = true;
+    v.fire({ type: 'new', kind: 'claude' }); const c2 = v.lastTabs().active;
+    assert.deepStrictEqual([v.tab(c2).cache.minutes, v.tab(c).cache.minutes], [5, 60]);
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    assert.deepStrictEqual([v.tab(x).context, v.tab(x).cache], [null, null], 'codex reports neither');
+    m.box.bedrock = false;
+
+    // a page that reconnects gets the current command list again
+    const v2 = fakeView(); pv.resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v2.commands('claude').pop().map((k) => k.name), ['review']);
+
+    // + mentions files by workspace-relative path; a file outside the workspace keeps its full path
+    const path = require('path');
+    m.ui.picked = [{ fsPath: path.join(process.cwd(), 'src', 'a.js') }, { fsPath: '/elsewhere/b c.txt' }];
+    v2.fire({ type: 'attach', sid: c }); await flush();
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'insert').pop(), { kind: 'insert', text: '@' + path.join('src', 'a.js') + ' @/elsewhere/b c.txt ' });
+    assert.deepStrictEqual([m.ui.dialogs[0].canSelectMany, m.ui.dialogs[0].canSelectFolders], [true, false]);
+    m.ui.picked = undefined; const n = v2.events(c).length;
+    v2.fire({ type: 'attach', sid: c }); await flush(); assert.strictEqual(v2.events(c).length, n, 'cancelling the dialog inserts nothing');
+    v2.fire({ type: 'attach', sid: 'nope' }); await flush();
+
+    // ---- queueing. Claude queues a message sent mid-turn itself.
+    v2.fire({ type: 'send', sid: c, text: 'hold on' });
+    v2.fire({ type: 'send', sid: c, text: 'and then this' });
+    assert.deepStrictEqual(agent.sent.slice(-2), ['hold on', 'and then this'], 'passed straight to the agent');
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'user').slice(-2).map((e) => [e.text, e.queued]), [['hold on', false], ['and then this', true]]);
+    assert.strictEqual(v2.tab(c).busy, true);
+    agent.finish(); await flush();
+    assert.deepStrictEqual([v2.tab(c).busy, agent.lastAnswer], [false, 'answer to and then this'], 'the queued message ran as soon as the turn ended');
+
+    // Codex takes one turn at a time, so the queue is kept by perch
+    const before = v2.events(x).length;                                       // the replay already told the page this tab is idle
+    v2.fire({ type: 'send', sid: x, text: 'hold 1' }); const cx = created[created.length - 1];
+    v2.fire({ type: 'send', sid: x, text: 'second' }); v2.fire({ type: 'send', sid: x, text: 'hold 3' }); v2.fire({ type: 'send', sid: x, text: '   ' });
+    assert.deepStrictEqual(cx.sent, ['hold 1'], 'nothing reaches a busy codex agent');
+    assert.deepStrictEqual([v2.tab(x).queued, v2.tab(x).busy], [2, true], 'blank messages are not queued');
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').map((e) => [e.text, !!e.queued]), [['hold 1', false], ['second', true], ['hold 3', true]], 'queued messages are shown at once');
+    cx.finish(); await flush(); await flush();
+    assert.deepStrictEqual(cx.sent, ['hold 1', 'second', 'hold 3'], 'they run in order as each turn ends');
+    assert.deepStrictEqual([v2.tab(x).queued, v2.tab(x).busy], [0, true], 'and the tab stays busy between them');
+    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').length, 3, 'a queued message is not shown a second time when it starts');
+    assert.strictEqual(v2.events(x).slice(before).filter((e) => e.kind === 'busy' && !e.busy).length, 0, 'no flicker to idle between queued turns');
+
+    // stop ends the turn and drops what is queued behind it
+    v2.fire({ type: 'send', sid: x, text: 'never runs' }); v2.fire({ type: 'send', sid: x, text: 'nor this' });
+    assert.strictEqual(v2.tab(x).queued, 2);
+    v2.fire({ type: 'stop', sid: x }); await flush(); await flush();
+    assert.deepStrictEqual([cx.interrupted, cx.sent.length, v2.tab(x).queued, v2.tab(x).busy], [1, 3, 0, false]);
+    assert(v2.events(x).some((e) => e.kind === 'note' && e.text === '2 queued messages dropped'));
+    v2.fire({ type: 'send', sid: x, text: 'fresh' }); await flush();
+    assert.deepStrictEqual([cx.sent.pop(), v2.tab(x).busy], ['fresh', false], 'the tab works normally afterwards');
+
+    // ---- IDE context: a Codex tab can attach the active file and selection to each message
+    const sel = (a, ac, b, bc) => ({ isEmpty: a === b && ac === bc, start: { line: a, character: ac }, end: { line: b, character: bc }, active: { line: b, character: bc } });
+    const editor = (file, lang, text, s) => ({ selection: s, document: { uri: { scheme: 'file', fsPath: file }, languageId: lang, getText: () => text } });
+    assert.deepStrictEqual([v2.tab(x).ide, v2.tab(c).ide], [false, null], 'off by default; not a Claude feature');
+    m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', 'const a = 1;\nconst b = 2;\n', sel(2, 0, 4, 0));
+    v2.fire({ type: 'send', sid: x, text: 'plain' }); await flush();
+    assert.strictEqual(cx.sent.pop(), 'plain', 'nothing is attached while it is off');
+    v2.fire({ type: 'setIde', sid: x, value: true }); assert.strictEqual(v2.tab(x).ide, true);
+    v2.fire({ type: 'setIde', sid: c, value: true }); assert.strictEqual(v2.tab(c).ide, null, 'ignored on a Claude tab');
+    v2.fire({ type: 'send', sid: x, text: 'why is b 2?' }); await flush();
+    const F = path.join('src', 'a.js');
+    assert.strictEqual(cx.sent.pop(), 'why is b 2?\n\n<ide_context>\nActive file: ' + F + ' (javascript)\nSelection: lines 3-4\n```javascript\nconst a = 1;\nconst b = 2;\n```\n</ide_context>', 'the agent gets the file, the lines, and the text');
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'why is b 2?', queued: false, tag: 'IDE context · ' + F + ':3-4' }, 'the transcript shows the message, and what was attached');
+    assert.strictEqual(v2.tab(x).title.includes('ide_context'), false);
+
+    m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', '', sel(7, 4, 7, 4));
+    v2.fire({ type: 'send', sid: x, text: 'here' }); await flush();
+    assert(/\nActive file: .*a\.js \(javascript\)\nCursor: line 8\n<\/ide_context>$/.test(cx.sent.pop()), 'with no selection: the file and the cursor');
+    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, 'IDE context · ' + F);
+    m.ui.editor = editor('/elsewhere/x.py', 'python', 'a ``` b ```` c', sel(0, 0, 0, 14));
+    v2.fire({ type: 'send', sid: x, text: 'fences' }); await flush();
+    assert(/Active file: \/elsewhere\/x\.py \(python\)\nSelection: lines 1-1\n`````python\na ``` b ```` c\n`````\n/.test(cx.sent.pop()), 'a file outside the workspace keeps its path; the fence is longer than any inside the selection');
+    m.ui.editor = editor('/big.txt', 'plaintext', 'x'.repeat(20000), sel(0, 0, 0, 20000));
+    v2.fire({ type: 'send', sid: x, text: 'big' }); await flush();
+    const big = cx.sent.pop(); assert(/Selection: lines 1-1 \(first 12000 characters\)/.test(big) && big.length < 12300, 'a long selection is cut, and says so');
+    for (const ed of [undefined, { selection: sel(0, 0, 0, 0), document: { uri: { scheme: 'untitled', fsPath: 'Untitled-1' }, languageId: 'plaintext', getText: () => '' } }]) {
+      m.ui.editor = ed; v2.fire({ type: 'send', sid: x, text: 'nothing open' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'nothing open', 'no editor, or an unsaved one: the message goes as written');
+      assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, undefined);
+    }
+
+    // the context is read when the message is written, not when a queued message finally starts
+    m.ui.editor = editor(path.join(process.cwd(), 'one.js'), 'javascript', 'ONE', sel(0, 0, 0, 3));
+    v2.fire({ type: 'send', sid: x, text: 'hold it' });
+    v2.fire({ type: 'send', sid: x, text: 'queued about one' });
+    m.ui.editor = editor(path.join(process.cwd(), 'two.js'), 'javascript', 'TWO', sel(0, 0, 0, 3));
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'queued about one', queued: true, tag: 'IDE context · one.js:1' });
+    cx.finish(); await flush(); await flush();
+    assert(/queued about one\n\n<ide_context>\nActive file: one\.js/.test(cx.sent.pop()) , 'the queued message carries the file that was open when it was written');
+    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user' && e.text === 'queued about one').length, 1);
+
+    // the choice is saved with the tab
+    const saved2 = install(m.memento._dump()); const v3 = fakeView(); saved2.registered['perch.main'].resolveWebviewView(v3.view); v3.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v3.lastTabs().tabs.map((t) => t.ide), [null, null, true], 'IDE context survives a reload');
+    m.ui.editor = undefined;
+
+    // closing a tab with a queue disposes it cleanly
+    v2.fire({ type: 'send', sid: x, text: 'hold' }); v2.fire({ type: 'send', sid: x, text: 'q' });
+    v2.fire({ type: 'close', sid: x }); cx.finish(); await flush();
+    assert.deepStrictEqual([cx.disposed, cx.sent.includes('q')], [true, false]);
   }
 
   console.log('HOST OK');

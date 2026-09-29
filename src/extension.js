@@ -4,7 +4,7 @@ const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
-const { loadClaudeModels, loadCodexModels } = require('./models');
+const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./models');
 const { MeterHost } = require('./meterHost');
 
 const MODES = {
@@ -18,7 +18,6 @@ const EFFORTS = {
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 const STATE_KEY = 'perch.sessions.v1';
-const UI_KEY = 'perch.ui.v1';
 // Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
 const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
 
@@ -55,6 +54,32 @@ function cwd() {
   const f = vscode.workspace.workspaceFolders;
   return f && f.length ? f[0].uri.fsPath : require('os').homedir();
 }
+const IDE_MAX_CHARS = 12000;          // a selection longer than this is cut, and says so
+
+/**
+ * What the editor is looking at, for a Codex message: the active file and, if there is one, the selection.
+ * @returns {{ block: string, tag: string } | null}  the text appended to the message, and a short label for the transcript
+ */
+function ideContext() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed || !ed.document || ed.document.uri.scheme !== 'file') return null;
+  const path = require('path');
+  const abs = ed.document.uri.fsPath, r = path.relative(cwd(), abs);
+  const file = r && !r.startsWith('..') && !path.isAbsolute(r) ? r : abs;
+  const sel = ed.selection, lang = ed.document.languageId || '';
+  const lines = ['', '', '<ide_context>', `Active file: ${file}` + (lang ? ` (${lang})` : '')];
+  let tag = file;
+  if (sel && !sel.isEmpty) {
+    let text = ed.document.getText(sel); const a = sel.start.line + 1, b = sel.end.line + (sel.end.character === 0 && sel.end.line > sel.start.line ? 0 : 1);
+    const cut = text.length > IDE_MAX_CHARS; if (cut) text = text.slice(0, IDE_MAX_CHARS);
+    const fence = '`'.repeat(Math.max(3, ...(text.match(/`+/g) || []).map((x) => x.length + 1)));   // longer than any run inside
+    lines.push(`Selection: lines ${a}-${b}` + (cut ? ` (first ${IDE_MAX_CHARS} characters)` : ''), fence + lang, text.replace(/\n$/, ''), fence);
+    tag = `${file}:${a}` + (b > a ? `-${b}` : '');
+  } else if (sel) lines.push(`Cursor: line ${sel.active.line + 1}`);
+  lines.push('</ide_context>');
+  return { block: lines.join('\n'), tag };
+}
+
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
 function defaultEffort(kind) { return String((kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''); }
 function defaultModel(kind) { return String((kind === 'claude' ? cfg('claude.model') : cfg('codex.model')) || ''); }
@@ -62,7 +87,7 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, mode, effort, model, resume }) {
+  constructor(view, { id, kind, title, titled, mode, effort, model, ide, resume }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -73,6 +98,10 @@ class Session {
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
     this.backend = '';               // claude only: the backend this tab's agent started on
+    this.context = null;             // claude only: { percent, used, max } of the context window
+    this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
+    this.queue = [];                 // codex only: messages waiting for the current turn to end
+    this.ide = kind === 'codex' && !!ide;   // codex only: attach the active file and selection to each message
     this.reconcile();
     this.agentSessionId = resume || null;
     this.agent = null;               // started lazily on first message
@@ -121,12 +150,20 @@ class Session {
   post(ev) {
     switch (ev.kind) {
       case 'status': this.lastStatus = ev.text; break;
-      case 'busy': this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' }); return;
+      case 'busy':
+        if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown); }); return; }   // stay busy: the next queued message starts now
+        this.stopping = false;
+        this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' }); return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
+      case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
+      case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
+      case 'commands': this.view.setCommands(this.kind, ev.list); return;
       case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
       case 'clear': this.history = []; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
       case 'user':
+        // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
+        if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
         if (!this.titled) { this.title = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28) || this.title; this.titled = true; this.view.sendTabs(); this.view.persist(); }
         this.history.push(ev); break;
       case 'permission':
@@ -164,7 +201,25 @@ class Session {
     return this.agent;
   }
 
-  send(text) { this.ensureAgent().send(text); }
+  /** A message sent while the agent is working is queued. Claude Code queues it itself; for Codex, whose SDK takes one
+   * turn at a time, the queue is kept here and drained as each turn ends. */
+  send(text) {
+    if (!text || !text.trim()) return;
+    const agent = this.ensureAgent();
+    if (this.kind !== 'codex') { agent.send(text); return; }
+    // IDE context is read now, when the message is written, not later when a queued message starts
+    const ctx = this.ide ? ideContext() : null;
+    const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? 'IDE context · ' + ctx.tag : undefined };
+    if (this.busy) {
+      this.queue.push({ text: full, shown }); (this.shown = this.shown || []).push(text);
+      this.post(Object.assign({ kind: 'user', text, queued: true }, shown.tag ? { tag: shown.tag } : {}));
+      this.view.sendTabs();          // the queue count is part of the tab
+      return;
+    }
+    agent.send(full, shown);
+  }
+
+  setIde(on) { if (this.kind !== 'codex') return; this.ide = !!on; this.view.persist(); }
 
   answerPermission(id, decision) {
     const r = this.pending.get(id);
@@ -202,7 +257,8 @@ class Session {
     else this.post({ kind: 'note', text: `model ${value || 'default'} applies to a new Codex tab; this thread keeps the model it started with` });
   }
 
-  interrupt() { if (this.agent) this.agent.interrupt(); }
+  /** Stops the current turn and drops anything queued behind it. */
+  interrupt() { if (!this.agent) return; if (this.queue.length) { this.post({ kind: 'note', text: `${this.queue.length} queued message${this.queue.length > 1 ? 's' : ''} dropped` }); this.queue = []; this.shown = []; this.view.sendTabs(); } this.stopping = true; this.agent.interrupt(); }
   lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
 
   dispose() {
@@ -219,9 +275,14 @@ class Session {
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
       backend: this.agent ? this.backend : '',
+      queued: this.queue.length,
+      ide: this.kind === 'codex' ? this.ide : null,
+      context: this.kind === 'claude' ? this.context : null,
+      // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
+      cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : ''), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, resume: this.agentSessionId }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId }; }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
@@ -235,8 +296,7 @@ class PerchView {
     this.counters = { claude: 0, codex: 0 };
     this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
     this.loading = null;
-    const ui = context.workspaceState.get(UI_KEY);
-    this.ui = { settingsOpen: !!(ui && ui.settingsOpen) };        // the selectors are hidden until asked for
+    this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
     this.meter = new MeterHost(context, (state, why) => this.onMeter(state, why));
     this.restore();
   }
@@ -251,7 +311,22 @@ class PerchView {
       s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab keeps ${s.backend === 'api' ? 'API / Bedrock' : 'subscription'} until it is closed; open a new tab to use the new backend.` });
     }
   }
-  setSettingsOpen(open) { this.ui.settingsOpen = !!open; this.context.workspaceState.update(UI_KEY, this.ui); this.sendTabs(); }
+  setCommands(kind, list) {
+    const next = normalizeCommands(list);
+    if (JSON.stringify(next) === JSON.stringify(this.commands[kind])) return;
+    this.commands[kind] = next;
+    this.raw({ type: 'commands', kind, list: next });
+  }
+
+  /** The + button: pick files, and mention them in the message by workspace-relative path. */
+  async attach(sid) {
+    const s = this.get(sid); if (!s) return;
+    const root = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+    const picked = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFolders: false, openLabel: 'Mention', defaultUri: root && root.uri, title: `Mention files in ${s.title}` });
+    if (!picked || !picked.length) return;
+    const rel = (u) => { const p = u.fsPath, base = cwd(); const r = require('path').relative(base, p); return r && !r.startsWith('..') && !require('path').isAbsolute(r) ? r : p; };
+    this.sendEvent(sid, { kind: 'insert', text: picked.map((u) => '@' + rel(u)).join(' ') + ' ' });
+  }
 
   /** Read both agents' model lists. Codex is a file read; Claude starts its CLI without sending a message. */
   loadCatalogs(force) {
@@ -259,6 +334,7 @@ class PerchView {
     const apply = (kind, cat) => {
       if (!cat) return;
       this.catalog[kind] = cat;
+      if (Array.isArray(cat.commands)) this.setCommands(kind, cat.commands);
       let changed = false; for (const s of this.sessions) if (s.kind === kind && s.reconcile()) changed = true;
       if (changed) this.persist();
       this.sendTabs();
@@ -298,7 +374,7 @@ class PerchView {
   }
   raw(msg) { if (this.ready && this.view) this.view.webview.postMessage(msg); }
   sendEvent(sid, ev) { this.raw({ type: 'event', sid, ev }); }
-  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId, ui: this.ui }); }
+  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId }); }
   replay(s) {
     this.sendEvent(s.id, { kind: 'clear' });
     for (const ev of s.history) this.sendEvent(s.id, ev);
@@ -315,6 +391,7 @@ class PerchView {
         this.ready = true;
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
         this.raw({ type: 'meter', meter: this.meter.state() });
+        for (const k of Object.keys(this.commands)) if (this.commands[k].length) this.raw({ type: 'commands', kind: k, list: this.commands[k] });
         this.loadCatalogs();
         for (const x of this.sessions) this.replay(x);
         return;
@@ -324,7 +401,8 @@ class PerchView {
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
       case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
-      case 'ui': this.setSettingsOpen(msg.settingsOpen); return;
+      case 'attach': this.attach(msg.sid); return;
+      case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
       case 'meterRefresh': this.meter.poll(); return;
       case 'meterToggle': this.meter.toggleBackend(); return;
       case 'meterLogin': this.meter.login(); return;
@@ -399,7 +477,6 @@ function activate(context) {
     vscode.commands.registerCommand('perch.closeTab', () => { if (perch.activeId) perch.closeSession(perch.activeId); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
     vscode.commands.registerCommand('perch.refreshModels', () => perch.loadCatalogs(true)),
-    vscode.commands.registerCommand('perch.toggleSettings', () => perch.setSettingsOpen(!perch.ui.settingsOpen)),
     vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
     vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
     vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),

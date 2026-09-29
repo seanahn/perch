@@ -40,6 +40,7 @@ class ClaudeAgent {
     this.query = null;
     this.sessionId = opts.resume || null;
     this.running = false;
+    this.pending = 0;                // messages sent and not yet answered
     this.lastAnswer = '';
     this.live = '';          // streamed text for the in-flight assistant message
     this.abort = new AbortController();
@@ -75,14 +76,25 @@ class ClaudeAgent {
     this.emit({ kind: 'status', text: 'ready' });
     try {
       this.query = sdk.query({ prompt: this.queue, options });
+      this._commands(); this._context();
       for await (const m of this.query) this._onMessage(m);
       this.emit({ kind: 'status', text: 'session ended' });
     } catch (err) {
       if (!this.abort.signal.aborted) this.emit({ kind: 'error', text: String(err && err.message || err) });
     } finally {
-      this.running = false;
+      this.running = false; this.pending = 0;
       this.emit({ kind: 'busy', busy: false });
     }
+  }
+
+  /** How full the context window is. Asked after every turn; a failure just leaves the last figure in place. */
+  async _context() {
+    if (!this.query || typeof this.query.getContextUsage !== 'function') return;
+    try { const u = await this.query.getContextUsage(); if (u && typeof u.percentage === 'number') this.emit({ kind: 'context', percent: u.percentage, used: u.totalTokens, max: u.maxTokens, model: u.model }); } catch (_) { /* older CLI */ }
+  }
+  async _commands() {
+    if (!this.query || typeof this.query.supportedCommands !== 'function') return;
+    try { this.emit({ kind: 'commands', list: await this.query.supportedCommands() }); } catch (_) { /* older CLI */ }
   }
 
   _onMessage(m) {
@@ -119,10 +131,14 @@ class ClaudeAgent {
         return;
       }
       case 'result':
-        this.running = false;
+        this.running = this.pending > 1;                 // queued messages run next, without going idle
+        this.pending = Math.max(0, this.pending - 1);
+        this.emit({ kind: 'responded', at: Date.now() });   // the prompt cache is warm from now
+        this._context();
         this.emit({ kind: 'result', ok: m.subtype === 'success', cost: m.total_cost_usd, duration_ms: m.duration_ms, turns: m.num_turns, usage: m.usage && { input: m.usage.input_tokens, cache_read: m.usage.cache_read_input_tokens, cache_write: m.usage.cache_creation_input_tokens, output: m.usage.output_tokens }, error: m.subtype !== 'success' ? (m.result || m.subtype) : undefined });
-        this.emit({ kind: 'busy', busy: false });
+        if (!this.running) this.emit({ kind: 'busy', busy: false });
         return;
+      case 'system_commands': return;
       case 'rate_limit_event':
         if (m.rate_limit_info && m.rate_limit_info.status && m.rate_limit_info.status !== 'allowed') this.emit({ kind: 'status', text: 'rate limit: ' + m.rate_limit_info.status });
         return;
@@ -131,14 +147,18 @@ class ClaudeAgent {
     }
   }
 
+  /** While a turn is running, a message is queued: Claude Code takes it up as soon as the current turn ends. */
   send(text) {
     if (!text || !text.trim()) return;
+    const queued = this.running;
+    this.pending++;
     this.running = true;
-    this.emit({ kind: 'user', text });
+    this.emit({ kind: 'user', text, queued });
     this.emit({ kind: 'busy', busy: true });
-    this.queue.push({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text }] } });
+    this.queue.push({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, priority: queued ? 'next' : undefined, message: { role: 'user', content: [{ type: 'text', text }] } });
   }
 
+  /** Stops the current turn. Messages already queued are dropped with it, so nothing runs that the user did not see start. */
   async interrupt() { if (this.query && this.running) { try { await this.query.interrupt(); } catch (_) { /* older CLI */ } } }
   // The selectors in the panel already show mode, effort, and model, so a successful change is silent.
   async setPermissionMode(mode) { if (this.query) { try { await this.query.setPermissionMode(mode); } catch (err) { this.emit({ kind: 'error', text: 'could not set mode: ' + String(err.message || err) }); } } }

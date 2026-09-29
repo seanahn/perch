@@ -43,13 +43,18 @@ class CodexAgent {
     return true;
   }
 
-  async send(text) {
+  /**
+   * @param {string} text   what the agent receives
+   * @param {{text: string, tag?: string}} [shown]  what the transcript shows, when that differs (IDE context is attached to
+   *   the message but not repeated in the transcript)
+   */
+  async send(text, shown) {
     if (!text || !text.trim()) return;
     if (!(await this.ready)) return;
     if (this.running) { this.emit({ kind: 'error', text: 'Codex is still working on the previous turn.' }); return; }
     this.running = true;
     this.turnAbort = new AbortController();
-    this.emit({ kind: 'user', text });
+    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text }, shown && shown.tag ? { tag: shown.tag } : {}));
     this.emit({ kind: 'busy', busy: true });
     const t0 = Date.now();
     try {

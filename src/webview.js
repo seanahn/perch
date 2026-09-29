@@ -1,6 +1,6 @@
 'use strict';
-// The Perch page: a tab bar over per-session panes. The host owns all state; this page
-// only renders what it is sent and can be rebuilt from a replay at any time.
+// The Perch page: a tab bar, one pane per session, a composer modelled on Claude Code's, and the Claude usage footer.
+// The host owns all state; this page renders what it is sent and can be rebuilt from a replay at any time.
 
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -29,6 +29,10 @@ function getHtml({ nonce, cspSource, icons = {} }) {
 <style nonce="${nonce}">
   :root { color-scheme: light dark; }
   body { margin: 0; padding: 0; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); display: flex; flex-direction: column; height: 100vh; }
+  button { font-family: inherit; cursor: pointer; }
+  svg { display: block; }
+
+  /* tabs */
   #tabs { display: flex; align-items: stretch; border-bottom: 1px solid var(--vscode-panel-border); overflow-x: auto; scrollbar-width: thin; flex: none; position: relative; }
   .tab { display: flex; align-items: center; gap: 5px; padding: 5px 6px 5px 8px; font-size: 12px; cursor: pointer; white-space: nowrap; border-right: 1px solid var(--vscode-panel-border); color: var(--vscode-tab-inactiveForeground); border-bottom: 2px solid transparent; max-width: 170px; }
   .tab:hover { background: var(--vscode-list-hoverBackground); }
@@ -46,38 +50,20 @@ ${glyphCss}
   .tab .x:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
   #add { flex: none; padding: 5px 10px; cursor: pointer; font-size: 14px; color: var(--vscode-descriptionForeground); }
   #add:hover { color: var(--vscode-foreground); }
-  #menu { position: fixed; z-index: 10; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); border-radius: 4px; padding: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
-  #menu div { padding: 4px 10px; cursor: pointer; border-radius: 3px; display: flex; gap: 6px; align-items: center; font-size: 12px; }
-  #menu div:hover { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); }
   @keyframes pulse { 50% { opacity: .3; } }
+
+  /* panes */
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  .bar .state { flex: none; }
-  .bar .sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; opacity: .8; }
-  .bar .gear { flex: none; background: none; border: none; color: inherit; padding: 0 4px; font-size: 13px; line-height: 1; opacity: .7; border-radius: 3px; }
-  .bar .gear:hover, .bar .gear.on { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
-  .ctl { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
-  .ctl label { flex: none; white-space: nowrap; }
-  .ctl select { max-width: 170px; font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
-  .ctl select:disabled { opacity: .6; }
-  #meter { display: flex; align-items: center; gap: 6px; padding: 3px 8px 5px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
-  #meter .k { width: 12px; height: 12px; }
-  #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
-  #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
-  #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
-  #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
-  #meter .mu:hover { color: var(--vscode-foreground); }
-  #meter .seg.warn { color: var(--vscode-charts-yellow); }
-  #meter .seg.error { color: var(--vscode-charts-red); font-weight: 600; }
-  .bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
-  .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bar select { font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
+  .bar { display: flex; gap: 6px; align-items: center; padding: 3px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.busy { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
-  .log { flex: 1; overflow-y: auto; padding: 8px; }
-  .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-  .user { background: var(--vscode-input-background); border-left: 3px solid var(--vscode-focusBorder); }
-  .assistant { background: var(--vscode-editor-background); }
+  .log { flex: 1; overflow-y: auto; padding: 4px 10px 8px; }
+  .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+  .user { background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 8px; }
+  .user.queued { opacity: .75; border-style: dashed; }
+  .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
+  .assistant { padding-left: 2px; padding-right: 2px; }
   .live { opacity: .85; }
   .thinking { color: var(--vscode-descriptionForeground); font-style: italic; font-size: 12px; }
   .tool { font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-textCodeBlock-background); border-left: 3px solid var(--vscode-charts-blue); }
@@ -90,30 +76,150 @@ ${glyphCss}
   .result { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: right; }
   .perm { border: 1px solid var(--vscode-inputValidation-warningBorder); background: var(--vscode-inputValidation-warningBackground); }
   .perm .btns { display: flex; gap: 6px; margin-top: 6px; }
+  .perm button, .empty button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .perm button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .empty { padding: 32px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
   .empty .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
   .empty button { font-size: 12px; padding: 4px 12px; display: inline-flex; gap: 6px; align-items: center; }
-  button { font-size: 11px; padding: 2px 10px; border-radius: 2px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; }
-  button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-  #compose { display: flex; gap: 6px; padding: 8px 8px 4px; border-top: 1px solid var(--vscode-panel-border); flex: none; }
-  textarea { flex: 1; resize: none; min-height: 40px; max-height: 160px; font-family: inherit; font-size: inherit; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 6px; }
-  textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+  /* composer: the message on top, the tools in a row beneath. Each kind of tab takes its own vendor's look. */
+  #composer { --accent: #D97757; margin: 0 8px 4px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 10px; background: var(--vscode-input-background); flex: none; display: flex; flex-direction: column; }
+  #composer:focus-within { border-color: var(--accent); }
+  #composer.off { opacity: .6; }
+  #input { resize: none; min-height: 22px; max-height: 180px; font-family: inherit; font-size: inherit; line-height: 1.45; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 9px 12px 7px; }
+  #input::placeholder { color: var(--vscode-input-placeholderForeground); }
+  #tools { display: flex; align-items: center; gap: 2px; padding: 3px 5px 5px 6px; border-top: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 12px; min-width: 0; }
+  #tools .sp { flex: 1; min-width: 4px; }
+  #tools .sep { flex: none; width: 1px; height: 16px; margin: 0 5px; background: var(--vscode-panel-border); }
+  .tb { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 5px; border: none; border-radius: 6px; background: none; color: inherit; font-size: 12px; white-space: nowrap; }
+  button.tb:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+  .tb:disabled { opacity: .45; cursor: default; }
+  .tb svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  #t-ctx { cursor: default; }
+  #t-ctx svg { width: 16px; height: 16px; transform: rotate(-90deg); }
+  #t-ctx .track { stroke: currentColor; opacity: .25; stroke-width: 2.4; }
+  #t-ctx .fill { stroke: var(--accent); stroke-width: 2.4; }
+  #t-ctx.warn .fill { stroke: var(--vscode-charts-yellow); } #t-ctx.error .fill { stroke: var(--vscode-charts-red); }
+  #t-cache { cursor: default; } #t-cache.cold { opacity: .55; }
+  #t-model { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  #t-model .m { overflow: hidden; text-overflow: ellipsis; }
+  #t-model .e { flex: none; }
+  #t-model .chev { display: none; }
+  #t-mode.risk { color: var(--vscode-charts-yellow); }
+  #send { flex: none; width: 28px; height: 28px; margin-left: 4px; border: none; border-radius: 7px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+  #send:hover:not(:disabled) { filter: brightness(1.1); }
+  #send:disabled { opacity: .4; cursor: default; }
+  #send svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #send.stop svg { fill: currentColor; stroke: none; width: 12px; height: 12px; }
+
+  /* Claude Code: a squared box, a rule above the tools, the model in a pill, a salmon square to send */
+  #composer.claude #t-model { background: var(--vscode-badge-background, rgba(128,128,128,.2)); color: var(--vscode-foreground); border-radius: 12px; padding: 0 10px; }
+  #composer.claude #t-model .e { color: var(--vscode-descriptionForeground); }
+
+  /* Codex: a large soft box with no rule, the sandbox beside the +, the effort in violet, a round neutral button to send */
+  #composer.codex { --accent: var(--vscode-focusBorder); border-radius: 20px; }
+  #composer.codex #input { padding: 12px 16px 6px; min-height: 40px; }
+  #composer.codex #tools { border-top: none; padding: 2px 8px 8px 10px; gap: 4px; }
+  #composer.codex #t-add { order: 1; } #composer.codex #t-mode { order: 2; } #composer.codex #t-model { order: 3; }
+  #composer.codex .sep { order: 4; } #composer.codex #t-ide { order: 5; } #composer.codex .sp { order: 6; } #composer.codex #send { order: 7; }
+  #composer.codex #t-model { color: var(--vscode-foreground); }
+  #composer.codex #t-model .e { color: #b48ead; }
+  #composer.codex #t-model .chev { display: block; width: 12px; height: 12px; opacity: .7; }
+  #composer.codex #t-ide.on { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+  #composer.codex #send { width: 30px; height: 30px; border-radius: 50%; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.35)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+  #composer.codex #send.stop { background: var(--vscode-foreground); color: var(--vscode-editor-background); }
+
+  /* menus open upward from the tool that owns them */
+  #menu { position: fixed; z-index: 10; min-width: 190px; max-width: min(340px, calc(100vw - 16px)); overflow-y: auto; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; }
+  #menu .h { padding: 5px 8px 3px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
+  #menu .note { padding: 5px 8px; color: var(--vscode-descriptionForeground); white-space: normal; }
+  #menu .it { display: grid; grid-template-columns: 14px 1fr auto; column-gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
+  #menu .it:hover, #menu .it.cur { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); }
+  #menu .it.dis { opacity: .45; cursor: default; pointer-events: none; }
+  #menu .it .ck { color: var(--accent, currentColor); }
+  #menu .it .hint { color: var(--vscode-descriptionForeground); font-size: 11px; }
+  #menu .it .d { grid-column: 2 / 4; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: normal; }
+  #menu .filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; padding: 4px 8px; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 5px; outline: none; }
+  #menu .row { display: flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
+  #menu .row:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+
+  /* Claude usage and backend */
+  #meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  #meter .k { width: 12px; height: 12px; }
+  #meter .where { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
+  #meter .where svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
+  #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
+  #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
+  #meter .mu:hover { color: var(--vscode-foreground); }
+  #meter .mu.stale { font-style: italic; }
+  #meter .seg.warn { color: var(--vscode-charts-yellow); }
+  #meter .seg.error { color: var(--vscode-charts-red); font-weight: 600; }
+
   /* last on purpose: an author display rule (.pane is flex) would otherwise override the hidden attribute */
   [hidden] { display: none !important; }
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
   <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div></div></div>
-  <div id="compose"><textarea id="input" rows="2" disabled placeholder="Open a tab with +"></textarea><button id="send" class="primary" disabled>Send</button></div>
-  <div id="meter" hidden>${badge('claude')}<button id="m-backend" class="mb"></button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="composer" class="off">
+    <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
+    <div id="tools">
+      <button class="tb" id="t-add" title="Mention files" disabled></button>
+      <button class="tb" id="t-slash" title="Slash commands" hidden></button>
+      <span class="tb" id="t-ctx" hidden></span>
+      <span class="tb" id="t-cache" hidden></span>
+      <button class="tb" id="t-model" disabled><span class="m"></span><span class="e"></span><span class="chev"></span></button>
+      <span class="sep" hidden></span>
+      <button class="tb" id="t-ide" hidden aria-pressed="false"></button>
+      <span class="sp"></span>
+      <button class="tb" id="t-mode" disabled></button>
+      <button id="send" disabled title="Send"></button>
+    </div>
+  </div>
+  <div id="meter" hidden><span id="m-where" class="where" hidden></span>${badge('claude')}<button id="m-backend" class="mb"></button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
-  const $tabs = document.getElementById('tabs'), $add = document.getElementById('add'), $panes = document.getElementById('panes'), $empty = document.getElementById('empty');
-  const $input = document.getElementById('input'), $send = document.getElementById('send');
+  const $ = (id) => document.getElementById(id);
+  const $tabs = $('tabs'), $add = $('add'), $panes = $('panes'), $empty = $('empty');
+  const $composer = $('composer'), $input = $('input'), $send = $('send');
+  const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $sep = document.querySelector('#tools .sep'), $where = $('m-where');
   const panes = new Map();   // sid -> pane state
-  let tabs = [], active = null, menu = null, ui = { settingsOpen: false };
+  const commands = { claude: [], codex: [] };
+  let tabs = [], active = null, menu = null, menuOwner = null;
   const ICONS = ${iconsJson}, LETTER = { claude: 'C', codex: 'X' };
+
+  // static artwork: never built from data
+  const SVG = {
+    plus: '<svg viewBox="0 0 16 16"><path d="M8 2.5v11M2.5 8h11"/></svg>',
+    slash: '<svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M9.5 4.5l-3 7"/></svg>',
+    clock: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.2 1.4"/></svg>',
+    bolt: '<svg viewBox="0 0 16 16"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/></svg>',
+    up: '<svg viewBox="0 0 16 16"><path d="M8 13V3.5M3.5 8L8 3.5 12.5 8"/></svg>',
+    stop: '<svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2"/></svg>',
+    shield: '<svg viewBox="0 0 16 16"><path d="M8 1.8l5 1.8v4.1c0 3-2 5.2-5 6.5-3-1.3-5-3.5-5-6.5V3.600z"/><path d="M8 5.200v3.300M8 10.800v.100"/></svg>',
+    chev: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.500l3 3 3-3"/></svg>',
+    cursor: '<svg viewBox="0 0 16 16"><path d="M6.5 6.500l2.7 7 1.1-3.1 3.1-1.100z"/><path d="M4.2 1.800l.600 1.700M1.8 4.200l1.7.600M1.7 8.300l1.6-.700M8.3 1.700l-.700 1.6"/></svg>',
+    laptop: '<svg viewBox="0 0 16 16"><rect x="3" y="3.5" width="10" height="7" rx="1"/><path d="M1.5 12.500h13"/></svg>',
+    ring: '<svg viewBox="0 0 16 16"><circle class="track" cx="8" cy="8" r="6" fill="none"/><circle class="fill" cx="8" cy="8" r="6" fill="none" stroke-linecap="round"/></svg>',
+  };
+  const MODES = {
+    default: ['Ask', 'Ask before edits and commands'], acceptEdits: ['Edits', 'Edit files without asking; ask before commands'], plan: ['Plan', 'Explore and plan; change nothing'],
+    auto: ['Auto', 'Decide per action, and ask when unsure'], bypassPermissions: ['Bypass', 'Never ask. Only for a sandbox'],
+    'read-only': ['Read only', 'Read files; change nothing'], 'workspace-write': ['Workspace', 'Edit files in the workspace'], 'danger-full-access': ['Full access', 'No sandbox'],
+  };
+  $tAdd.innerHTML = SVG.plus; $tSlash.innerHTML = SVG.slash; $tCtx.innerHTML = SVG.ring; $tModel.querySelector('.chev').innerHTML = SVG.chev;
+  $tIde.innerHTML = SVG.cursor; $tIde.append(el0('span', 'IDE context'));
+  $where.innerHTML = SVG.laptop; $where.append(el0('span', 'Work locally')); $where.title = 'Perch runs Codex on this machine, through the Codex SDK. Cloud tasks are not available here.';
+  function el0(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
+  const RING = 2 * Math.PI * 6;
+
+  function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
+  function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
+  function fmtTok(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
+  const cur = () => tabs.find((t) => t.id === active) || null;
 
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
   function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
@@ -127,56 +233,20 @@ ${glyphCss}
   }
   document.querySelectorAll('img.k').forEach((i) => i.addEventListener('error', () => i.replaceWith(letter(i.dataset.kind)), { once: true }));
 
-  function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
-  function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
-
+  // ---- panes
   function makePane(tab) {
     const root = el('div', 'pane'); root.hidden = true;
-    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'state', 'idle'), sum = el('span', 'sum'), gear = el('button', 'gear', '\u2699'), ctl = el('div', 'ctl');
-    const mk = (name, type) => { const l = el('label'), c = el('select'); l.append(name + ' ', c); c.addEventListener('change', () => vscode.postMessage({ type, sid: tab.id, value: c.value })); ctl.append(l); return c; };
-    const mod = mk('model', 'setModel'), eff = mk('effort', 'setEffort'), sel = mk(tab.kind === 'claude' ? 'mode' : 'sandbox', 'setMode');
-    gear.addEventListener('click', () => { applyUi({ settingsOpen: !ui.settingsOpen }); vscode.postMessage({ type: 'ui', settingsOpen: ui.settingsOpen }); });
-    bar.append(dot, status, sum, gear);
-    ctl.hidden = !ui.settingsOpen;
+    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'state', 'idle');
+    bar.append(dot, status);
     const log = el('div', 'log');
-    root.append(bar, ctl, log); $panes.append(root);
-    const p = { root, log, dot, status, sum, gear, ctl, sel, eff, mod, live: null, tools: {}, draft: '', kind: tab.kind };
+    root.append(bar, log); $panes.append(root);
+    const p = { root, log, dot, status, live: null, tools: {}, draft: '', kind: tab.kind };
     panes.set(tab.id, p); return p;
   }
-
-  // option lists come from the host and can change, for example when the model changes which efforts exist
-  function setOptions(select, list, value) {
-    const norm = list.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
-    const key = JSON.stringify(norm);
-    if (select.dataset.key !== key) {
-      select.textContent = '';
-      for (const o of norm) { const n = el('option', null, o.label); n.value = o.value; if (o.title) n.title = o.title; select.append(n); }
-      select.dataset.key = key;
-    }
-    select.value = value || '';
-    select.disabled = norm.length < 2;      // nothing to choose, for example a model with no effort control
-  }
-  // what a selector currently resolves to, for the one-line summary: "default · Opus 5.5" reads as "Opus 5.5"
-  function resolved(select) { const o = select.options[select.selectedIndex]; return o ? o.textContent.replace(/^default · /, '') : ''; }
-  function applyUi(next) {
-    ui = { settingsOpen: !!(next && next.settingsOpen) };
-    for (const p of panes.values()) { p.ctl.hidden = !ui.settingsOpen; p.gear.classList.toggle('on', ui.settingsOpen); p.gear.title = ui.settingsOpen ? 'Hide model, effort, and mode' : 'Model, effort, and mode'; p.gear.setAttribute('aria-expanded', String(ui.settingsOpen)); }
-  }
-  function syncPane(p, t) {
-    setOptions(p.mod, t.models || [{ value: '', label: 'default' }], t.model);
-    setOptions(p.eff, t.efforts || [{ value: '', label: 'default' }], t.effort);
-    setOptions(p.sel, t.modes || [], t.mode);
-    const fixed = t.kind === 'codex' && t.started;
-    p.mod.title = fixed ? 'A Codex thread keeps the model it started with. Open a new tab to change it.' : (t.actualModel ? 'Running ' + t.actualModel : 'Model for this tab');
-    p.eff.title = fixed ? 'A Codex thread keeps the effort it started with. Open a new tab to change it.' : (p.eff.disabled ? 'This model has no effort control' : 'Reasoning effort. Applies from the next message.');
-    p.sum.textContent = [resolved(p.mod), p.eff.disabled ? '' : resolved(p.eff), resolved(p.sel)].filter(Boolean).join(' · ');
-    p.sum.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : 'subscription') + '. ' : '') + 'Click the gear to change.';
-    p.sel.title = t.kind === 'codex' ? (fixed ? 'A Codex thread keeps the sandbox it started with. ' : '') + 'Approvals: ' + (t.approvals || 'default') + ' (setting perch.codex.approvalPolicy)' : 'Permission mode. Applies immediately.';
-  }
-
   function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); const stick = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 40; p.log.append(d); if (stick) p.log.scrollTop = p.log.scrollHeight; return d; }
   function endLive(p) { if (p.live) { p.live.remove(); p.live = null; } }
 
+  // ---- tabs
   function renderTabs() {
     $tabs.querySelectorAll('.tab').forEach((n) => n.remove());
     for (const t of tabs) {
@@ -191,30 +261,201 @@ ${glyphCss}
       if (t.id === active) d.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
   }
-
-  function applyTabs(next, nextActive, nextUi) {
+  function applyTabs(next, nextActive) {
     const prev = active;
     if (prev && panes.has(prev)) panes.get(prev).draft = $input.value;
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
-    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); syncPane(p, t); p.root.hidden = t.id !== active; }
-    if (nextUi) applyUi(nextUi); else applyUi(ui);
+    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; }
     $empty.hidden = tabs.length > 0;
     renderTabs();
-    const cur = tabs.find((t) => t.id === active), p = panes.get(active);
-    if (prev !== active) { $input.value = p ? p.draft : ''; if (p) p.log.scrollTop = p.log.scrollHeight; }
-    $input.disabled = !cur; $send.disabled = !cur;
-    $input.placeholder = cur ? 'Message ' + cur.title + '… (Enter to send, Shift+Enter for newline)' : 'Open a tab with +';
-    syncSend();
+    const p = panes.get(active);
+    if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) p.log.scrollTop = p.log.scrollHeight; }
+    syncComposer();
   }
 
-  function syncSend() { const cur = tabs.find((t) => t.id === active); const busy = !!(cur && cur.busy); $send.textContent = busy ? 'Stop' : 'Send'; $send.className = busy ? '' : 'primary'; }
+  // ---- composer
+  // what a choice resolves to: "default · Opus 5.5" reads as "Opus 5.5", and a bare "default" as nothing
+  function resolved(list, value) { const o = (list || []).map((x) => (typeof x === 'string' ? { value: x, label: x } : x)).find((x) => x.value === (value || '')); return o ? o.label.replace(/^default( · )?/, '') : String(value || ''); }
+  const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+  const fixed = (t) => !!t && t.kind === 'codex' && t.started;     // a Codex thread keeps what it started with
 
+  function syncComposer() {
+    const t = cur(), claude = !!t && t.kind === 'claude';
+    $composer.className = (t ? t.kind : 'off');
+    $input.disabled = !t; $tAdd.disabled = !t; $tModel.disabled = !t; $tMode.disabled = !t;
+    $input.placeholder = !t ? 'Open a tab with +' : t.busy ? 'Queue another message…' : claude ? 'Message Claude…' : 'Do anything';
+    $tIde.hidden = !t || claude; $sep.hidden = $tIde.hidden; $where.hidden = $tIde.hidden;
+    $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
+    $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
+    $tSlash.hidden = !claude || !commands.claude.length;
+    $tCtx.hidden = !claude; $tCache.hidden = !claude;
+    if (!t) { $tModel.querySelector('.m').textContent = ''; $tModel.querySelector('.e').textContent = ''; $tMode.textContent = ''; $send.disabled = true; $send.className = ''; $send.innerHTML = SVG.up; return; }
+
+    const model = resolved(t.models, t.model) || (claude ? 'Claude' : 'Codex');
+    const hasEffort = (t.efforts || []).length > 1, effort = hasEffort ? cap(resolved(t.efforts, t.effort)) : '';
+    $tModel.querySelector('.m').textContent = model;
+    $tModel.querySelector('.e').textContent = effort;
+    $tModel.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : 'subscription') + '. ' : '')
+      + (fixed(t) ? 'A Codex thread keeps the model and effort it started with.' : 'Model and effort' + (claude ? '. Changes apply from the next message.' : '. Choose before the first message.'));
+
+    const mode = MODES[t.mode] || [t.mode, ''];
+    $tMode.innerHTML = claude ? SVG.bolt : SVG.shield; $tMode.append(el('span', null, mode[0]));
+    $tMode.className = 'tb' + (t.mode === 'danger-full-access' || t.mode === 'bypassPermissions' ? ' risk' : '');
+    $tMode.title = (claude ? 'Permission mode: ' : 'Sandbox: ') + mode[1] + (claude ? '' : '. Approvals: ' + (t.approvals || 'default') + (fixed(t) ? '. A Codex thread keeps the sandbox it started with.' : ''));
+
+    const c = t.context;
+    $tCtx.className = 'tb' + (c && c.percent >= 95 ? ' error' : c && c.percent >= 80 ? ' warn' : '');
+    $tCtx.querySelector('.fill').setAttribute('stroke-dasharray', ((c ? Math.max(c.percent, c.percent > 0 ? 3 : 0) : 0) / 100 * RING).toFixed(2) + ' ' + RING.toFixed(2));
+    $tCtx.title = c ? 'Context ' + c.percent + '% used · ' + fmtTok(c.used) + ' of ' + fmtTok(c.max) + ' tokens' : 'Context usage appears once the session starts';
+    tickCache();
+
+    $send.disabled = false;
+    $send.className = t.busy ? 'stop' : '';
+    $send.innerHTML = t.busy ? SVG.stop : SVG.up;
+    $send.title = t.busy ? 'Stop' + (t.queued ? ' and drop ' + t.queued + ' queued' : '') : 'Send';
+  }
+
+  // the prompt cache stays warm for a fixed time after each answer; a message sent after that re-caches the conversation
+  function tickCache() {
+    const t = cur(), c = t && t.cache;
+    if (!c || $tCache.hidden) return;
+    const left = c.since ? c.minutes * 60000 - (Date.now() - c.since) : c.minutes * 60000;
+    const cold = !!c.since && left <= 0;
+    $tCache.className = 'tb' + (cold ? ' cold' : '');
+    $tCache.innerHTML = SVG.clock; $tCache.append(el('span', null, cold ? 'cold' : Math.max(1, Math.ceil(left / 60000)) + 'm'));
+    $tCache.title = cold ? 'The prompt cache has expired. The next message re-caches the conversation, which costs more than a cached turn.'
+      : c.since ? 'The prompt cache stays warm for ' + Math.max(1, Math.ceil(left / 60000)) + ' more minutes. Messages sent before then are billed at the cached rate.'
+      : 'The prompt cache stays warm for ' + c.minutes + ' minutes after each answer.';
+  }
+  setInterval(tickCache, 20000);
+
+  function grow() { $input.style.height = 'auto'; $input.style.height = Math.min(180, Math.max(22, $input.scrollHeight)) + 'px'; }
+  function insert(text) {
+    const a = $input.selectionStart === undefined ? $input.value.length : $input.selectionStart, b = $input.selectionEnd === undefined ? a : $input.selectionEnd;
+    const pre = $input.value.slice(0, a), gap = pre && !/\\s$/.test(pre) ? ' ' : '';
+    $input.value = pre + gap + text + $input.value.slice(b);
+    const at = (pre + gap + text).length; try { $input.setSelectionRange(at, at); } catch (_) { /* not focusable yet */ }
+    grow(); $input.focus();
+  }
+
+  // Enter always sends: while the agent is working, the message is queued behind the current turn. The button stops.
+  function send() {
+    const t = cur(); if (!t) return;
+    const text = $input.value; if (!text.trim()) return;
+    closeMenu();
+    vscode.postMessage({ type: 'send', sid: active, text }); $input.value = ''; panes.get(active).draft = ''; grow();
+  }
+  $send.addEventListener('click', () => { const t = cur(); if (!t) return; if (t.busy) vscode.postMessage({ type: 'stop', sid: active }); else send(); });
+  $input.addEventListener('keydown', (e) => {
+    if (menu && menuOwner === 'slash' && (e.key === 'Enter' || e.key === 'Tab')) { const first = menu.querySelector('.it:not(.dis)'); if (first) { e.preventDefault(); first.click(); return; } }
+    if (e.key === 'Escape' && menu) { e.preventDefault(); closeMenu(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  });
+  $input.addEventListener('input', () => {
+    grow();
+    const t = cur(), m = /^\\/(\\S*)$/.exec($input.value);
+    if (t && t.kind === 'claude' && m && commands.claude.length) openSlash(m[1], true);
+    else if (menuOwner === 'slash' && menu && menu.dataset.typed) closeMenu();
+  });
+  $tAdd.addEventListener('click', () => { if (cur()) vscode.postMessage({ type: 'attach', sid: active }); });
+  $tIde.addEventListener('click', () => { const t = cur(); if (t && t.kind === 'codex') vscode.postMessage({ type: 'setIde', sid: t.id, value: !t.ide }); });
+
+  // ---- menus
+  function closeMenu() { if (menu) { menu.remove(); menu = null; menuOwner = null; } }
+  function openMenu(owner, anchor, fill) {
+    if (menu && menuOwner === owner && !menu.dataset.typed) { closeMenu(); return null; }
+    closeMenu();
+    menu = el('div'); menu.id = 'menu'; menu.setAttribute('role', 'menu'); menuOwner = owner;
+    const t = cur(); if (t) menu.style.setProperty('--accent', t.kind === 'claude' ? '#D97757' : '#10a37f');
+    fill(menu);
+    document.body.append(menu);
+    const r = anchor.getBoundingClientRect(), up = r.top > window.innerHeight / 2;
+    menu.style.maxHeight = Math.max(120, (up ? r.top : window.innerHeight - r.bottom) - 12) + 'px';
+    if (up) menu.style.bottom = (window.innerHeight - r.top + 4) + 'px'; else menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    return menu;
+  }
+  function item(label, o) {
+    const n = el('div', 'it' + (o.checked ? ' on' : '') + (o.disabled ? ' dis' : '')); n.setAttribute('role', o.radio ? 'menuitemradio' : 'menuitem');
+    if (o.radio) n.setAttribute('aria-checked', String(!!o.checked));
+    n.append(el('span', 'ck', o.checked ? '✓' : ''), el('span', 'l', label), el('span', 'hint', o.hint || ''));
+    if (o.desc) n.append(el('span', 'd', o.desc));
+    if (!o.disabled) n.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); o.pick(); });
+    return n;
+  }
+  const norm = (list) => (list || []).map((x) => (typeof x === 'string' ? { value: x, label: x } : x));
+
+  $tModel.addEventListener('click', (e) => {
+    e.stopPropagation(); const t = cur(); if (!t) return;
+    openMenu('model', $tModel, (m) => {
+      const lock = fixed(t);
+      if (lock) m.append(el('div', 'note', 'This thread keeps the model and effort it started with. Open a new tab to change them.'));
+      m.append(el('div', 'h', 'Model'));
+      for (const o of norm(t.models)) m.append(item(o.label, { radio: true, checked: o.value === (t.model || ''), disabled: lock, desc: o.title && o.value ? o.title : '', pick: () => vscode.postMessage({ type: 'setModel', sid: t.id, value: o.value }) }));
+      const effs = norm(t.efforts);
+      if (effs.length > 1) {
+        m.append(el('div', 'h', 'Effort'));
+        for (const o of effs) m.append(item(o.value ? cap(o.label) : o.label, { radio: true, checked: o.value === (t.effort || ''), disabled: lock, pick: () => vscode.postMessage({ type: 'setEffort', sid: t.id, value: o.value }) }));
+      } else m.append(el('div', 'note', 'This model has no effort control.'));
+    });
+  });
+  $tMode.addEventListener('click', (e) => {
+    e.stopPropagation(); const t = cur(); if (!t) return;
+    openMenu('mode', $tMode, (m) => {
+      const lock = fixed(t);
+      if (lock) m.append(el('div', 'note', 'This thread keeps the sandbox it started with. Open a new tab to change it.'));
+      m.append(el('div', 'h', t.kind === 'claude' ? 'Permission mode' : 'Sandbox'));
+      for (const v of (t.modes || [])) { const d = MODES[v] || [v, '']; m.append(item(d[0], { radio: true, checked: v === t.mode, disabled: lock, desc: d[1], pick: () => vscode.postMessage({ type: 'setMode', sid: t.id, value: v }) })); }
+      if (t.kind === 'codex') m.append(el('div', 'note', 'Approvals: ' + (t.approvals || 'default') + '. Set with perch.codex.approvalPolicy.'));
+    });
+  });
+  function openSlash(filter, typed) {
+    const t = cur(); if (!t) return;
+    const was = menu && menuOwner === 'slash' ? menu.querySelector('.filter') : null;
+    if (was && typed) { was.value = filter; was.dispatchEvent(new Event('input')); return; }
+    const m = openMenu('slash', $tSlash, (mm) => {
+      const f = el('input', 'filter'); f.type = 'text'; f.placeholder = 'Filter commands'; f.value = filter || ''; f.hidden = !!typed;
+      const list = el('div', 'list');
+      const draw = () => {
+        list.textContent = '';
+        const q = f.value.trim().toLowerCase();
+        // a short filter matches names only: one or two letters appear in almost every description
+        const hits = commands[t.kind].filter((c) => !q || c.name.toLowerCase().includes(q) || (q.length >= 3 && c.description.toLowerCase().includes(q)))
+          .sort((a, b) => (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)));
+        for (const c of hits.slice(0, 60)) list.append(item('/' + c.name, { hint: c.hint, desc: c.description, pick: () => { $input.value = '/' + c.name + ' '; grow(); $input.focus(); } }));
+        if (!hits.length) list.append(el('div', 'note', 'No command matches.'));
+      };
+      f.addEventListener('input', draw);
+      f.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const first = list.querySelector('.it'); if (first) first.click(); } else if (e.key === 'Escape') { closeMenu(); $input.focus(); } });
+      f.addEventListener('click', (e) => e.stopPropagation());
+      mm.append(f, list); draw();
+    });
+    if (m && typed) m.dataset.typed = '1'; else if (m) m.querySelector('.filter').focus();
+  }
+  $tSlash.addEventListener('click', (e) => { e.stopPropagation(); openSlash('', false); });
+
+  $add.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMenu('add', $add, (m) => {
+      for (const [kind, label] of [['claude', 'New Claude tab'], ['codex', 'New Codex tab']]) {
+        const row = el('div', 'row'); row.append(badge(kind), label);
+        row.addEventListener('click', (ev) => { ev.stopPropagation(); closeMenu(); vscode.postMessage({ type: 'new', kind }); });
+        m.append(row);
+      }
+    });
+  });
+  document.addEventListener('click', closeMenu);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+  $('e-claude').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'claude' }));
+  $('e-codex').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'codex' }));
+
+  // ---- transcript events
   function onEvent(sid, m) {
     const p = panes.get(sid); if (!p) return;
     switch (m.kind) {
-      case 'user': endLive(p); add(p, 'user', m.text); break;
+      case 'user': { endLive(p); const d = add(p, 'user' + (m.queued ? ' queued' : ''), ''); const tags = [m.queued ? 'queued' : '', m.tag || ''].filter(Boolean); if (tags.length) d.append(el('span', 'tag', tags.join(' · '))); d.append(m.text); break; }
       case 'delta': if (!p.live) p.live = add(p, 'assistant live', ''); p.live.textContent += m.text; p.log.scrollTop = p.log.scrollHeight; break;
       case 'text': endLive(p); add(p, 'assistant', m.text); break;
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
@@ -237,63 +478,42 @@ ${glyphCss}
       case 'busy': p.dot.className = 'dot' + (m.busy ? ' busy' : ''); break;
       case 'error': endLive(p); add(p, 'error', m.text); break;
       case 'clear': p.log.textContent = ''; p.live = null; p.tools = {}; break;
-      case 'fill': if (sid === active) { $input.value = m.text; $input.focus(); } else p.draft = m.text; break;
+      case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
+      case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
     }
   }
 
-  function send() {
-    const cur = tabs.find((t) => t.id === active); if (!cur) return;
-    if (cur.busy) { vscode.postMessage({ type: 'stop', sid: active }); return; }
-    const t = $input.value; if (!t.trim()) return;
-    vscode.postMessage({ type: 'send', sid: active, text: t }); $input.value = ''; panes.get(active).draft = '';
-  }
-  $send.addEventListener('click', send);
-  $input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); const cur = tabs.find((t) => t.id === active); if (cur && !cur.busy) send(); } });
-
   // ---- Claude usage and backend, in the footer
-  const $meter = document.getElementById('meter'), $mb = document.getElementById('m-backend'), $mu = document.getElementById('m-usage');
+  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage');
   let meter = null;
   function applyMeter(m) {
     meter = m || null;
     $meter.hidden = !meter;
     if (!meter) return;
-    $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \u26A0' : '');
+    $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \\u26A0' : '');
     $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
     $mb.title = meter.backendTitle;
     $mu.textContent = '';
-    $mu.className = 'mu ' + meter.level;
+    $mu.className = 'mu ' + meter.level + (meter.stale ? ' stale' : '');
     if (meter.segments.length) for (const seg of meter.segments) { const n = el('span', 'seg ' + seg.level, seg.text); if (seg.title) n.title = seg.title; $mu.append(n); }
-    else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\u2014'));
+    else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\\u2014'));
     const when = meter.fetchedAt ? 'Updated ' + new Date(meter.fetchedAt).toLocaleTimeString() + '. ' : '';
     const hint = meter.action === 'login' ? 'Click to log in.' : 'Click to refresh.';
+    const stale = meter.stale ? '\\n' + meter.lines[meter.lines.length - 1] : '';
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
-    else { $mu.title = ''; $mu.dataset.detail = meter.lines.join('\\n'); for (const n of $mu.children) n.title += '\\n' + when + hint; }
+    else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
   $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
   $mu.addEventListener('click', () => vscode.postMessage({ type: meter && meter.action === 'login' ? 'meterLogin' : 'meterRefresh' }));
 
-  function closeMenu() { if (menu) { menu.remove(); menu = null; } }
-  $add.addEventListener('click', (e) => {
-    e.stopPropagation(); if (menu) { closeMenu(); return; }
-    menu = el('div'); menu.id = 'menu';
-    for (const [kind, label] of [['claude', 'New Claude tab'], ['codex', 'New Codex tab']]) {
-      const row = el('div'); row.append(badge(kind), label);
-      row.addEventListener('click', () => { closeMenu(); vscode.postMessage({ type: 'new', kind }); });
-      menu.append(row);
-    }
-    document.body.append(menu);
-    const r = $add.getBoundingClientRect(); menu.style.top = (r.bottom + 2) + 'px'; menu.style.left = Math.max(4, Math.min(r.left, window.innerWidth - menu.offsetWidth - 4)) + 'px';
-  });
-  document.addEventListener('click', closeMenu);
-  document.getElementById('e-claude').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'claude' }));
-  document.getElementById('e-codex').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'codex' }));
-
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
-    if (m.type === 'tabs') applyTabs(m.tabs, m.active, m.ui);
-    else if (m.type === 'meter') applyMeter(m.meter);
+    if (m.type === 'tabs') applyTabs(m.tabs, m.active);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
+    else if (m.type === 'meter') applyMeter(m.meter);
+    else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
   });
+  $send.innerHTML = SVG.up;
   vscode.postMessage({ type: 'ready' });
 })();
 </script></body></html>`;

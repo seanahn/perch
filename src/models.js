@@ -53,8 +53,17 @@ function normalizeClaudeModels(list) {
   };
 }
 
+/** Pure: the SDK's SlashCommand[] as [{ name, description, hint }], sorted, without internal (double-underscore) commands. */
+function normalizeCommands(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : [])
+    .filter((c) => c && typeof c.name === 'string' && c.name && !c.name.startsWith('__') && !seen.has(c.name) && seen.add(c.name))
+    .map((c) => ({ name: c.name, description: String(c.description || '').replace(/\s+/g, ' ').trim().slice(0, 160), hint: String(c.argumentHint || c.hint || '') }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
- * Ask Claude Code for its model list. Starts the CLI with an input stream that never yields,
+ * Ask Claude Code for its model list and slash commands. Starts the CLI with an input stream that never yields,
  * so the CLI initializes but no model request is made and nothing is billed.
  */
 async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
@@ -71,10 +80,12 @@ async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
       q.supportedModels(),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out asking Claude Code for its models')), timeoutMs); }),
     ]);
-    return normalizeClaudeModels(list);
+    const catalog = normalizeClaudeModels(list);
+    if (catalog) { try { catalog.commands = normalizeCommands(await q.supportedCommands()); } catch (_) { catalog.commands = []; } }
+    return catalog;
   } finally {
     clearTimeout(timer); release(); abort.abort();
   }
 }
 
-module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, parseTopLevelToml };
+module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, normalizeCommands, parseTopLevelToml };

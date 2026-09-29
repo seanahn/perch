@@ -8,8 +8,8 @@ const { CodexAgent } = require('../src/codexAgent.js');
 function collector(label) {
   const seen = []; let text = '';
   return {
-    seen, get text() { return text; },
-    emit: (ev) => { seen.push(ev.kind); if (ev.kind === 'text') text = ev.text; if (ev.kind === 'error') console.log(`[${label}] error:`, ev.text); },
+    seen, all: [], texts: [], get text() { return text; },
+    emit: function (ev) { this.all.push(ev); seen.push(ev.kind); if (ev.kind === 'text') { text = ev.text; this.texts.push(ev.text); } if (ev.kind === 'error') console.log(`[${label}] error:`, ev.text); },
   };
 }
 function waitFor(coll, kind, ms) {
@@ -45,7 +45,7 @@ let failed = 0;
 }
 {
   const c = collector('claude');
-  const a = new ClaudeAgent({ cwd: process.cwd(), emit: c.emit, permissionMode: 'default', effort: 'low', askPermission: async () => ({ decision: 'deny' }) });
+  const a = new ClaudeAgent({ cwd: process.cwd(), emit: (ev) => c.emit(ev), permissionMode: 'default', effort: 'low', askPermission: async () => ({ decision: 'deny' }) });
   a.send('Reply with exactly: perch claude ok');
   try { await waitFor(c, 'result', 90000); console.log('claude:', JSON.stringify(c.text), '| events:', [...new Set(c.seen)].join(',')); if (!/perch claude ok/i.test(c.text)) failed++; }
   catch (e) { console.log('claude FAILED:', e.message); failed++; }
@@ -55,11 +55,28 @@ let failed = 0;
   c.seen.length = 0; a.send('Reply with exactly: perch effort ok');
   try { await waitFor(c, 'result', 90000); console.log('claude after setEffort:', JSON.stringify(c.text), '| errors:', errs.length); if (errs.length || !/perch effort ok/i.test(c.text)) failed++; }
   catch (e) { console.log('claude effort FAILED:', e.message); failed++; }
+
+  // what the composer shows: context usage, slash commands, and when the cache was last warmed
+  await new Promise((r) => setTimeout(r, 1500));
+  const ctx = c.all.filter((e) => e.kind === 'context').pop(), cmds = c.all.filter((e) => e.kind === 'commands').pop(), resp = c.all.filter((e) => e.kind === 'responded').length;
+  console.log(`claude composer data: context ${ctx ? ctx.percent + '% of ' + ctx.max : 'none'} · ${cmds ? cmds.list.length : 0} commands · ${resp} answers timed`);
+  if (!ctx || !(ctx.max > 0) || !cmds || !cmds.list.length || resp < 2) { console.log('claude composer data FAILED'); failed++; }
+
+  // a message sent while a turn is running is queued, and runs when the turn ends
+  c.seen.length = 0; c.texts.length = 0; const busy = [];
+  const prev2 = a.emit; a.emit = (ev) => { if (ev.kind === 'busy') busy.push(ev.busy); prev2(ev); };
+  a.send('Reply with exactly: first');
+  a.send('Reply with exactly: second');
+  const t1 = Date.now();
+  while (c.seen.filter((k) => k === 'result').length < 2 && Date.now() - t1 < 120000) await new Promise((r) => setTimeout(r, 100));
+  const users = c.all.filter((e) => e.kind === 'user').slice(-2).map((e) => !!e.queued);
+  console.log('claude queue:', JSON.stringify(c.texts), '| queued flags', JSON.stringify(users), '| went idle', busy.filter((b) => !b).length, 'time(s) | running after', a.running);
+  if (!/first/i.test(c.texts[0] || '') || !/second/i.test(c.texts[1] || '') || users.join() !== 'false,true' || busy.filter((b) => !b).length !== 1 || a.running) { console.log('claude queue FAILED'); failed++; }
   a.dispose();
 }
 {
   const c = collector('codex');
-  const a = new CodexAgent({ cwd: process.cwd(), emit: c.emit, sandboxMode: 'read-only', approvalPolicy: 'never', reasoningEffort: 'low' });
+  const a = new CodexAgent({ cwd: process.cwd(), emit: (ev) => c.emit(ev), sandboxMode: 'read-only', approvalPolicy: 'never', reasoningEffort: 'low' });
   await a.send('Reply with exactly: perch codex ok');
   console.log('codex:', JSON.stringify(c.text), '| events:', [...new Set(c.seen)].join(','));
   if (!/perch codex ok/i.test(c.text)) failed++;
