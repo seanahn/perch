@@ -1,8 +1,8 @@
 {
   "name": "perch",
   "displayName": "Perch",
-  "description": "Claude Code and Codex agents side by side in one sidebar. A shell, not an agent.",
-  "version": "0.1.0",
+  "description": "Claude Code and Codex agents as tabs in one sidebar. Any number of sessions. A shell, not an agent.",
+  "version": "0.2.0",
   "publisher": "fennets",
   "license": "MIT",
   "engines": {
@@ -33,67 +33,64 @@
       "perch": [
         {
           "type": "webview",
-          "id": "perch.claude",
-          "name": "Claude"
-        },
-        {
-          "type": "webview",
-          "id": "perch.codex",
-          "name": "Codex"
+          "id": "perch.main",
+          "name": "Sessions"
         }
       ]
     },
     "commands": [
       {
-        "command": "perch.claude.newSession",
-        "title": "Perch: New Claude Session",
+        "command": "perch.newClaude",
+        "title": "Perch: New Claude Tab",
         "icon": "$(add)"
       },
       {
-        "command": "perch.claude.stop",
-        "title": "Perch: Stop Claude",
-        "icon": "$(debug-stop)"
-      },
-      {
-        "command": "perch.codex.newSession",
-        "title": "Perch: New Codex Session",
+        "command": "perch.newCodex",
+        "title": "Perch: New Codex Tab",
         "icon": "$(add)"
       },
       {
-        "command": "perch.codex.stop",
-        "title": "Perch: Stop Codex",
+        "command": "perch.stop",
+        "title": "Perch: Stop Active Tab",
         "icon": "$(debug-stop)"
       },
       {
-        "command": "perch.handoff.toCodex",
-        "title": "Perch: Send Claude's last answer to Codex"
+        "command": "perch.closeTab",
+        "title": "Perch: Close Active Tab",
+        "icon": "$(close)"
       },
       {
-        "command": "perch.handoff.toClaude",
-        "title": "Perch: Send Codex's last answer to Claude"
+        "command": "perch.handoff",
+        "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
+        "icon": "$(arrow-swap)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "perch.claude.newSession",
-          "when": "view == perch.claude",
+          "command": "perch.handoff",
+          "when": "view == perch.main",
           "group": "navigation@1"
         },
         {
-          "command": "perch.claude.stop",
-          "when": "view == perch.claude",
+          "command": "perch.stop",
+          "when": "view == perch.main",
           "group": "navigation@2"
         },
         {
-          "command": "perch.codex.newSession",
-          "when": "view == perch.codex",
-          "group": "navigation@1"
+          "command": "perch.newClaude",
+          "when": "view == perch.main",
+          "group": "1_new@1"
         },
         {
-          "command": "perch.codex.stop",
-          "when": "view == perch.codex",
-          "group": "navigation@2"
+          "command": "perch.newCodex",
+          "when": "view == perch.main",
+          "group": "1_new@2"
+        },
+        {
+          "command": "perch.closeTab",
+          "when": "view == perch.main",
+          "group": "1_new@3"
         }
       ]
     },
@@ -110,7 +107,7 @@
             "bypassPermissions"
           ],
           "default": "default",
-          "description": "Claude Code permission mode for new sessions. bypassPermissions skips all prompts."
+          "description": "Claude Code permission mode for new tabs. bypassPermissions skips all prompts."
         },
         "perch.claude.model": {
           "type": "string",
@@ -141,7 +138,7 @@
             "danger-full-access"
           ],
           "default": "workspace-write",
-          "description": "Codex sandbox mode for new threads."
+          "description": "Codex sandbox mode for new tabs."
         },
         "perch.codex.model": {
           "type": "string",
@@ -169,8 +166,12 @@
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
-    "check": "node --check src/extension.js && node --check src/claudeAgent.js && node --check src/codexAgent.js && node --check src/webview.js && node --check test/replay.test.js",
-    "test": "node test/replay.test.js && node test/harness.mjs",
-    "package": "vsce package --no-dependencies"
+    "check": "node --check src/extension.js && node --check src/claudeAgent.js && node --check src/codexAgent.js && node --check src/webview.js && node --check test/host.test.js && node --check test/page.test.js",
+    "test": "node test/host.test.js && node test/page.test.js && node test/harness.mjs",
+    "package": "vsce package",
+    "test:offline": "node test/host.test.js && node test/page.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
   }
 }

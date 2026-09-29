@@ -1,155 +1,253 @@
 'use strict';
 const vscode = require('vscode');
-const { randomBytes } = require('crypto');
+const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
 
-const CLAUDE_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
-const CODEX_SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'];
+const MODES = {
+  claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
+  codex: ['read-only', 'workspace-write', 'danger-full-access'],
+};
+const STATE_KEY = 'perch.sessions.v1';
+const MAX_HISTORY = 2000;
 
 function cwd() {
   const f = vscode.workspace.workspaceFolders;
   return f && f.length ? f[0].uri.fsPath : require('os').homedir();
 }
+function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
+function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionMode') || 'default') : (cfg('codex.sandboxMode') || 'workspace-write'); }
 
-/** One sidebar panel bound to one agent kind. Owns the agent lifecycle and the webview. */
-class AgentView {
-  constructor(kind, context) {
-    this.kind = kind;              // 'claude' | 'codex'
-    this.context = context;
-    this.view = null;
-    this.agent = null;
-    this.pending = new Map();      // permission id -> resolve
-    this.history = [];             // transcript events, replayed when the webview is (re)created
-    this.lastStatus = null;        // status bar text survives webview re-creation
+/** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
+class Session {
+  constructor(view, { id, kind, title, titled, mode, resume }) {
+    this.view = view;
+    this.id = id || randomUUID();
+    this.kind = kind;
+    this.title = title;
+    this.titled = !!titled;          // true once the title came from the first message
+    this.mode = mode || defaultMode(kind);
+    this.agentSessionId = resume || null;
+    this.agent = null;               // started lazily on first message
+    this.history = [];
+    this.pending = new Map();        // permission id -> resolve
     this.busy = false;
-    this.ready = false;
-    this.mode = this.kind === 'claude' ? this.cfg('claude.permissionMode') : this.cfg('codex.sandboxMode');
+    this.attention = false;          // a prompt is waiting while the tab is not active
+    this.lastStatus = this.idleStatus();
+    if (resume) this.history.push({ kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` });
   }
 
-  cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
+  idleStatus() { return this.kind === 'claude' ? `idle · mode ${this.mode}` : `idle · sandbox ${this.mode}`; }
 
-  resolveWebviewView(webviewView) {
-    this.view = webviewView;
-    const w = webviewView.webview;
-    w.options = { enableScripts: true };
-    w.html = getHtml({
-      agent: this.kind === 'claude' ? 'Claude' : 'Codex',
-      nonce: randomBytes(16).toString('hex'),
-      cspSource: w.cspSource,
-      modes: this.kind === 'claude' ? CLAUDE_MODES : CODEX_SANDBOXES,
-      modeLabel: this.kind === 'claude' ? 'mode' : 'sandbox',
-      initialMode: this.mode,
-    });
-    w.onDidReceiveMessage((msg) => this.onMessage(msg));
-    webviewView.onDidDispose(() => { this.ready = false; this.view = null; });
-  }
-
-  // VS Code destroys and recreates the webview when a view is moved between sidebars or
-  // the window reloads. The host is the source of truth: it records every event and
-  // replays the transcript, status, and busy state when the page says it is ready.
   post(ev) {
     switch (ev.kind) {
       case 'status': this.lastStatus = ev.text; break;
-      case 'busy': this.busy = !!ev.busy; break;
+      case 'busy': this.busy = !!ev.busy; this.view.sendTabs(); break;
+      case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
       case 'clear': this.history = []; break;
-      case 'delta': case 'tool_start': case 'stderr': case 'session': case 'mode': case 'fill': break;
-      default: this.history.push(ev); if (this.history.length > 2000) this.history.splice(0, this.history.length - 2000);
+      case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
+      case 'user':
+        if (!this.titled) { this.title = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28) || this.title; this.titled = true; this.view.sendTabs(); this.view.persist(); }
+        this.history.push(ev); break;
+      case 'permission':
+        if (this.view.activeId !== this.id) { this.attention = true; this.view.sendTabs(); }
+        this.history.push(ev); break;
+      default: this.history.push(ev);
     }
-    this.send(ev);
+    if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
+    this.view.sendEvent(this.id, ev);
   }
 
-  send(ev) { if (this.ready && this.view) this.view.webview.postMessage({ type: 'event', ev }); }
-
-  replay() {
-    this.send({ kind: 'clear' });
-    for (const ev of this.history) this.send(ev);
-    this.send({ kind: 'mode', value: this.mode });
-    this.send({ kind: 'busy', busy: this.busy });
-    if (this.lastStatus) this.send({ kind: 'status', text: this.lastStatus });
-  }
-
-  onMessage(msg) {
-    switch (msg.type) {
-      case 'ready':
-        this.ready = true;
-        this.replay();
-        if (!this.agent) this.start();
-        return;
-      case 'send':
-        if (!this.agent) this.start();
-        this.agent.send(msg.text);
-        return;
-      case 'permission': {
-        const r = this.pending.get(msg.id);
-        if (r) { this.pending.delete(msg.id); r({ decision: msg.decision }); }
-        // an answered prompt must not come back as a live prompt on replay
-        const i = this.history.findIndex((h) => h.kind === 'permission' && h.id === msg.id);
-        if (i >= 0) this.history[i] = { kind: 'note', text: `${this.history[i].tool}: ${msg.decision}` };
-        return;
-      }
-      case 'setMode':
-        this.mode = msg.value;
-        if (this.kind === 'claude' && this.agent) this.agent.setPermissionMode(msg.value);
-        if (this.kind === 'codex') { this.post({ kind: 'status', text: 'sandbox applies to the next new session' }); }
-        return;
-      default:
-        return;
-    }
-  }
-
-  start(resume) {
-    this.stop();
+  ensureAgent() {
+    if (this.agent) return this.agent;
     const emit = (ev) => this.post(ev);
+    const resume = this.agentSessionId || undefined;
     if (this.kind === 'claude') {
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
-        model: this.cfg('claude.model') || undefined,
-        executable: this.cfg('claude.executable') || undefined,
+        model: cfg('claude.model') || undefined,
+        executable: cfg('claude.executable') || undefined,
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
       this.agent = new CodexAgent({
         cwd: cwd(), emit, resume,
         sandboxMode: this.mode,
-        approvalPolicy: this.cfg('codex.approvalPolicy'),
-        model: this.cfg('codex.model') || undefined,
-        reasoningEffort: this.cfg('codex.reasoningEffort') || undefined,
+        approvalPolicy: cfg('codex.approvalPolicy'),
+        model: cfg('codex.model') || undefined,
+        reasoningEffort: cfg('codex.reasoningEffort') || undefined,
       });
     }
+    return this.agent;
   }
 
-  stop() {
+  send(text) { this.ensureAgent().send(text); }
+
+  answerPermission(id, decision) {
+    const r = this.pending.get(id);
+    if (r) { this.pending.delete(id); r({ decision }); }
+    const i = this.history.findIndex((h) => h.kind === 'permission' && h.id === id);
+    if (i >= 0) this.history[i] = { kind: 'note', text: `${this.history[i].tool}: ${decision}` };
+    if (!this.pending.size && this.attention) { this.attention = false; this.view.sendTabs(); }
+  }
+
+  setMode(value) {
+    if (!MODES[this.kind].includes(value)) return;
+    this.mode = value;
+    this.view.persist();
+    if (!this.agent) { this.post({ kind: 'status', text: this.idleStatus() }); return; }
+    if (this.kind === 'claude') this.agent.setPermissionMode(value);
+    else this.post({ kind: 'note', text: `sandbox ${value} applies to a new Codex tab; this thread keeps the sandbox it started with` });
+  }
+
+  interrupt() { if (this.agent) this.agent.interrupt(); }
+  lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
+
+  dispose() {
     if (this.agent) { this.agent.dispose(); this.agent = null; }
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session closed' });
     this.pending.clear();
-    this.history = this.history.map((h) => (h.kind === 'permission' ? { kind: 'note', text: `${h.tool}: session closed` } : h));
-    this.busy = false;
   }
 
-  newSession() { this.post({ kind: 'clear' }); this.start(); this.post({ kind: 'status', text: 'new session' }); }
-  interrupt() { if (this.agent) this.agent.interrupt(); }
-  lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
-  fill(text) { this.post({ kind: 'fill', text }); if (this.view) this.view.show(true); }
-  dispose() { this.stop(); }
+  toTab() { return { id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, mode: this.mode, modes: MODES[this.kind] }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, resume: this.agentSessionId }; }
+}
+
+/** The single Perch view: a tab bar over any number of sessions. */
+class PerchView {
+  constructor(context) {
+    this.context = context;
+    this.view = null;
+    this.ready = false;
+    this.sessions = [];
+    this.activeId = null;
+    this.counters = { claude: 0, codex: 0 };
+    this.restore();
+  }
+
+  // ---- persistence: tabs survive a window reload by resuming the agent's own saved session
+  restore() {
+    const saved = this.context.workspaceState.get(STATE_KEY);
+    if (!saved || !Array.isArray(saved.sessions) || !saved.sessions.length) return;
+    for (const s of saved.sessions) {
+      if (s.kind !== 'claude' && s.kind !== 'codex') continue;
+      this.counters[s.kind]++;
+      this.sessions.push(new Session(this, s));
+    }
+    // counters are saved so a new tab never reuses the name of one that is still open
+    for (const k of Object.keys(this.counters)) this.counters[k] = Math.max(this.counters[k], Number(saved.counters && saved.counters[k]) || 0);
+    this.activeId = this.sessions.some((s) => s.id === saved.active) ? saved.active : (this.sessions[0] && this.sessions[0].id);
+  }
+  persist() { this.context.workspaceState.update(STATE_KEY, { active: this.activeId, counters: this.counters, sessions: this.sessions.map((s) => s.toState()) }); }
+
+  // ---- webview plumbing
+  resolveWebviewView(webviewView) {
+    this.view = webviewView;
+    const w = webviewView.webview;
+    w.options = { enableScripts: true };
+    w.html = getHtml({ nonce: randomBytes(16).toString('hex'), cspSource: w.cspSource });
+    w.onDidReceiveMessage((msg) => this.onMessage(msg));
+    webviewView.onDidDispose(() => { this.ready = false; this.view = null; });
+  }
+  raw(msg) { if (this.ready && this.view) this.view.webview.postMessage(msg); }
+  sendEvent(sid, ev) { this.raw({ type: 'event', sid, ev }); }
+  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId }); }
+  replay(s) {
+    this.sendEvent(s.id, { kind: 'clear' });
+    for (const ev of s.history) this.sendEvent(s.id, ev);
+    this.sendEvent(s.id, { kind: 'busy', busy: s.busy });
+    this.sendEvent(s.id, { kind: 'status', text: s.lastStatus });
+  }
+  get(id) { return this.sessions.find((s) => s.id === id); }
+  active() { return this.get(this.activeId); }
+
+  onMessage(msg) {
+    const s = msg.sid ? this.get(msg.sid) : null;
+    switch (msg.type) {
+      case 'ready':
+        this.ready = true;
+        if (!this.sessions.length) { this.addSession('claude', { quiet: true }); this.addSession('codex', { quiet: true }); this.activeId = this.sessions[0].id; this.persist(); }
+        this.sendTabs();
+        for (const x of this.sessions) this.replay(x);
+        return;
+      case 'send': if (s) s.send(msg.text); return;
+      case 'stop': if (s) s.interrupt(); return;
+      case 'permission': if (s) s.answerPermission(msg.id, msg.decision); return;
+      case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
+      case 'activate': this.activate(msg.sid); return;
+      case 'new': this.addSession(msg.kind); return;
+      case 'close': this.closeSession(msg.sid); return;
+      default: return;
+    }
+  }
+
+  // ---- session management
+  addSession(kind, { quiet, fill } = {}) {
+    if (kind !== 'claude' && kind !== 'codex') return null;
+    const n = ++this.counters[kind];
+    const s = new Session(this, { kind, title: `${kind === 'claude' ? 'Claude' : 'Codex'} ${n}` });
+    this.sessions.push(s);
+    if (quiet) return s;
+    this.activeId = s.id;
+    this.persist();
+    this.sendTabs();
+    this.replay(s);
+    if (fill) this.sendEvent(s.id, { kind: 'fill', text: fill });
+    return s;
+  }
+
+  closeSession(id) {
+    const i = this.sessions.findIndex((s) => s.id === id);
+    if (i < 0) return;
+    this.sessions[i].dispose();
+    this.sessions.splice(i, 1);
+    if (this.activeId === id) { const next = this.sessions[Math.min(i, this.sessions.length - 1)]; this.activeId = next ? next.id : null; }
+    this.persist();
+    this.sendTabs();
+  }
+
+  activate(id) {
+    const s = this.get(id);
+    if (!s) return;
+    this.activeId = id;
+    if (s.attention && !s.pending.size) s.attention = false;
+    this.persist();
+    this.sendTabs();
+  }
+
+  async handoff() {
+    const from = this.active();
+    const text = from ? from.lastAnswer() : '';
+    if (!text) { vscode.window.showInformationMessage('The active Perch tab has no answer to hand off yet.'); return; }
+    const items = [
+      ...this.sessions.filter((s) => s.id !== from.id).map((s) => ({ label: s.title, description: s.kind, sid: s.id })),
+      { label: 'New Claude tab', description: 'claude', kind: 'claude' },
+      { label: 'New Codex tab', description: 'codex', kind: 'codex' },
+    ];
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: `Send the last answer from "${from.title}" to…` });
+    if (!pick) return;
+    if (pick.sid) { this.activate(pick.sid); this.sendEvent(pick.sid, { kind: 'fill', text }); }
+    else this.addSession(pick.kind, { fill: text });
+    if (this.view) this.view.show(true);
+  }
+
+  dispose() { for (const s of this.sessions) s.dispose(); }
 }
 
 function activate(context) {
-  const claude = new AgentView('claude', context);
-  const codex = new AgentView('codex', context);
+  const perch = new PerchView(context);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('perch.claude', claude, { webviewOptions: { retainContextWhenHidden: true } }),
-    vscode.window.registerWebviewViewProvider('perch.codex', codex, { webviewOptions: { retainContextWhenHidden: true } }),
-    vscode.commands.registerCommand('perch.claude.newSession', () => claude.newSession()),
-    vscode.commands.registerCommand('perch.claude.stop', () => claude.interrupt()),
-    vscode.commands.registerCommand('perch.codex.newSession', () => codex.newSession()),
-    vscode.commands.registerCommand('perch.codex.stop', () => codex.interrupt()),
-    vscode.commands.registerCommand('perch.handoff.toCodex', () => { const t = claude.lastAnswer(); if (t) codex.fill(t); else vscode.window.showInformationMessage('Claude has no answer to hand off yet.'); }),
-    vscode.commands.registerCommand('perch.handoff.toClaude', () => { const t = codex.lastAnswer(); if (t) claude.fill(t); else vscode.window.showInformationMessage('Codex has no answer to hand off yet.'); }),
-    { dispose: () => { claude.dispose(); codex.dispose(); } },
+    vscode.window.registerWebviewViewProvider('perch.main', perch, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
+    vscode.commands.registerCommand('perch.newCodex', () => perch.addSession('codex')),
+    vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
+    vscode.commands.registerCommand('perch.closeTab', () => { if (perch.activeId) perch.closeSession(perch.activeId); }),
+    vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    { dispose: () => perch.dispose() },
   );
+  return perch;   // exposed for tests
 }
 
 function deactivate() {}
