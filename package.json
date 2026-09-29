@@ -1,8 +1,8 @@
 {
   "name": "perch",
   "displayName": "Perch",
-  "description": "Claude Code and Codex agents as tabs in one sidebar. Any number of sessions. A shell, not an agent.",
-  "version": "0.2.0",
+  "description": "Claude Code and Codex agents as tabs in one sidebar, with Claude usage and backend switching. A shell, not an agent.",
+  "version": "0.3.0",
   "publisher": "fennets",
   "license": "MIT",
   "engines": {
@@ -68,6 +68,23 @@
         "command": "perch.refreshModels",
         "title": "Perch: Refresh Model Lists",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "perch.toggleSettings",
+        "title": "Perch: Show or Hide Model, Effort, and Mode",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "perch.meter.refresh",
+        "title": "Perch: Refresh Claude Usage"
+      },
+      {
+        "command": "perch.meter.toggleBackend",
+        "title": "Perch: Switch Claude Backend (Subscription / API)"
+      },
+      {
+        "command": "perch.meter.login",
+        "title": "Perch: Log in to Claude (subscription)"
       }
     ],
     "menus": {
@@ -101,6 +118,21 @@
           "command": "perch.refreshModels",
           "when": "view == perch.main",
           "group": "2_models@1"
+        },
+        {
+          "command": "perch.toggleSettings",
+          "when": "view == perch.main",
+          "group": "2_models@0"
+        },
+        {
+          "command": "perch.meter.toggleBackend",
+          "when": "view == perch.main",
+          "group": "3_meter@1"
+        },
+        {
+          "command": "perch.meter.refresh",
+          "when": "view == perch.main",
+          "group": "3_meter@2"
         }
       ]
     },
@@ -164,6 +196,71 @@
           "type": "string",
           "default": "",
           "description": "Codex reasoning effort for new tabs, for example high. Empty uses ~/.codex/config.toml or the model's default. Ignored if the tab's model does not accept it."
+        },
+        "perch.meter.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "subscription",
+            "cost"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "Cost when Claude is configured for Bedrock or API, subscription limits otherwise.",
+            "Subscription limits from the usage endpoint.",
+            "Token totals and estimated cost from local transcripts."
+          ],
+          "description": "What the Claude usage gauge shows."
+        },
+        "perch.meter.pollMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "How often the Claude usage gauge refreshes, in minutes."
+        },
+        "perch.meter.display": {
+          "type": "string",
+          "enum": [
+            "remaining",
+            "used"
+          ],
+          "default": "remaining",
+          "description": "Show percent remaining, fuel-tank style, or percent used."
+        },
+        "perch.meter.showModelWeekly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also show model-scoped weekly limits when reported."
+        },
+        "perch.meter.warnBelow": {
+          "type": "number",
+          "default": 25,
+          "description": "Warning colour when any limit has less than this percent remaining."
+        },
+        "perch.meter.errorBelow": {
+          "type": "number",
+          "default": 10,
+          "description": "Error colour when any limit has less than this percent remaining."
+        },
+        "perch.meter.hideWhenUnavailable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide the status bar items when no Claude credentials are found."
+        },
+        "perch.meter.statusBar": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "Show the status bar items unless the standalone AI Meter extension is installed.",
+            "Always show them.",
+            "Never show them; the panel footer is enough."
+          ],
+          "description": "Whether Perch puts the Claude usage gauge and backend switch in the status bar."
         }
       }
     }
@@ -176,7 +273,7 @@
     "check": "for f in src/*.js test/*.js; do node --check \"$f\" || exit 1; done",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/models.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/models.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

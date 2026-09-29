@@ -1,6 +1,7 @@
 # perch
 
-Claude Code and Codex as tabs in one VS Code sidebar. Any number of sessions.
+Claude Code and Codex as tabs in one VS Code sidebar. Any number of sessions,
+with Claude usage and backend switching built in.
 
 perch is a **shell, not an agent**. Each tab spawns the vendor's own
 agent through its SDK, so prompt caching, context compaction,
@@ -62,9 +63,11 @@ message.
 
 ## Model and effort
 
-Each tab has three selectors in its status bar: **model**, **effort**, and
-**mode** (Claude) or **sandbox** (Codex). The status text beside them
-shows state only: idle, working, or ready.
+Each tab's status bar shows its state (idle, working, ready) and a
+one-line summary such as `Opus 5.5 · high · default`. Press the **gear**
+to show the selectors: **model**, **effort**, and **mode** (Claude) or
+**sandbox** (Codex). They are hidden by default, one switch covers every
+tab, and the choice is remembered.
 
 The lists come from the agents themselves, so they match your account:
 
@@ -88,6 +91,47 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,
 `perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
 
+## Claude usage and backend
+
+The footer of the panel shows, for Claude:
+
+- a **backend switch**, `sub` or `API`. Click it to move new Claude tabs
+  and sessions between your subscription login and API / Bedrock. It
+  writes `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json` and
+  leaves the rest of the file alone. Running tabs keep the backend they
+  started on, and are told so.
+- a **usage gauge**. On a subscription: percent remaining and time to
+  reset for the 5-hour session, the week, and any model-scoped weekly
+  limit, amber or red when one runs low. On API / Bedrock: the model in
+  use and today's tokens and estimated cost, from the local transcripts.
+  Click to refresh. Hover for detail.
+
+This is [AI Meter](https://github.com/seanahn/ai-meter) merged into perch.
+perch also provides AI Meter's two status bar items, but stands down while
+the standalone extension is installed, so the gauge is never shown twice.
+Uninstall AI Meter and perch takes over the status bar on its own. Set
+`perch.meter.statusBar` to `on` or `off` to decide yourself.
+
+Privacy is unchanged from AI Meter. Subscription mode reads the OAuth token
+Claude Code stores and sends it only to `api.anthropic.com/api/oauth/usage`.
+Cost mode makes no network requests. Costs are estimates at Anthropic list
+prices; Bedrock or partner billing may differ.
+
+Switching models pins: a Bedrock model id saved in the settings file is
+set aside when you switch to subscription, which cannot use it, and put
+back when you switch to API. A settings file that is not valid JSON is
+never overwritten; perch tells you instead.
+
+The usage endpoint rate-limits. When it does, perch keeps the last reading,
+marks it stale in the tooltip, and leaves the endpoint alone for at least a
+minute, doubling up to half an hour. Clicking refresh during that pause
+makes no request.
+
+Settings: `perch.meter.mode`, `pollMinutes`, `display`, `showModelWeekly`,
+`warnBelow`, `errorBelow`, `hideWhenUnavailable`, `statusBar`.
+
+Codex has no equivalent gauge; the footer is about Claude only.
+
 ## Cost
 
 Both agents run on your subscriptions through their normal logins. This
@@ -100,7 +144,10 @@ would require API-key billing under both vendors' terms.
 - `src/claudeAgent.js` — Claude Agent SDK session, no VS Code dependency
 - `src/codexAgent.js` — Codex SDK thread, no VS Code dependency
 - `src/models.js` — model catalogs read from the agents, no VS Code dependency
+- `src/meter.js` — Claude usage, cost, and the backend switch, no VS Code dependency
+- `src/meterHost.js` — polling, status bar items, login
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
+- `test/meter.test.js` — usage, cost, and the switch, against throwaway home directories
 - `test/models.test.js` — catalog parsing, no model calls
 - `test/host.test.js` — host logic against a stubbed VS Code API, no model calls
 - `test/page.test.js` — the real page script in a DOM, no model calls

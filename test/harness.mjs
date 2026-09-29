@@ -27,6 +27,23 @@ let failed = 0;
   if (!cx || !cx.models.length) { console.log('codex catalog FAILED'); failed++; }
 }
 {
+  // the real meter, read-only: one request to the usage endpoint, and the backend flag as Claude Code would see it.
+  // The switch itself is never exercised here: it writes ~/.claude/settings.json.
+  const { createMeter, summarize } = require('../src/meter.js');
+  const m = createMeter(); const before = (() => { try { return require('fs').readFileSync(m.settingsPath, 'utf8'); } catch (_) { return null; } })();
+  const api = m.bedrockConfigured();
+  if (api) { const c = m.computeCostStats(); const s = summarize({ mode: 'cost', backend: 'api', apiCredentials: m.apiCredentialsPresent(), cost: c }); console.log(`meter: backend API, cost mode "${s.text}"`); }
+  else {
+    const u = await m.fetchUsage(); const s = summarize({ mode: 'subscription', backend: 'subscription', limits: u.limits, error: u.error });
+    console.log(`meter: backend sub, usage "${s.text}" level ${s.level}` + (u.error ? ` error ${u.error}` : ''));
+    // The endpoint rate-limits, and a developer running the suite repeatedly will trip it. That is not a defect.
+    if (u.error === 'rate-limited') console.log('meter: usage endpoint is rate limiting right now; live usage check skipped');
+    else if (!u.limits) { console.log('meter FAILED'); failed++; }
+  }
+  const after = (() => { try { return require('fs').readFileSync(m.settingsPath, 'utf8'); } catch (_) { return null; } })();
+  if (before !== after) { console.log('meter FAILED: reading changed the settings file'); failed++; }
+}
+{
   const c = collector('claude');
   const a = new ClaudeAgent({ cwd: process.cwd(), emit: c.emit, permissionMode: 'default', effort: 'low', askPermission: async () => ({ decision: 'deny' }) });
   a.send('Reply with exactly: perch claude ok');

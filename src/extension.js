@@ -5,6 +5,7 @@ const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
 const { loadClaudeModels, loadCodexModels } = require('./models');
+const { MeterHost } = require('./meterHost');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -17,6 +18,7 @@ const EFFORTS = {
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 const STATE_KEY = 'perch.sessions.v1';
+const UI_KEY = 'perch.ui.v1';
 // Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
 const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
 
@@ -70,6 +72,7 @@ class Session {
     this.model = typeof model === 'string' ? model : defaultModel(kind);     // '' = the agent's default model
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
+    this.backend = '';               // claude only: the backend this tab's agent started on
     this.reconcile();
     this.agentSessionId = resume || null;
     this.agent = null;               // started lazily on first message
@@ -140,6 +143,7 @@ class Session {
     const emit = (ev) => this.post(ev);
     const resume = this.agentSessionId || undefined;
     if (this.kind === 'claude') {
+      this.backend = this.view.meter ? this.view.meter.backend() : '';     // fixed for the life of the agent process
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
@@ -214,6 +218,7 @@ class Session {
       model: this.model, models: this.modelOptions(), actualModel: this.actualModel,
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
+      backend: this.agent ? this.backend : '',
     };
   }
   toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, resume: this.agentSessionId }; }
@@ -230,8 +235,23 @@ class PerchView {
     this.counters = { claude: 0, codex: 0 };
     this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
     this.loading = null;
+    const ui = context.workspaceState.get(UI_KEY);
+    this.ui = { settingsOpen: !!(ui && ui.settingsOpen) };        // the selectors are hidden until asked for
+    this.meter = new MeterHost(context, (state, why) => this.onMeter(state, why));
     this.restore();
   }
+
+  // ---- Claude usage and backend
+  onMeter(state, why) {
+    this.raw({ type: 'meter', meter: state });
+    if (why !== 'backend') return;
+    // models differ by backend, and a running agent cannot change how it authenticated
+    this.loadCatalogs(true);
+    for (const s of this.sessions) if (s.kind === 'claude' && s.agent && s.backend && s.backend !== state.backend) {
+      s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab keeps ${s.backend === 'api' ? 'API / Bedrock' : 'subscription'} until it is closed; open a new tab to use the new backend.` });
+    }
+  }
+  setSettingsOpen(open) { this.ui.settingsOpen = !!open; this.context.workspaceState.update(UI_KEY, this.ui); this.sendTabs(); }
 
   /** Read both agents' model lists. Codex is a file read; Claude starts its CLI without sending a message. */
   loadCatalogs(force) {
@@ -278,7 +298,7 @@ class PerchView {
   }
   raw(msg) { if (this.ready && this.view) this.view.webview.postMessage(msg); }
   sendEvent(sid, ev) { this.raw({ type: 'event', sid, ev }); }
-  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId }); }
+  sendTabs() { this.raw({ type: 'tabs', tabs: this.sessions.map((s) => s.toTab()), active: this.activeId, ui: this.ui }); }
   replay(s) {
     this.sendEvent(s.id, { kind: 'clear' });
     for (const ev of s.history) this.sendEvent(s.id, ev);
@@ -294,6 +314,7 @@ class PerchView {
       case 'ready':
         this.ready = true;
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
+        this.raw({ type: 'meter', meter: this.meter.state() });
         this.loadCatalogs();
         for (const x of this.sessions) this.replay(x);
         return;
@@ -303,6 +324,10 @@ class PerchView {
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
       case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
+      case 'ui': this.setSettingsOpen(msg.settingsOpen); return;
+      case 'meterRefresh': this.meter.poll(); return;
+      case 'meterToggle': this.meter.toggleBackend(); return;
+      case 'meterLogin': this.meter.login(); return;
       case 'activate': this.activate(msg.sid); return;
       case 'new': this.addSession(msg.kind); return;
       case 'close': this.closeSession(msg.sid); return;
@@ -360,11 +385,12 @@ class PerchView {
     if (this.view) this.view.show(true);
   }
 
-  dispose() { for (const s of this.sessions) s.dispose(); }
+  dispose() { for (const s of this.sessions) s.dispose(); this.meter.dispose(); }
 }
 
 function activate(context) {
   const perch = new PerchView(context);
+  perch.meter.start();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('perch.main', perch, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
@@ -373,6 +399,10 @@ function activate(context) {
     vscode.commands.registerCommand('perch.closeTab', () => { if (perch.activeId) perch.closeSession(perch.activeId); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
     vscode.commands.registerCommand('perch.refreshModels', () => perch.loadCatalogs(true)),
+    vscode.commands.registerCommand('perch.toggleSettings', () => perch.setSettingsOpen(!perch.ui.settingsOpen)),
+    vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
+    vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
+    vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),
     { dispose: () => perch.dispose() },
   );
   return perch;   // exposed for tests

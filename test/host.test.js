@@ -4,6 +4,7 @@
 const assert = require('assert');
 const { install, fakeView, created, flush } = require('./stubs');
 const vals = (list) => list.map((o) => o.value);
+const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
 
 (async () => {
   const { perch, registered, commands, memento, picks, cats, loads } = install();
@@ -255,6 +256,169 @@ const vals = (list) => list.map((o) => o.value);
   await flush();
   assert.strictEqual(v9.lastTabs().tabs[0].effort, '', 'dropped once the catalog shows this model has no effort control');
   assert.strictEqual(late.memento._dump()['perch.sessions.v1'].sessions[0].effort, '', 'and the correction is saved');
+
+  // ======================================================================== Claude usage and backend (merged from AI Meter)
+  {
+    const m = install();                                                      // subscription, logged in, AI Meter not installed
+    await flush();
+    assert.deepStrictEqual(m.ui.bars.map((x) => [x.id, x.shown]), [['perch.meter.usage', true], ['perch.meter.backend', true]], 'perch owns the status bar when the standalone extension is absent');
+    assert(/^\$\(dashboard\) 1\.0h 91% 6\.\dd 95%$/.test(m.ui.bars[0].text), m.ui.bars[0].text);
+    assert.strictEqual(m.ui.bars[1].text, '$(account) sub');
+    assert(/5h session/.test(m.ui.bars[0].tooltip.value) && /Weekly/.test(m.ui.bars[0].tooltip.value));
+    assert.strictEqual(m.globalState._dump()['perch.meter.limits'].length, 2, 'the reading is cached for the next reload');
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    let st = v.lastMeter();
+    assert.deepStrictEqual([st.backend, st.backendLabel, st.mode, st.level, st.action, st.segments.length], ['subscription', 'sub', 'subscription', 'ok', 'refresh', 2], 'the page is given the gauge as soon as it is ready');
+
+    // refresh from the page and from the command
+    const f0 = m.box.fetches;
+    m.box.usage = { limits: [{ kind: 'session', percent: 93, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }], error: null };
+    v.fire({ type: 'meterRefresh' }); await flush();
+    assert.strictEqual(m.box.fetches, f0 + 1);
+    st = v.lastMeter(); assert.deepStrictEqual([st.text, st.level], ['1.0h 7%', 'error'], 'a limit running low turns red');
+    assert.strictEqual(m.ui.bars[0].backgroundColor.id, 'statusBarItem.errorBackground');
+    await m.commands['perch.meter.refresh'](); assert.strictEqual(m.box.fetches, f0 + 2);
+    m.box.usage = { limits: null, error: 'network' }; v.fire({ type: 'meterRefresh' }); await flush();
+    assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().error], ['1.0h 7%', 'network'], 'a failed poll keeps the last good reading');
+
+    // switching backend: two claude tabs, one running and one not; a codex tab is unaffected
+    v.fire({ type: 'new', kind: 'claude' }); const run = v.lastTabs().active; v.fire({ type: 'send', sid: run, text: 'hi' });
+    v.fire({ type: 'new', kind: 'claude' }); const idle = v.lastTabs().active;
+    v.fire({ type: 'new', kind: 'codex' }); const cx = v.lastTabs().active; v.fire({ type: 'send', sid: cx, text: 'hi' });
+    assert.strictEqual(v.lastTabs().tabs.find((x) => x.id === run).backend, 'subscription', 'a running tab knows the backend it started on');
+    assert.strictEqual(v.lastTabs().tabs.find((x) => x.id === idle).backend, '', 'a tab that has not started has none yet');
+    const loads0 = m.loads.claude; m.box.cost = { session: { tokens: 1200, cost: 0.5 }, today: { tokens: 5.2e6, cost: 18.94 }, latestModel: 'us.anthropic.claude-opus-5', days: [{ label: 'Mon', tokens: 1, cost: 1 }], models: new Map() };
+    v.fire({ type: 'meterToggle' }); await flush(); await flush();
+    assert.deepStrictEqual(m.box.writes, [true], 'the settings file is written once');
+    assert.strictEqual(m.globalState._dump()['perch.meter.stash.model'], undefined, 'model pins go through the stash');
+    st = v.lastMeter();
+    assert.deepStrictEqual([st.backend, st.backendLabel, st.mode, st.text], ['api', 'API', 'cost', 'opus-5 5.2M $18.9'], 'auto mode follows the backend into cost mode');
+    assert.deepStrictEqual([m.ui.bars[1].text, m.ui.bars[0].text], ['$(cloud) API', '$(dashboard) opus-5 5.2M $18.9']);
+    assert(/new tabs and new sessions\. Running ones keep/.test(m.ui.infos.pop()));
+    assert.strictEqual(m.loads.claude, loads0 + 1, 'the model list is re-read, because models differ by backend');
+    assert(v.events(run).some((e) => e.kind === 'note' && /backend is now API \/ Bedrock\. This tab keeps subscription/.test(e.text)), 'a running tab is told it keeps its backend');
+    assert(!v.events(idle).some((e) => e.kind === 'note' && /backend/.test(e.text)), 'a tab that has not started is not');
+    assert(!v.events(cx).some((e) => e.kind === 'note' && /backend/.test(e.text)), 'nor is a codex tab');
+    v.fire({ type: 'send', sid: idle, text: 'go' });
+    assert.strictEqual(v.lastTabs().tabs.find((x) => x.id === idle).backend, 'api', 'the tab started after the switch is on the new backend');
+
+    // and back, on a machine with no subscription login: the login is offered
+    m.box.login = false; m.ui.answers.push('Log In');
+    await m.commands['perch.meter.toggleBackend'](); await flush(); await flush();
+    assert.deepStrictEqual(m.box.writes, [true, false]);
+    assert(/has no subscription login yet/.test(m.ui.infos.pop()));
+    assert.deepStrictEqual(m.ui.executed, ['claude-vscode.editor.openLast'], 'login opens the Claude Code panel when that extension is installed');
+    assert.strictEqual(v.lastMeter().backend, 'subscription');
+    assert.strictEqual(v.events(idle).filter((e) => e.kind === 'note' && /backend is now subscription/.test(e.text)).length, 1);
+    assert.strictEqual(v.events(run).filter((e) => e.kind === 'note' && /backend is now/.test(e.text)).length, 1, 'a tab already on that backend is not told again');
+
+    // no API credentials: a modal first, and cancelling writes nothing
+    m.box.apiCreds = false; m.box.login = true;
+    v.fire({ type: 'meterToggle' }); await flush();
+    assert(/No Bedrock or API credentials found/.test(m.ui.warnings.pop())); assert.deepStrictEqual(m.box.writes, [true, false], 'cancelled: nothing written');
+    m.ui.answers.push('Switch Anyway'); v.fire({ type: 'meterToggle' }); await flush(); await flush();
+    assert.deepStrictEqual(m.box.writes, [true, false, true]);
+    assert.deepStrictEqual([v.lastMeter().backendWarn, m.ui.bars[1].text, m.ui.bars[1].backgroundColor.id], [true, '$(cloud) API $(warning)', 'statusBarItem.warningBackground'], 'the switch stays highlighted until credentials exist');
+
+    // a settings file that cannot be written: say so, change nothing
+    m.box.failWrite = 'EACCES'; m.box.apiCreds = true;
+    v.fire({ type: 'meterToggle' }); await flush();
+    assert(/could not update .*settings\.json\. EACCES/.test(m.ui.errors.pop())); assert.strictEqual(v.lastMeter().backend, 'api');
+    m.box.failWrite = null;
+
+    // settings: mode pinned, display, thresholds
+    m.changeConfig({ 'meter.mode': 'subscription', 'meter.display': 'used' }); await flush();
+    m.box.usage = { limits: LIM(30), error: null }; v.fire({ type: 'meterRefresh' }); await flush();
+    assert.deepStrictEqual([v.lastMeter().mode, v.lastMeter().text, v.lastMeter().backend], ['subscription', '1.0h 30%', 'api'], 'a pinned mode does not follow the backend');
+    m.changeConfig({ 'meter.warnBelow': 80 }); await flush();
+    assert.strictEqual(v.lastMeter().level, 'warn');
+
+    // status bar placement
+    m.changeConfig({ 'meter.statusBar': 'off' }); await flush();
+    assert.deepStrictEqual(m.ui.bars.map((x) => x.disposed), [true, true], 'off removes the items');
+    assert.strictEqual(v.lastMeter().text, '1.0h 30%', 'the panel footer still works');
+    m.changeConfig({ 'meter.statusBar': 'auto' }); await flush();
+    assert.deepStrictEqual(m.ui.bars.slice(2).map((x) => [x.id, x.shown]), [['perch.meter.usage', true], ['perch.meter.backend', true]]);
+    m.changeExtensions({ 'seanahn.ai-meter': { icon: 'x.png' } });
+    assert.deepStrictEqual(m.ui.bars.slice(2).map((x) => x.disposed), [true, true], 'installing the standalone extension makes perch stand down');
+    m.changeExtensions({ 'seanahn.ai-meter': null });
+    assert.strictEqual(m.ui.bars.length, 6, 'and removing it brings perch back');
+    m.perch.dispose(); assert.deepStrictEqual(m.ui.bars.slice(4).map((x) => x.disposed), [true, true]);
+  }
+  {
+    // the standalone extension is installed: no duplicate gauge in the status bar, but the panel has it
+    const m = install(undefined, { extensions: { 'seanahn.ai-meter': { icon: 'x.png' } } }); await flush();
+    assert.deepStrictEqual(m.ui.bars, [], 'perch stands down');
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.strictEqual(v.lastMeter().segments.length, 2);
+    m.changeConfig({ 'meter.statusBar': 'on' }); await flush();
+    assert.strictEqual(m.ui.bars.length, 2, 'unless asked');
+  }
+  {
+    // never logged in
+    const m = install(undefined, { meter: { usage: { limits: null, error: 'no-credentials' } }, extensions: {} }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().action, v.lastMeter().level], ['—', 'login', 'none']);
+    assert(/command:perch\.meter\.login/.test(m.ui.bars[0].tooltip.value));
+    v.fire({ type: 'meterLogin' }); await flush();
+    assert.strictEqual(m.ui.terminals.length <= 1, true);                     // a terminal only if a claude CLI exists on this machine
+    m.changeConfig({ 'meter.hideWhenUnavailable': true }); await flush();
+    assert.deepStrictEqual(m.ui.bars.map((x) => x.shown), [false, false], 'hidden on request when there is nothing to show');
+  }
+  {
+    // the cached reading is shown before the first poll returns
+    const cached = LIM(40);
+    const m = install(undefined, { globals: { 'perch.meter.limits': cached, 'perch.meter.limits.at': 123 }, meter: { usage: { limits: null, error: 'network' } } });
+    assert(/1\.0h 60%/.test(m.ui.bars[0].text), 'shown at once, from the cache');
+    await flush(); assert(/1\.0h 60%/.test(m.ui.bars[0].text), 'and kept when the poll fails');
+  }
+
+  {
+    // rate limited: keep the reading, stop asking for a while, and never fast-retry
+    const m = install(undefined, { meter: { usage: { limits: null, error: 'rate-limited', retryAfterMs: 0 } }, extensions: {} }); await flush();
+    const h = m.perch.meter;
+    assert.strictEqual(h.retryTimer, null, 'no 15-second retry against an endpoint that said to slow down');
+    assert(h.backoffUntil - Date.now() > 55000 && h.backoffMs === 60000, 'at least a minute of quiet');
+    assert.strictEqual(m.box.fetches, 1);
+    await h.poll(); await h.poll();
+    assert.strictEqual(m.box.fetches, 1, 'polls inside the quiet period make no request');
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'meterRefresh' }); await flush();
+    assert.strictEqual(m.box.fetches, 1, 'not even when clicked');
+    assert.deepStrictEqual([v.lastMeter().error, v.lastMeter().text], ['rate-limited', '—']);
+    h.backoffUntil = 0; m.box.usage = { limits: null, error: 'rate-limited', retryAfterMs: 300000 }; await h.poll();
+    assert.deepStrictEqual([m.box.fetches, h.backoffMs], [2, 300000], 'Retry-After is honoured when it asks for longer');
+    h.backoffUntil = 0; m.box.usage = { limits: null, error: 'rate-limited', retryAfterMs: 0 }; await h.poll();
+    assert.strictEqual(h.backoffMs, 600000, 'and the quiet period doubles on a repeat');
+    for (let i = 0; i < 5; i++) { h.backoffUntil = 0; await h.poll(); }
+    assert.strictEqual(h.backoffMs, 30 * 60000, 'up to half an hour');
+    h.backoffUntil = 0; m.box.usage = { limits: LIM(10), error: null }; await h.poll();
+    assert.deepStrictEqual([h.backoffMs, h.backoffUntil, v.lastMeter().text, v.lastMeter().stale], [0, 0, '1.0h 90%', undefined], 'a success clears it');
+    m.box.usage = { limits: null, error: 'rate-limited' }; await h.poll();
+    assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().stale, h.retryTimer], ['1.0h 90%', true, null], 'a later rate limit keeps the reading and marks it stale');
+    m.perch.dispose();
+  }
+  {
+    // any other failure with nothing cached: the fast retry still applies
+    const m = install(undefined, { meter: { usage: { limits: null, error: 'network' } }, extensions: {} }); await flush();
+    assert.notStrictEqual(m.perch.meter.retryTimer, null);
+    m.box.usage = { limits: LIM(10), error: null }; await m.perch.meter.poll();
+    assert.strictEqual(m.perch.meter.retryTimer, null, 'and stops at the first success');
+    m.perch.dispose();
+  }
+
+  // ======================================================================== the selectors are hidden until asked for
+  {
+    const m = install(); const pv = m.registered['perch.main'];
+    const v = fakeView(); pv.resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: false }, 'hidden by default');
+    v.fire({ type: 'ui', settingsOpen: true });
+    assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: true });
+    m.commands['perch.toggleSettings'](); assert.deepStrictEqual(v.lastTabs().ui, { settingsOpen: false }, 'the command toggles it');
+    m.commands['perch.toggleSettings']();
+    const again = install(m.memento._dump()); const v2 = fakeView(); again.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' });
+    assert.deepStrictEqual(v2.lastTabs().ui, { settingsOpen: true }, 'the choice survives a reload');
+  }
 
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

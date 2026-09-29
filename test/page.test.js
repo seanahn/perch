@@ -1,7 +1,9 @@
 'use strict';
 // Runs the real webview script in a DOM and drives it the way the host does.
 const assert = require('assert');
-const { JSDOM } = require('jsdom');
+const { JSDOM, VirtualConsole } = require('jsdom');
+// a page script that fails to parse or throws is reported as such, not as a missing 'ready' message
+const virtualConsole = new VirtualConsole(); virtualConsole.on('jsdomError', (e) => { console.error('PAGE SCRIPT ERROR:', e.detail && e.detail.message || e.message); process.exitCode = 1; });
 const { getHtml } = require('../src/webview');
 
 const ICONS = { claude: { glyph: 'vscode-resource://host/claude.svg', image: 'vscode-resource://host/claude.png' }, codex: { glyph: 'vscode-resource://host/blossom.svg', image: 'vscode-resource://host/chatgpt.png' } };
@@ -9,7 +11,7 @@ const IMAGES_ONLY = { claude: { image: ICONS.claude.image }, codex: { image: ICO
 const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
 const html = getHtml({ nonce: 'n', cspSource: 'x', icons: ICONS }).replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
 const out = [];
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
+const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
 const { window } = dom; const d = window.document;
 const host = (m) => window.dispatchEvent(new window.MessageEvent('message', { data: m }));
 const ev = (sid, e) => host({ type: 'event', sid, ev: e });
@@ -54,7 +56,7 @@ ev('b', { kind: 'text', text: 'codex says hi' });
 const paneA = $$('.pane')[0], paneB = $$('.pane')[1];
 assert.deepStrictEqual([...paneA.querySelectorAll('.msg')].map((m) => m.textContent), ['hello a', 'final answer']);
 assert.deepStrictEqual([...paneB.querySelectorAll('.msg')].map((m) => m.textContent), ['codex says hi'], 'background tab received its own event only');
-assert.strictEqual(paneA.querySelector('.bar .grow').textContent, 'ready · a', 'status is per tab');
+assert.strictEqual(paneA.querySelector('.bar .state').textContent, 'ready · a', 'status is per tab');
 
 // drafts are per tab
 $('#input').value = 'draft for a';
@@ -96,6 +98,26 @@ const kids = [...paneA.querySelectorAll('.msg')]; const ti = kids.findIndex((k) 
 assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under its tool call');
 ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, cache_read: 7680, output: 11 } });
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));
+
+// the selectors are hidden until the gear is pressed; a one-line summary stands in for them
+const ctlA = paneA.querySelector('.ctl'), gearA = paneA.querySelector('.gear'), sumA = paneA.querySelector('.sum');
+assert(!shown(ctlA) && !shown(paneB.querySelector('.ctl')), 'hidden by default');
+assert.strictEqual(sumA.textContent, 'Opus 5.5 · default · default', 'the summary names what each default resolves to');
+assert.strictEqual(paneB.querySelector('.sum').textContent, 'GPT-5.6-Sol · ultra · workspace-write');
+assert.strictEqual(paneA.querySelector('.state').textContent, 'ready · a', 'state and summary are separate');
+gearA.click();
+assert.deepStrictEqual(out.pop(), { type: 'ui', settingsOpen: true }, 'the choice is sent to the host to be remembered');
+assert(shown(ctlA) && shown(paneB.querySelector('.ctl')), 'one switch opens them on every tab');
+assert.strictEqual(gearA.getAttribute('aria-expanded'), 'true');
+host({ type: 'tabs', tabs: [A, B], active: 'a', ui: { settingsOpen: false } });
+assert(!shown(ctlA), 'the host can close them, for example from the command');
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
+assert(!shown(ctlA), 'a tabs message without ui keeps the current state');
+host({ type: 'tabs', tabs: [A, B], active: 'a', ui: { settingsOpen: true } });
+host({ type: 'tabs', tabs: [Object.assign({}, A, { model: 'haiku', effort: '', efforts: [opt('')], actualModel: 'claude-haiku-4-5', backend: 'api', started: true }), B], active: 'a' });
+assert.strictEqual(sumA.textContent, 'Haiku 4.5 · default', 'no effort in the summary for a model without effort control');
+assert(/Running claude-haiku-4-5\. Backend: API \/ Bedrock\./.test(sumA.title));
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
 
 // three selectors per tab, in a fixed order; the status text carries state only
 assert.deepStrictEqual(names(paneA), ['model', 'effort', 'mode']);
@@ -139,6 +161,30 @@ assert.strictEqual(pick(paneA, 'effort'), effA, 'controls are updated in place, 
 host({ type: 'tabs', tabs: [A, Object.assign({}, B, { started: true })], active: 'a' });
 assert(/keeps the model it started with/.test(modB.title) && /keeps the effort it started with/.test(effB.title) && /keeps the sandbox it started with/.test(pick(paneB, 'sandbox').title));
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
+
+// ---- footer: Claude backend and usage
+const $m = $('#meter'), $mb = $('#m-backend'), $mu = $('#m-usage');
+assert(!shown($m), 'hidden until the host sends a reading');
+const seg = (text, level, title) => ({ text, level, title });
+const METER = { mode: 'subscription', backend: 'subscription', backendLabel: 'sub', backendName: 'subscription (login)', backendWarn: false, backendTitle: 'Claude backend: subscription (login). Click to switch.', level: 'warn', action: 'refresh', fetchedAt: 1790708709271, lines: ['Claude usage, percent remaining', 'row'], text: '1.0h 91% 6.5d 20%', segments: [seg('1.0h 91%', 'ok', '5h session: 91% remaining'), seg('6.5d 20%', 'warn', 'Weekly: 20% remaining')] };
+host({ type: 'meter', meter: METER });
+assert(shown($m));
+assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn')], ['sub', METER.backendTitle, false]);
+assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
+assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
+assert.strictEqual($m.querySelector('.k').className, 'k glyph claude', 'marked as Claude, since Codex has no such gauge');
+$mb.click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle' });
+$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh' });
+host({ type: 'meter', meter: Object.assign({}, METER, { backend: 'api', backendLabel: 'API', backendWarn: true, mode: 'cost', level: 'ok', text: 'opus-5 5.2M $18.9', segments: [seg('opus-5', 'ok'), seg('5.2M', 'ok'), seg('$18.9', 'ok')], lines: ['Claude cost', 'Today 5.2M'] }) });
+assert.deepStrictEqual([$mb.textContent, $mb.classList.contains('warn')], ['API \u26A0', true], 'a backend with no credentials is flagged');
+assert.deepStrictEqual([...$mu.children].map((n) => n.textContent), ['opus-5', '5.2M', '$18.9']);
+assert(/^Claude cost\nToday 5\.2M\nUpdated /.test($mu.title), 'segments without their own tooltip share the detail');
+host({ type: 'meter', meter: Object.assign({}, METER, { level: 'none', action: 'login', text: '\u2014', segments: [], fetchedAt: null, lines: ['Claude usage unavailable: not logged in.'] }) });
+assert.deepStrictEqual([...$mu.children].map((n) => n.textContent), ['log in']);
+assert.strictEqual($mu.title, 'Claude usage unavailable: not logged in.\nClick to log in.');
+$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterLogin' }, 'with no login, the gauge logs in instead of refreshing');
+host({ type: 'meter', meter: null }); assert(!shown($m));
+host({ type: 'meter', meter: METER });
 
 // new-tab menu and close
 $('#add').click();

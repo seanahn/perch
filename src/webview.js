@@ -52,15 +52,26 @@ ${glyphCss}
   @keyframes pulse { 50% { opacity: .3; } }
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  .bar label { flex: none; white-space: nowrap; }
-  .bar .ctl { display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; min-width: 0; }
-  .bar select { max-width: 150px; }
-  .bar select:disabled { opacity: .6; }
-  .bar { display: flex; gap: 6px; align-items: flex-start; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  .bar .state { flex: none; }
+  .bar .sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; opacity: .8; }
+  .bar .gear { flex: none; background: none; border: none; color: inherit; padding: 0 4px; font-size: 13px; line-height: 1; opacity: .7; border-radius: 3px; }
+  .bar .gear:hover, .bar .gear.on { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
+  .ctl { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  .ctl label { flex: none; white-space: nowrap; }
+  .ctl select { max-width: 170px; font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
+  .ctl select:disabled { opacity: .6; }
+  #meter { display: flex; align-items: center; gap: 6px; padding: 3px 8px 5px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  #meter .k { width: 12px; height: 12px; }
+  #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
+  #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
+  #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
+  #meter .mu:hover { color: var(--vscode-foreground); }
+  #meter .seg.warn { color: var(--vscode-charts-yellow); }
+  #meter .seg.error { color: var(--vscode-charts-red); font-weight: 600; }
+  .bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar select { font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
-  .bar .dot, .bar .grow { margin-top: 3px; }
-  .bar .grow { min-width: 3em; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.busy { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
   .log { flex: 1; overflow-y: auto; padding: 8px; }
@@ -84,7 +95,7 @@ ${glyphCss}
   .empty button { font-size: 12px; padding: 4px 12px; display: inline-flex; gap: 6px; align-items: center; }
   button { font-size: 11px; padding: 2px 10px; border-radius: 2px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-  #compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); flex: none; }
+  #compose { display: flex; gap: 6px; padding: 8px 8px 4px; border-top: 1px solid var(--vscode-panel-border); flex: none; }
   textarea { flex: 1; resize: none; min-height: 40px; max-height: 160px; font-family: inherit; font-size: inherit; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 6px; }
   textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   /* last on purpose: an author display rule (.pane is flex) would otherwise override the hidden attribute */
@@ -94,13 +105,14 @@ ${glyphCss}
   <div id="tabs"><div id="add" title="New tab">+</div></div>
   <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div></div></div>
   <div id="compose"><textarea id="input" rows="2" disabled placeholder="Open a tab with +"></textarea><button id="send" class="primary" disabled>Send</button></div>
+  <div id="meter" hidden>${badge('claude')}<button id="m-backend" class="mb"></button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
   const $tabs = document.getElementById('tabs'), $add = document.getElementById('add'), $panes = document.getElementById('panes'), $empty = document.getElementById('empty');
   const $input = document.getElementById('input'), $send = document.getElementById('send');
   const panes = new Map();   // sid -> pane state
-  let tabs = [], active = null, menu = null;
+  let tabs = [], active = null, menu = null, ui = { settingsOpen: false };
   const ICONS = ${iconsJson}, LETTER = { claude: 'C', codex: 'X' };
 
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
@@ -120,13 +132,15 @@ ${glyphCss}
 
   function makePane(tab) {
     const root = el('div', 'pane'); root.hidden = true;
-    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'grow', 'idle'), ctl = el('span', 'ctl');
+    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'state', 'idle'), sum = el('span', 'sum'), gear = el('button', 'gear', '\u2699'), ctl = el('div', 'ctl');
     const mk = (name, type) => { const l = el('label'), c = el('select'); l.append(name + ' ', c); c.addEventListener('change', () => vscode.postMessage({ type, sid: tab.id, value: c.value })); ctl.append(l); return c; };
     const mod = mk('model', 'setModel'), eff = mk('effort', 'setEffort'), sel = mk(tab.kind === 'claude' ? 'mode' : 'sandbox', 'setMode');
-    bar.append(dot, status, ctl);
+    gear.addEventListener('click', () => { applyUi({ settingsOpen: !ui.settingsOpen }); vscode.postMessage({ type: 'ui', settingsOpen: ui.settingsOpen }); });
+    bar.append(dot, status, sum, gear);
+    ctl.hidden = !ui.settingsOpen;
     const log = el('div', 'log');
-    root.append(bar, log); $panes.append(root);
-    const p = { root, log, dot, status, sel, eff, mod, live: null, tools: {}, draft: '', kind: tab.kind };
+    root.append(bar, ctl, log); $panes.append(root);
+    const p = { root, log, dot, status, sum, gear, ctl, sel, eff, mod, live: null, tools: {}, draft: '', kind: tab.kind };
     panes.set(tab.id, p); return p;
   }
 
@@ -142,6 +156,12 @@ ${glyphCss}
     select.value = value || '';
     select.disabled = norm.length < 2;      // nothing to choose, for example a model with no effort control
   }
+  // what a selector currently resolves to, for the one-line summary: "default · Opus 5.5" reads as "Opus 5.5"
+  function resolved(select) { const o = select.options[select.selectedIndex]; return o ? o.textContent.replace(/^default · /, '') : ''; }
+  function applyUi(next) {
+    ui = { settingsOpen: !!(next && next.settingsOpen) };
+    for (const p of panes.values()) { p.ctl.hidden = !ui.settingsOpen; p.gear.classList.toggle('on', ui.settingsOpen); p.gear.title = ui.settingsOpen ? 'Hide model, effort, and mode' : 'Model, effort, and mode'; p.gear.setAttribute('aria-expanded', String(ui.settingsOpen)); }
+  }
   function syncPane(p, t) {
     setOptions(p.mod, t.models || [{ value: '', label: 'default' }], t.model);
     setOptions(p.eff, t.efforts || [{ value: '', label: 'default' }], t.effort);
@@ -149,6 +169,8 @@ ${glyphCss}
     const fixed = t.kind === 'codex' && t.started;
     p.mod.title = fixed ? 'A Codex thread keeps the model it started with. Open a new tab to change it.' : (t.actualModel ? 'Running ' + t.actualModel : 'Model for this tab');
     p.eff.title = fixed ? 'A Codex thread keeps the effort it started with. Open a new tab to change it.' : (p.eff.disabled ? 'This model has no effort control' : 'Reasoning effort. Applies from the next message.');
+    p.sum.textContent = [resolved(p.mod), p.eff.disabled ? '' : resolved(p.eff), resolved(p.sel)].filter(Boolean).join(' · ');
+    p.sum.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : 'subscription') + '. ' : '') + 'Click the gear to change.';
     p.sel.title = t.kind === 'codex' ? (fixed ? 'A Codex thread keeps the sandbox it started with. ' : '') + 'Approvals: ' + (t.approvals || 'default') + ' (setting perch.codex.approvalPolicy)' : 'Permission mode. Applies immediately.';
   }
 
@@ -170,13 +192,14 @@ ${glyphCss}
     }
   }
 
-  function applyTabs(next, nextActive) {
+  function applyTabs(next, nextActive, nextUi) {
     const prev = active;
     if (prev && panes.has(prev)) panes.get(prev).draft = $input.value;
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
     for (const t of tabs) { const p = panes.get(t.id) || makePane(t); syncPane(p, t); p.root.hidden = t.id !== active; }
+    if (nextUi) applyUi(nextUi); else applyUi(ui);
     $empty.hidden = tabs.length > 0;
     renderTabs();
     const cur = tabs.find((t) => t.id === active), p = panes.get(active);
@@ -227,6 +250,28 @@ ${glyphCss}
   $send.addEventListener('click', send);
   $input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); const cur = tabs.find((t) => t.id === active); if (cur && !cur.busy) send(); } });
 
+  // ---- Claude usage and backend, in the footer
+  const $meter = document.getElementById('meter'), $mb = document.getElementById('m-backend'), $mu = document.getElementById('m-usage');
+  let meter = null;
+  function applyMeter(m) {
+    meter = m || null;
+    $meter.hidden = !meter;
+    if (!meter) return;
+    $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \u26A0' : '');
+    $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
+    $mb.title = meter.backendTitle;
+    $mu.textContent = '';
+    $mu.className = 'mu ' + meter.level;
+    if (meter.segments.length) for (const seg of meter.segments) { const n = el('span', 'seg ' + seg.level, seg.text); if (seg.title) n.title = seg.title; $mu.append(n); }
+    else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\u2014'));
+    const when = meter.fetchedAt ? 'Updated ' + new Date(meter.fetchedAt).toLocaleTimeString() + '. ' : '';
+    const hint = meter.action === 'login' ? 'Click to log in.' : 'Click to refresh.';
+    if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
+    else { $mu.title = ''; $mu.dataset.detail = meter.lines.join('\\n'); for (const n of $mu.children) n.title += '\\n' + when + hint; }
+  }
+  $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
+  $mu.addEventListener('click', () => vscode.postMessage({ type: meter && meter.action === 'login' ? 'meterLogin' : 'meterRefresh' }));
+
   function closeMenu() { if (menu) { menu.remove(); menu = null; } }
   $add.addEventListener('click', (e) => {
     e.stopPropagation(); if (menu) { closeMenu(); return; }
@@ -245,7 +290,8 @@ ${glyphCss}
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
-    if (m.type === 'tabs') applyTabs(m.tabs, m.active);
+    if (m.type === 'tabs') applyTabs(m.tabs, m.active, m.ui);
+    else if (m.type === 'meter') applyMeter(m.meter);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
   });
   vscode.postMessage({ type: 'ready' });
