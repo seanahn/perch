@@ -100,7 +100,7 @@ ev('a', { kind: 'fill', text: 'handed off' }); assert.strictEqual($('#input').va
 ev('a', { kind: 'clear' }); assert.strictEqual(paneA.querySelectorAll('.msg').length, 0);
 host({ type: 'tabs', tabs: [], active: null });
 assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strictEqual($('#input').disabled, true);
-assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
+assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['CNew Claude tab', 'XNew Codex tab'], 'empty state offers both kinds, each with its badge');
 $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
 host({ type: 'tabs', tabs: [A], active: 'a' });
 assert(!shown($('#empty')), 'empty state hides once a tab exists');

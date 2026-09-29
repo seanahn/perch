@@ -202,6 +202,7 @@ class PerchView {
     this.sessions[i].dispose();
     this.sessions.splice(i, 1);
     if (this.activeId === id) { const next = this.sessions[Math.min(i, this.sessions.length - 1)]; this.activeId = next ? next.id : null; }
+    if (!this.sessions.length) this.counters = { claude: 0, codex: 0 };   // nothing open, nothing to collide with: numbering starts over
     this.persist();
     this.sendTabs();
   }

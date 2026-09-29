@@ -116,11 +116,14 @@ const { install, fakeView, created } = require('./stubs');
   for (const x of v3.lastTabs().tabs) v3.fire({ type: 'close', sid: x.id });
   assert.deepStrictEqual(v3.lastTabs().tabs, [], 'closing every tab returns to empty');
   assert.strictEqual(v3.lastTabs().active, null);
+  v3.fire({ type: 'new', kind: 'codex' });
+  assert.strictEqual(v3.lastTabs().tabs[0].title, 'Codex 1', 'numbering starts over once nothing is open, without a reload');
+  v3.fire({ type: 'close', sid: v3.lastTabs().tabs[0].id });
   const empty = install(again.memento._dump());
   const v4 = fakeView(); empty.registered['perch.main'].resolveWebviewView(v4.view); v4.fire({ type: 'ready' });
   assert.deepStrictEqual(v4.lastTabs().tabs, [], 'stays empty after reload; no tabs are re-created for you');
   v4.fire({ type: 'new', kind: 'claude' });
-  assert.strictEqual(v4.lastTabs().tabs[0].title, 'Claude 4', 'numbering still continues');
+  assert.strictEqual(v4.lastTabs().tabs[0].title, 'Claude 1', 'numbering starts over after a reload too');
 
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });
