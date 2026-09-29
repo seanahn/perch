@@ -20,6 +20,7 @@ const CATALOGS = {
     { value: 'gpt-5.5', label: 'GPT-5.5', description: '', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
   ] },
 };
+const CODEX_LIMITS = (a, b) => [{ kind: 'session', label: '5h', name: '5h session', percent: a, resetsAt: new Date(Date.now() + 2 * 3600000 + 60000).toISOString(), model: null }, { kind: 'weekly_all', label: 'wk', name: 'Weekly', percent: b, resetsAt: new Date(Date.now() + 150 * 3600000).toISOString(), model: null }];
 const flush = () => new Promise((r) => setImmediate(r));   // lets the async catalog load settle
 const realMeter = origLoad.call(Module, require.resolve('../src/meter.js'), module, false);
 const realModels = origLoad.call(Module, require.resolve('../src/models.js'), module, false);   // the loaders are faked; the pure helpers are real
@@ -74,7 +75,8 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
   };
   const registered = {}; const commands = {}; const picks = [];
   // the machine the meter looks at: which backend is configured, what credentials exist, what the usage endpoint says
-  const box = Object.assign({ bedrock: false, apiCreds: true, login: true, usage: { limits: LIMITS(), error: null }, cost: null, writes: [], fetches: 0, failWrite: null }, meter);
+  const box = Object.assign({ bedrock: false, apiCreds: true, login: true, usage: { limits: LIMITS(), error: null }, cost: null, writes: [], fetches: 0, failWrite: null,
+    codex: { limits: CODEX_LIMITS(4, 1), error: null, plan: 'plus', at: Date.now() - 60000 }, codexReads: 0 }, meter);
   const fakeMeter = {
     claudeDir: '/nonexistent/perch-test/.claude', settingsPath: '/nonexistent/perch-test/.claude/settings.json',
     bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
@@ -111,6 +113,7 @@ function install(state, { extensions, config, catalogs, meter, globals } = {}) {
     if (req === './claudeAgent') return { ClaudeAgent: FakeAgent };
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
     if (req === './meter') return Object.assign({}, realMeter, { createMeter: () => fakeMeter });   // real formatting and summary, fake machine
+    if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
@@ -131,9 +134,10 @@ function fakeView() {
     events: (sid) => got.filter((m) => m.type === 'event' && m.sid === sid).map((m) => m.ev),
     lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
     lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
+    lastCodex: () => (got.filter((m) => m.type === 'meter').pop() || {}).codex,
     commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
     tab: (id) => (got.filter((m) => m.type === 'tabs').pop().tabs.find((x) => x.id === id)),
     view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 
-module.exports = { install, fakeView, created, FakeAgent, flush, CATALOGS };
+module.exports = { install, fakeView, created, FakeAgent, flush, CATALOGS, CODEX_LIMITS };

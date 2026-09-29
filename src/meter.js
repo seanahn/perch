@@ -102,11 +102,12 @@ function fmtTok(n) {
 function fmtUsd(n) { return '$' + (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)); }
 
 function labelFor(limit) {
+  if (limit.label) return limit.label;
   if (limit.kind === 'session') return '5h';
   if (limit.kind === 'weekly_all') return 'wk';
   return limit.model ? limit.model.toLowerCase() : limit.kind;
 }
-function nameFor(limit) { return limit.kind === 'session' ? '5h session' : limit.kind === 'weekly_all' ? 'Weekly' : 'Weekly ' + (limit.model || 'model'); }
+function nameFor(limit) { if (limit.name) return limit.name; return limit.kind === 'session' ? '5h session' : limit.kind === 'weekly_all' ? 'Weekly' : 'Weekly ' + (limit.model || 'model'); }
 
 /** '43m' / '4.2h' / '1.6d', or '' when the reset is in the past or unparsable. */
 function fmtEta(resetsAt, now = Date.now()) {
@@ -137,18 +138,21 @@ const ERRORS = {
   'rate-limited': 'the usage endpoint is rate limiting requests; it will be tried again after a pause',
   'bad-response': 'the usage endpoint returned something unexpected',
   'cost-scan': 'could not read the Claude Code transcripts',
+  'no-codex-data': 'no Codex session on this machine has reported usage yet; it appears after the first Codex message',
+  'codex-scan': 'could not read the Codex session files',
 };
 
 /**
  * One description of the meter for every surface (panel footer, status bar).
  * @param {object} s  { mode, backend, apiCredentials, limits, cost, error, fetchedAt, envNote }
- * @param {object} o  { display, showModelWeekly, warnBelow, errorBelow, now }
+ * @param {object} o  { display, showModelWeekly, warnBelow, errorBelow, now, vendor }  vendor names whose usage this is; 'Claude' unless given
  */
 function summarize(s, o = {}) {
   const now = o.now || Date.now();
   const warnBelow = o.warnBelow === undefined ? 25 : o.warnBelow, errorBelow = o.errorBelow === undefined ? 10 : o.errorBelow;
-  const api = s.backend === 'api';
+  const api = s.backend === 'api', vendor = o.vendor || 'Claude';
   const out = {
+    vendor,
     mode: s.mode, backend: s.backend,
     backendLabel: api ? 'API' : 'sub',
     backendName: api ? 'API / Bedrock' : 'subscription (login)',
@@ -175,7 +179,7 @@ function summarize(s, o = {}) {
 
   if (!s.limits) {
     out.level = 'none';
-    out.lines.push('Claude usage unavailable: ' + (ERRORS[s.error] || s.error || 'no reading yet') + '.');
+    out.lines.push(vendor + ' usage unavailable: ' + (ERRORS[s.error] || s.error || 'no reading yet') + '.');
     if (s.error === 'no-credentials' || s.error === 'token-expired') out.action = 'login';
     return out;
   }
@@ -185,7 +189,7 @@ function summarize(s, o = {}) {
   const sameReset = (a, b) => Math.abs(new Date(a.resetsAt).getTime() - new Date(b.resetsAt).getTime()) < 60000;
   const levelOf = (rem) => (rem < errorBelow ? 'error' : rem < warnBelow ? 'warn' : 'ok');
   const rank = { ok: 0, warn: 1, error: 2 };
-  out.lines.push('Claude usage, percent ' + (showRemaining ? 'remaining' : 'used'));
+  out.lines.push(vendor + ' usage, percent ' + (showRemaining ? 'remaining' : 'used'));
   out.limits = [];
   for (const l of shown) {
     const remaining = Math.max(0, 100 - (l.percent || 0));
@@ -194,9 +198,10 @@ function summarize(s, o = {}) {
     if (rank[level] > rank[out.level]) out.level = level;
     // a model-scoped weekly that resets with the overall weekly shows the model name instead of a duplicate countdown
     const head = (l.kind === 'weekly_scoped' && weeklyAll && sameReset(l, weeklyAll)) ? (l.model || l.kind).toLowerCase() : (eta || labelFor(l));
-    out.segments.push({ text: head + ' ' + pct + '%', level, title: nameFor(l) + ': ' + remaining + '% remaining, resets ' + fmtResetTime(l) + (eta ? ' (' + eta + ')' : '') });
-    out.lines.push(tankBar(remaining) + '  ' + nameFor(l) + '  ' + remaining + '%  resets ' + fmtResetTime(l) + (eta ? ' (' + eta + ')' : ''));
-    out.limits.push({ kind: l.kind, model: l.model, name: nameFor(l), remaining, percent: l.percent || 0, resetsAt: l.resetsAt, reset: fmtResetTime(l), eta, level });
+    const reset = l.resetsAt ? 'resets ' + fmtResetTime(l) + (eta ? ' (' + eta + ')' : '') : 'window has started over';
+    out.segments.push({ text: head + ' ' + pct + '%', level, title: nameFor(l) + ': ' + remaining + '% remaining, ' + reset });
+    out.lines.push(tankBar(remaining) + '  ' + nameFor(l) + '  ' + remaining + '%  ' + reset);
+    out.limits.push({ kind: l.kind, model: l.model, name: nameFor(l), remaining, percent: l.percent || 0, resetsAt: l.resetsAt, reset: l.resetsAt ? fmtResetTime(l) : '', eta, level });
   }
   out.text = out.segments.map((x) => x.text).join(' ');
   if (s.error) { out.stale = true; out.lines.push('Showing the last reading: ' + (ERRORS[s.error] || s.error) + '.'); if (s.error === 'token-expired') out.action = 'login'; }

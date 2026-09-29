@@ -263,7 +263,7 @@
     "check": "for f in src/*.js test/*.js; do node --check \"$f\" || exit 1; done",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/models.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

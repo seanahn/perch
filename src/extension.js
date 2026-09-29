@@ -153,6 +153,7 @@ class Session {
       case 'busy':
         if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown); }); return; }   // stay busy: the next queued message starts now
         this.stopping = false;
+        if (!ev.busy && this.kind === 'codex' && this.busy) { const t = setTimeout(() => this.view.meter.refreshCodex(), 400); if (t.unref) t.unref(); }   // Codex has just recorded its limits
         this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' }); return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
       case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
@@ -297,13 +298,13 @@ class PerchView {
     this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
     this.loading = null;
     this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
-    this.meter = new MeterHost(context, (state, why) => this.onMeter(state, why));
+    this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
     this.restore();
   }
 
   // ---- Claude usage and backend
-  onMeter(state, why) {
-    this.raw({ type: 'meter', meter: state });
+  onMeter(state, why, codex) {
+    this.raw({ type: 'meter', meter: state, codex });
     if (why !== 'backend') return;
     // models differ by backend, and a running agent cannot change how it authenticated
     this.loadCatalogs(true);
@@ -390,7 +391,7 @@ class PerchView {
       case 'ready':
         this.ready = true;
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
-        this.raw({ type: 'meter', meter: this.meter.state() });
+        this.raw({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
         for (const k of Object.keys(this.commands)) if (this.commands[k].length) this.raw({ type: 'commands', kind: k, list: this.commands[k] });
         this.loadCatalogs();
         for (const x of this.sessions) this.replay(x);
@@ -403,7 +404,7 @@ class PerchView {
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
       case 'attach': this.attach(msg.sid); return;
       case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
-      case 'meterRefresh': this.meter.poll(); return;
+      case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
       case 'meterToggle': this.meter.toggleBackend(); return;
       case 'meterLogin': this.meter.login(); return;
       case 'activate': this.activate(msg.sid); return;

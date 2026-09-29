@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { createMeter, summarize, fmtTok, fmtUsd, shortModel, tankBar } = require('./meter');
+const { readCodexUsage } = require('./codexMeter');
 
 const CACHE_KEY = 'perch.meter.limits';
 const STASH = 'perch.meter.stash.';
@@ -17,7 +18,7 @@ const LEGACY = 'seanahn.ai-meter';     // the standalone extension this was merg
 const unref = (t) => { if (t && typeof t.unref === 'function') t.unref(); return t; };
 
 class MeterHost {
-  /** @param {(state: object, why: 'poll'|'backend'|'config') => void} onChange */
+  /** @param {(claude: object, why: 'poll'|'backend'|'config'|'codex', codex: object) => void} onChange */
   constructor(context, onChange) {
     this.context = context;
     this.onChange = onChange || (() => {});
@@ -53,7 +54,19 @@ class MeterHost {
       { display: this.cfg('display') || 'remaining', showModelWeekly: this.cfg('showModelWeekly') !== false, warnBelow: this.num('warnBelow', 25), errorBelow: this.num('errorBelow', 10) });
   }
 
-  emit(why) { const s = this.state(); this.renderStatusBar(s); try { this.onChange(s, why); } catch (_) { /* a listener must not break polling */ } }
+  /** ChatGPT plan usage, as Codex last recorded it on this machine. A file read: no request is made. */
+  codexState() {
+    let u;
+    try { u = readCodexUsage(); } catch (_) { u = { limits: null, error: 'codex-scan' }; }
+    const s = summarize({ mode: 'subscription', backend: 'subscription', limits: u.limits, error: u.error, fetchedAt: u.at },
+      { vendor: 'Codex', display: this.cfg('display') || 'remaining', warnBelow: this.num('warnBelow', 25), errorBelow: this.num('errorBelow', 10) });
+    s.plan = u.plan || ''; s.reached = u.reached || null; s.credits = u.credits || null;
+    s.asOf = true;                     // the reading is as old as the last Codex turn, not as the last poll
+    return s;
+  }
+  refreshCodex() { this.emit('codex'); }
+
+  emit(why) { const s = this.state(); if (why !== 'codex') this.renderStatusBar(s); try { this.onChange(s, why, this.codexState()); } catch (_) { /* a listener must not break polling */ } }
 
   start() {
     this.mode = this.resolveMode();

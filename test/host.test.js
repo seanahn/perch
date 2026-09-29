@@ -2,7 +2,8 @@
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
-const { install, fakeView, created, flush } = require('./stubs');
+const { install, fakeView, created, flush, CODEX_LIMITS } = require('./stubs');
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const vals = (list) => list.map((o) => o.value);
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
 
@@ -404,6 +405,47 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.notStrictEqual(m.perch.meter.retryTimer, null);
     m.box.usage = { limits: LIM(10), error: null }; await m.perch.meter.poll();
     assert.strictEqual(m.perch.meter.retryTimer, null, 'and stops at the first success');
+    m.perch.dispose();
+  }
+
+  // ======================================================================== Codex plan usage, for the footer of a Codex tab
+  {
+    const m = install(); await flush();
+    assert.deepStrictEqual(m.ui.bars.map((x) => x.id), ['perch.meter.usage', 'perch.meter.backend'], 'the status bar stays Claude only');
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    let cx = v.lastCodex();
+    assert.deepStrictEqual([cx.vendor, cx.plan, cx.asOf, cx.level, cx.action], ['Codex', 'plus', true, 'ok', 'refresh'], 'the page gets both readings when it is ready');
+    assert(/^2\.0h 96% 6\.\dd 99%$/.test(cx.text), cx.text);
+    assert.strictEqual(cx.lines[0], 'Codex usage, percent remaining');
+    assert.strictEqual(v.lastMeter().vendor, 'Claude');
+
+    // refreshing Codex usage reads a file; it never touches Claude's rate-limited endpoint
+    const f0 = m.box.fetches, r0 = m.box.codexReads;
+    m.box.codex = { limits: CODEX_LIMITS(80, 93), error: null, plan: 'pro', at: Date.now() };
+    v.fire({ type: 'meterRefresh', vendor: 'codex' }); await flush();
+    assert.deepStrictEqual([m.box.fetches, m.box.codexReads > r0], [f0, true]);
+    cx = v.lastCodex();
+    assert.deepStrictEqual([cx.segments.map((x) => x.level), cx.level, cx.plan], [['warn', 'error'], 'error', 'pro'], 'the same thresholds as Claude');
+    assert.strictEqual(m.ui.bars[0].backgroundColor, undefined, 'a Codex limit running low does not colour the Claude status bar item');
+    v.fire({ type: 'meterRefresh', vendor: 'claude' }); await flush(); assert.strictEqual(m.box.fetches, f0 + 1);
+    v.fire({ type: 'meterRefresh' }); await flush(); assert.strictEqual(m.box.fetches, f0 + 2, 'with no vendor named, Claude, as before');
+
+    // a Codex turn that finishes has just recorded fresh limits; a Claude turn has not
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    m.box.codex = { limits: CODEX_LIMITS(81, 93), error: null, plan: 'pro', at: Date.now() };
+    const r1 = m.box.codexReads; v.fire({ type: 'send', sid: c, text: 'hi claude' }); await wait(500);
+    const afterClaude = m.box.codexReads;
+    v.fire({ type: 'send', sid: x, text: 'hi codex' }); await wait(500);
+    assert(m.box.codexReads > afterClaude, 'read again after the Codex turn');
+    assert(/^2\.0h 19% /.test(v.lastCodex().text), 'and the page has the new figure');
+
+    // never used, and unreadable
+    m.box.codex = { limits: null, error: 'no-codex-data' }; v.fire({ type: 'meterRefresh', vendor: 'codex' }); await flush();
+    assert.deepStrictEqual([v.lastCodex().text, v.lastCodex().action, v.lastCodex().plan], ['—', 'refresh', '']); assert(/no Codex session on this machine/.test(v.lastCodex().lines[0]));
+    m.box.codex = new Error('EACCES'); v.fire({ type: 'meterRefresh', vendor: 'codex' }); await flush();
+    assert.strictEqual(v.lastCodex().error, 'codex-scan', 'a reader that throws is an error in the footer, not a crash');
+    assert.strictEqual(v.lastMeter().vendor, 'Claude', 'and Claude\'s reading is unaffected');
     m.perch.dispose();
   }
 

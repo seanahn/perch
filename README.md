@@ -127,9 +127,19 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,
 `perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
 
-## Claude usage and backend
+## Usage, in the footer
 
-The footer of the panel shows, for Claude:
+The footer follows the active tab.
+
+**Under a Codex tab**: "Work locally", your ChatGPT plan, and the plan's
+usage: percent remaining and time to reset for the five-hour window and
+the week. Codex records these in its session files after every turn, so
+perch reads them from `~/.codex/sessions/` and makes no request. The
+figure is as of the last Codex turn on this machine, from any Codex client,
+and the tooltip says when that was. A window whose reset time has passed
+is shown as full again. perch re-reads after each Codex turn it runs.
+
+**Under a Claude tab**:
 
 - a **backend switch**, `sub` or `API`. Click it to move new Claude tabs
   and sessions between your subscription login and API / Bedrock. It
@@ -166,7 +176,7 @@ makes no request.
 Settings: `perch.meter.mode`, `pollMinutes`, `display`, `showModelWeekly`,
 `warnBelow`, `errorBelow`, `hideWhenUnavailable`, `statusBar`.
 
-Codex has no equivalent gauge; the footer is about Claude only.
+The status bar items are Claude's only. Codex usage appears in the panel.
 
 ## Cost
 
@@ -181,9 +191,11 @@ would require API-key billing under both vendors' terms.
 - `src/codexAgent.js` — Codex SDK thread, no VS Code dependency
 - `src/models.js` — model catalogs read from the agents, no VS Code dependency
 - `src/meter.js` — Claude usage, cost, and the backend switch, no VS Code dependency
+- `src/codexMeter.js` — ChatGPT plan usage, read from Codex's session files
 - `src/meterHost.js` — polling, status bar items, login
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
 - `test/meter.test.js` — usage, cost, and the switch, against throwaway home directories
+- `test/codexMeter.test.js` — Codex usage, against throwaway session directories
 - `test/models.test.js` — catalog parsing, no model calls
 - `test/host.test.js` — host logic against a stubbed VS Code API, no model calls
 - `test/page.test.js` — the real page script in a DOM, no model calls

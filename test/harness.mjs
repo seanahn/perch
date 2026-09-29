@@ -40,6 +40,11 @@ let failed = 0;
     if (u.error === 'rate-limited') console.log('meter: usage endpoint is rate limiting right now; live usage check skipped');
     else if (!u.limits) { console.log('meter FAILED'); failed++; }
   }
+  // Codex plan usage: a file read, from whatever Codex last recorded here
+  const cu = require('../src/codexMeter.js').readCodexUsage();
+  const cs = summarize({ mode: 'subscription', backend: 'subscription', limits: cu.limits, error: cu.error, fetchedAt: cu.at }, { vendor: 'Codex' });
+  console.log(`codex meter: plan "${cu.plan || ''}", usage "${cs.text}" level ${cs.level}` + (cu.error ? ` error ${cu.error}` : ` as of ${new Date(cu.at).toLocaleTimeString()}`));
+  if (cu.error && cu.error !== 'no-codex-data') { console.log('codex meter FAILED'); failed++; }
   const after = (() => { try { return require('fs').readFileSync(m.settingsPath, 'utf8'); } catch (_) { return null; } })();
   if (before !== after) { console.log('meter FAILED: reading changed the settings file'); failed++; }
 }
@@ -80,6 +85,10 @@ let failed = 0;
   await a.send('Reply with exactly: perch codex ok');
   console.log('codex:', JSON.stringify(c.text), '| events:', [...new Set(c.seen)].join(','));
   if (!/perch codex ok/i.test(c.text)) failed++;
+  const fresh = require('../src/codexMeter.js').readCodexUsage();
+  const age = fresh.at ? Math.round((Date.now() - fresh.at) / 1000) : -1;
+  console.log(`codex meter after that turn: ${fresh.limits ? fresh.limits.map((l) => l.label + ' ' + l.percent + '% used').join(', ') : fresh.error}, ${age}s old`);
+  if (!fresh.limits || age < 0 || age > 120) { console.log('codex meter FAILED: the turn did not leave a fresh reading'); failed++; }
   a.dispose();
 }
 console.log(failed ? `FAILED (${failed})` : 'ALL OK');

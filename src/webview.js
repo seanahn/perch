@@ -126,7 +126,8 @@ ${glyphCss}
   #composer.codex #t-model .e { color: #b48ead; }
   #composer.codex #t-model .chev { display: block; width: 12px; height: 12px; opacity: .7; }
   #composer.codex #t-ide.on { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
-  #composer.codex #send { width: 30px; height: 30px; border-radius: 50%; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.35)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+  /* a neutral disc mixed from the text colour, so it shows on any theme; a theme's secondary button colour can match the box */
+  #composer.codex #send { width: 30px; height: 30px; border-radius: 50%; background: rgba(128,128,128,.4); background: color-mix(in srgb, var(--vscode-foreground) 26%, transparent); color: var(--vscode-foreground); }
   #composer.codex #send.stop { background: var(--vscode-foreground); color: var(--vscode-editor-background); }
 
   /* menus open upward from the tool that owns them */
@@ -146,6 +147,8 @@ ${glyphCss}
   /* Claude usage and backend */
   #meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   #meter .k { width: 12px; height: 12px; }
+  #m-claude, #m-codex { flex: none; display: inline-flex; }
+  #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; }
   #meter .where { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
   #meter .where svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
@@ -178,7 +181,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-where" class="where" hidden></span>${badge('claude')}<button id="m-backend" class="mb"></button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-where" class="where" hidden></span><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -273,6 +276,7 @@ ${glyphCss}
     const p = panes.get(active);
     if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) p.log.scrollTop = p.log.scrollHeight; }
     syncComposer();
+    applyMeter();
   }
 
   // ---- composer
@@ -286,7 +290,7 @@ ${glyphCss}
     $composer.className = (t ? t.kind : 'off');
     $input.disabled = !t; $tAdd.disabled = !t; $tModel.disabled = !t; $tMode.disabled = !t;
     $input.placeholder = !t ? 'Open a tab with +' : t.busy ? 'Queue another message…' : claude ? 'Message Claude…' : 'Do anything';
-    $tIde.hidden = !t || claude; $sep.hidden = $tIde.hidden; $where.hidden = $tIde.hidden;
+    $tIde.hidden = !t || claude; $sep.hidden = $tIde.hidden;
     $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
     $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
     $tSlash.hidden = !claude || !commands.claude.length;
@@ -483,34 +487,43 @@ ${glyphCss}
     }
   }
 
-  // ---- Claude usage and backend, in the footer
-  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage');
-  let meter = null;
-  function applyMeter(m) {
-    meter = m || null;
+  // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
+  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan');
+  const meters = { claude: null, codex: null };
+  let meter = null, meterKind = null;
+  function applyMeter() {
+    const t = cur();
+    meterKind = t ? t.kind : null;
+    meter = meterKind ? meters[meterKind] : null;
     $meter.hidden = !meter;
     if (!meter) return;
-    $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \\u26A0' : '');
-    $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
-    $mb.title = meter.backendTitle;
+    const claude = meterKind === 'claude';
+    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = !claude; $where.hidden = claude;
+    $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan : '';
+    if (claude) {
+      $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \u26A0' : '');
+      $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
+      $mb.title = meter.backendTitle;
+    }
     $mu.textContent = '';
     $mu.className = 'mu ' + meter.level + (meter.stale ? ' stale' : '');
     if (meter.segments.length) for (const seg of meter.segments) { const n = el('span', 'seg ' + seg.level, seg.text); if (seg.title) n.title = seg.title; $mu.append(n); }
-    else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\\u2014'));
-    const when = meter.fetchedAt ? 'Updated ' + new Date(meter.fetchedAt).toLocaleTimeString() + '. ' : '';
+    else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\u2014'));
+    const time = meter.fetchedAt ? new Date(meter.fetchedAt).toLocaleTimeString() : '';
+    const when = !time ? '' : meter.asOf ? 'As of the last Codex turn on this machine, ' + time + '. ' : 'Updated ' + time + '. ';
     const hint = meter.action === 'login' ? 'Click to log in.' : 'Click to refresh.';
     const stale = meter.stale ? '\\n' + meter.lines[meter.lines.length - 1] : '';
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
   $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
-  $mu.addEventListener('click', () => vscode.postMessage({ type: meter && meter.action === 'login' ? 'meterLogin' : 'meterRefresh' }));
+  $mu.addEventListener('click', () => vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }));
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
     if (m.type === 'tabs') applyTabs(m.tabs, m.active);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
-    else if (m.type === 'meter') applyMeter(m.meter);
+    else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
   });
   $send.innerHTML = SVG.up;

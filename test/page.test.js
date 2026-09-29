@@ -9,6 +9,14 @@ const virtualConsole = new VirtualConsole(); virtualConsole.on('jsdomError', (e)
 const ICONS = { claude: { glyph: 'vscode-resource://host/claude.svg', image: 'vscode-resource://host/claude.png' }, codex: { glyph: 'vscode-resource://host/blossom.svg', image: 'vscode-resource://host/chatgpt.png' } };
 const IMAGES_ONLY = { claude: { image: ICONS.claude.image }, codex: { image: ICONS.codex.image } };
 const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
+// The page script lives inside a template literal, so an escape written one level short becomes a raw line break inside
+// a string and the whole script fails to parse. Check that first, and say so plainly.
+{
+  const h = getHtml({ nonce: 'n', cspSource: 'x', icons: ICONS });
+  const js = h.slice(h.indexOf('<script nonce'), h.lastIndexOf('</script>')).replace(/^<script[^>]*>/, '');
+  try { new Function(js); } catch (e) { console.error('PAGE SCRIPT DOES NOT PARSE: ' + e.message + '. Look for an escape such as \\n written with one backslash too few in src/webview.js.'); process.exit(1); }
+}
+
 function page(icons) {
   const out = [];
   const dom = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons })), { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))) }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
@@ -145,6 +153,7 @@ assert.deepStrictEqual(['#t-add', '#t-mode', '#t-model', '#tools .sep', '#t-ide'
 assert(/M8 1\.8l5 1\.8/.test($('#t-mode').innerHTML), 'a shield, not a bolt');
 assert(shown($('#t-model .chev')) && shown($('#t-ide')) && shown($('#tools .sep')));
 assert.strictEqual(window.getComputedStyle($('#send')).borderRadius, '50%');
+assert(/#composer\.codex #send \{[^}]*background: rgba\(128,128,128,\.4\); background: color-mix\(in srgb, var\(--vscode-foreground\) 26%, transparent\)/.test(css), 'the disc is mixed from the text colour, with a plain fallback, so it shows on any theme');
 assert(/#composer\.codex #tools \{ border-top: none;/.test(css), 'no rule between the message and the tools');   // the test DOM does not resolve border shorthands, so the stylesheet is checked
 assert.deepStrictEqual([$('#t-ide').textContent, $('#t-ide').getAttribute('aria-pressed'), $('#t-ide').classList.contains('on')], ['IDE context', 'false', false]);
 assert(/^IDE context is off\./.test($('#t-ide').title));
@@ -155,9 +164,28 @@ $('#t-ide').click(); assert.deepStrictEqual(out.pop(), { type: 'setIde', sid: 'b
 assert.deepStrictEqual([$('#t-mode').textContent, $('#t-mode').classList.contains('risk')], ['Full access', true], 'full access is flagged in amber');
 host({ type: 'tabs', tabs: [A, with_(B, { busy: true })], active: 'b' });
 assert.deepStrictEqual([$('#input').placeholder, $('#send').className], ['Queue another message…', 'stop']);
-host({ type: 'meter', meter: { backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] } });
-assert(shown($('#m-where')), 'beneath a Codex tab: where the work runs');
+assert(!shown($('#meter')), 'no footer until the host sends a reading');
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] } });
+assert(!shown($('#meter')), 'Claude\'s reading is not shown under a Codex tab');
+const CODEX = { vendor: 'Codex', plan: 'plus', asOf: true, level: 'ok', action: 'refresh', fetchedAt: 1790708709271, lines: ['Codex usage, percent remaining', 'row'], text: '2.3h 96% 6.9d 99%', segments: [{ text: '2.3h 96%', level: 'ok', title: '5h session: 96% remaining' }, { text: '6.9d 99%', level: 'ok', title: 'Weekly: 99% remaining' }] };
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
+assert(shown($('#meter')) && shown($('#m-where')), 'beneath a Codex tab: where the work runs, and the ChatGPT plan\'s usage');
 assert.strictEqual($('#m-where').textContent, 'Work locally'); assert(/runs Codex on this machine/.test($('#m-where').title));
+assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
+assert(shown($('#m-codex')) && !shown($('#m-claude')) && !shown($('#m-backend')), 'the ChatGPT glyph; no Claude glyph, and no backend switch, which is Claude\'s');
+assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
+assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus']);
+assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
+$('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
+host({ type: 'meter', meter: null, codex: Object.assign({}, CODEX, { plan: '', level: 'none', text: '\u2014', segments: [], fetchedAt: null, lines: ['Codex usage unavailable: no Codex session on this machine has reported usage yet.'] }) });
+assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-plan'))], [['\u2014'], false]);
+assert.strictEqual($('#m-usage').title, 'Codex usage unavailable: no Codex session on this machine has reported usage yet.\nClick to refresh.');
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
+assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan')), shown($('#m-where'))], [['26m 85%'], true, true, false, false, false], 'switching to a Claude tab switches the footer');
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '25m 84%', level: 'ok', title: 'claude 5h' }] } });
+host({ type: 'tabs', tabs: [A, B], active: 'b' });
+assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'a Claude update that does not mention Codex leaves the Codex reading in place');
 ev('b', { kind: 'user', text: 'fix this', tag: 'IDE context · src/a.js:3-9' });
 ev('b', { kind: 'user', text: 'and this', queued: true, tag: 'IDE context · src/a.js' });
 assert.deepStrictEqual([...paneB.querySelectorAll('.user .tag')].map((n) => n.textContent), ['IDE context · src/a.js:3-9', 'queued · IDE context · src/a.js'], 'a message says what was attached to it');
@@ -284,7 +312,7 @@ assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySele
 
 // ---- footer: Claude backend and usage
 const $m = $('#meter'), $mb = $('#m-backend'), $mu = $('#m-usage');
-host({ type: 'meter', meter: null });
+host({ type: 'meter', meter: null, codex: null });
 assert(!shown($m), 'hidden while the host has no reading');
 const seg = (text, level, title) => ({ text, level, title });
 const METER = { mode: 'subscription', backend: 'subscription', backendLabel: 'sub', backendName: 'subscription (login)', backendWarn: false, backendTitle: 'Claude backend: subscription (login). Click to switch.', level: 'warn', action: 'refresh', fetchedAt: 1790708709271, lines: ['Claude usage, percent remaining', 'row'], text: '1.0h 91% 6.5d 20%', segments: [seg('1.0h 91%', 'ok', '5h session: 91% remaining'), seg('6.5d 20%', 'warn', 'Weekly: 20% remaining')] };
@@ -293,9 +321,9 @@ assert(shown($m)); assert(!shown($('#m-where')), 'no "Work locally" under a Clau
 assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn')], ['sub', METER.backendTitle, false]);
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
 assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
-assert.strictEqual($m.querySelector('.k').className, 'k glyph claude', 'marked as Claude, since Codex has no such gauge');
+assert.strictEqual($('#m-claude .k').className, 'k glyph claude', 'marked as Claude'); assert(shown($('#m-claude')) && !shown($('#m-codex')) && !shown($('#m-plan')));
 $mb.click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle' });
-$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh' });
+$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'claude' });
 host({ type: 'meter', meter: Object.assign({}, METER, { stale: true, lines: METER.lines.concat('Showing the last reading: the usage endpoint is rate limiting requests.') }) });
 assert($mu.classList.contains('stale')); assert(/^5h session: 91% remaining\nShowing the last reading: .*rate limiting requests\.\nUpdated /.test($mu.children[0].title), 'a kept reading says it is old, and why');
 host({ type: 'meter', meter: Object.assign({}, METER, { backend: 'api', backendLabel: 'API', backendWarn: true, mode: 'cost', level: 'ok', text: 'opus-5 5.2M $18.9', segments: [seg('opus-5', 'ok'), seg('5.2M', 'ok'), seg('$18.9', 'ok')], lines: ['Claude cost', 'Today 5.2M'] }) });
@@ -329,6 +357,7 @@ $('#t-mode').click();
 host({ type: 'tabs', tabs: [], active: null });
 assert.strictEqual($('#menu'), null, 'a menu does not outlive its tab');
 assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strictEqual($('#input').disabled, true);
+assert(!shown($('#meter')), 'with no tab there is no agent to report on');
 assert.deepStrictEqual([$('#composer').className, $('#t-model .m').textContent, $('#t-mode').textContent], ['off', '', '']);
 assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
 assert.deepStrictEqual($$('#empty .k').map((i) => i.className), ['k glyph claude', 'k glyph codex'], 'empty state carries the vendor glyphs');
