@@ -3,6 +3,9 @@
 Claude Code and Codex as tabs in VS Code, in the editor area or the sidebar.
 Any number of sessions, with usage and backend switching built in.
 
+The design, its reasons, and what has and has not been verified are in
+[design.md](design.md).
+
 perch is a **shell, not an agent**. Each tab spawns the vendor's own
 agent through its SDK, so prompt caching, context compaction,
 permissions, memory, and tool behavior are the vendor's, unchanged. perch
@@ -203,6 +206,30 @@ Settings: `perch.meter.mode`, `pollMinutes`, `display`, `showModelWeekly`,
 
 The status bar items are Claude's only. Codex usage appears in the panel.
 
+## Dictation
+
+The microphone in the composer dictates into the message box. Click to
+start, click again to finish, Escape to discard.
+
+Speech-to-text is Whisper, running locally. Nothing you say leaves your
+machines. The first use asks to set it up: about 4 GB, into a private
+environment under `~/.local/share/perch/voice`.
+
+Recording is done by a second extension, **Perch Audio**, which must be
+installed on the computer you sit at, because that is where the
+microphone is:
+
+| You work | Install Perch Audio on | Whisper runs on |
+| --- | --- | --- |
+| Directly on this machine | this machine (`make install-audio`) | this machine |
+| From a laptop over Remote-SSH | the laptop (`make package-audio`, then install the `.vsix` there) | the remote machine |
+
+If no microphone is connected, the button says so. `Perch Audio: Choose
+Microphone` picks among several.
+
+**Status: not yet tested end to end.** Transcription and recording are
+each verified, but the machine this was built on has no microphone.
+
 ## Cost
 
 Both agents run on your subscriptions through their normal logins. This
@@ -218,10 +245,15 @@ would require API-key billing under both vendors' terms.
 - `src/meter.js` — Claude usage, cost, and the backend switch, no VS Code dependency
 - `src/codexMeter.js` — ChatGPT plan usage, read from Codex's session files
 - `src/meterHost.js` — polling, status bar items, login
+- `src/voice.js`, `src/voiceHost.js` — the speech-to-text engine, and dictation
+- `voice/server.py` — Whisper behind JSON lines
+- `audio/` — Perch Audio, the recording companion, an extension of its own
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
 - `test/meter.test.js` — usage, cost, and the switch, against throwaway home directories
 - `test/codexMeter.test.js` — Codex usage, against throwaway session directories
 - `test/models.test.js` — catalog parsing, no model calls
+- `test/voice.test.js` — the engine, against a stand-in server
+- `audio/test/recorder.test.js` — the recorder, with a library that plays back frames
 - `test/host.test.js` — host logic against a stubbed VS Code API, no model calls
 - `test/page.test.js` — the real page script in a DOM, no model calls
 - `test/harness.mjs` — one live turn through each agent, uses your logins
