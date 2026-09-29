@@ -5,14 +5,32 @@ const origLoad = Module._load;
 
 function makeMemento(initial) { const m = new Map(Object.entries(initial || {})); return { get: (k) => m.get(k), update: (k, v) => { m.set(k, JSON.parse(JSON.stringify(v))); return Promise.resolve(); }, _dump: () => Object.fromEntries(m) }; }
 
+const ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
+// shaped like what the real agents report
+const CATALOGS = {
+  claude: { defaultModel: { label: 'Opus 5.5', efforts: ALL, defaultEffort: '' }, models: [
+    { value: 'opus', label: 'Opus 5.5', description: 'For complex work', efforts: ALL, defaultEffort: '' },
+    { value: 'fable', label: 'Fable 5.1', description: 'For your toughest challenges', efforts: ALL, defaultEffort: '' },
+    { value: 'haiku', label: 'Haiku 4.5', description: 'Fastest', efforts: [], defaultEffort: '' },
+    { value: 'claude-opus-4-6', label: 'Opus 4.6', description: '', efforts: ['low', 'medium', 'high', 'max'], defaultEffort: '' },
+  ] },
+  codex: { defaultModel: { label: 'GPT-5.6-Sol', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' }, models: [
+    { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: '', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' },
+    { value: 'gpt-6-luna', label: 'GPT-6-Luna', description: '', efforts: ALL, defaultEffort: 'medium' },
+    { value: 'gpt-5.5', label: 'GPT-5.5', description: '', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+  ] },
+};
+const flush = () => new Promise((r) => setImmediate(r));   // lets the async catalog load settle
+
 const created = [];   // every FakeAgent constructed, in order
 class FakeAgent {
-  constructor(o) { this.o = o; this.emit = o.emit; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; created.push(this); }
+  constructor(o) { this.o = o; this.emit = o.emit; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; created.push(this); }
   send(t) {
     this.sent.push(t);
     this.emit({ kind: 'user', text: t }); this.emit({ kind: 'busy', busy: true });
     this.emit({ kind: 'session', id: (this.o.resume || 'sess-' + created.indexOf(this)) });
     this.emit({ kind: 'status', text: 'ready · fake' });
+    if (this.o.askPermission) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
     this.emit({ kind: 'busy', busy: false });
@@ -20,10 +38,13 @@ class FakeAgent {
   interrupt() { this.interrupted++; }
   setPermissionMode(m) { this.modes.push(m); }
   setEffort(e) { this.efforts.push(e); }
+  setModel(m) { this.models.push(m); }
   dispose() { this.disposed = true; }
 }
 
-function install(state, { extensions, config } = {}) {
+function install(state, { extensions, config, catalogs } = {}) {
+  const cats = Object.assign({}, CATALOGS, catalogs);     // pass { claude: null } to simulate an agent that cannot list models
+  const loads = { claude: 0, codex: 0 };
   const installed = extensions || {
     'anthropic.claude-code': { icon: 'resources/claude-logo.png', contributes: { viewsContainers: { activitybar: [{ id: 'c', icon: 'resources/claude-logo.svg' }] } } },
     'openai.chatgpt': { icon: 'resources/blossom.dark.png', contributes: { viewsContainers: { activitybar: [{ id: 'x', icon: 'resources/blossom-white.svg' }] } } },
@@ -40,13 +61,14 @@ function install(state, { extensions, config } = {}) {
     if (req === 'vscode') return vscodeStub;
     if (req === './claudeAgent') return { ClaudeAgent: FakeAgent };
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
+    if (req === './models') return { loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];
   const ext = require('../src/extension.js');
   const memento = makeMemento(state);
   const perch = ext.activate({ subscriptions: [], workspaceState: memento, extensionUri: { path: '/ext/fennets.perch' } });
-  return { perch, registered, commands, memento, picks };
+  return { perch, registered, commands, memento, picks, cats, loads };
 }
 
 function fakeView() {
@@ -57,4 +79,4 @@ function fakeView() {
     view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 
-module.exports = { install, fakeView, created, FakeAgent };
+module.exports = { install, fakeView, created, FakeAgent, flush, CATALOGS };

@@ -4,12 +4,14 @@ const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
+const { loadClaudeModels, loadCodexModels } = require('./models');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
   codex: ['read-only', 'workspace-write', 'danger-full-access'],
 };
-// '' means "leave it to the agent's default"
+// '' means "leave it to the agent's default". These lists are only the fallback used until the
+// agent's own model catalog has loaded; after that, each model supplies its own effort levels.
 const EFFORTS = {
   claude: ['', 'low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
@@ -52,19 +54,23 @@ function cwd() {
   return f && f.length ? f[0].uri.fsPath : require('os').homedir();
 }
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
-function defaultEffort(kind) { const v = (kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''; return EFFORTS[kind].includes(v) ? v : ''; }
+function defaultEffort(kind) { return String((kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''); }
+function defaultModel(kind) { return String((kind === 'claude' ? cfg('claude.model') : cfg('codex.model')) || ''); }
 function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionMode') || 'default') : (cfg('codex.sandboxMode') || 'workspace-write'); }
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, mode, effort, resume }) {
+  constructor(view, { id, kind, title, titled, mode, effort, model, resume }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
     this.title = title;
     this.titled = !!titled;          // true once the title came from the first message
     this.mode = mode || defaultMode(kind);
-    this.effort = EFFORTS[kind].includes(effort) ? effort : defaultEffort(kind);
+    this.model = typeof model === 'string' ? model : defaultModel(kind);     // '' = the agent's default model
+    this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
+    this.actualModel = '';           // what the agent reported it is really running
+    this.reconcile();
     this.agentSessionId = resume || null;
     this.agent = null;               // started lazily on first message
     this.history = [];
@@ -75,12 +81,45 @@ class Session {
     if (resume) this.history.push({ kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` });
   }
 
-  idleStatus() { return (this.kind === 'claude' ? `idle · mode ${this.mode}` : `idle · sandbox ${this.mode}`) + (this.effort ? ` · effort ${this.effort}` : ''); }
+  idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
+
+  // ---- what this tab may choose, given the agent's catalog and the selected model
+  catalog() { return this.view.catalog[this.kind] || null; }
+  selectedModel() {
+    const cat = this.catalog(); if (!cat) return null;
+    return this.model ? (cat.models.find((m) => m.value === this.model) || null) : cat.defaultModel;
+  }
+  allowedEfforts() {
+    const m = this.selectedModel();
+    if (m) return ['', ...m.efforts];
+    return this.catalog() ? ['', ...new Set(this.catalog().models.flatMap((x) => x.efforts))] : EFFORTS[this.kind];   // unknown model, or no catalog yet
+  }
+  allowedModels() {
+    const cat = this.catalog();
+    const vals = cat ? cat.models.map((m) => m.value) : [];
+    return ['', ...vals, ...(this.model && !vals.includes(this.model) ? [this.model] : [])];   // keep a saved or configured model the catalog does not list
+  }
+  /** Keep effort valid for the selected model. Returns true if it had to change. */
+  reconcile() {
+    if (this.allowedEfforts().includes(this.effort)) return false;
+    this.effort = ''; return true;
+  }
+  modelOptions() {
+    const cat = this.catalog(); const d = cat && cat.defaultModel;
+    const opts = [{ value: '', label: 'default' + (d && d.label ? ' · ' + d.label : ''), title: 'The model the agent picks by default' }];
+    for (const v of this.allowedModels().slice(1)) { const m = cat && cat.models.find((x) => x.value === v); opts.push({ value: v, label: m ? m.label : v, title: m ? m.description : 'not in the agent\'s model list' }); }
+    return opts;
+  }
+  effortOptions() {
+    const m = this.selectedModel(); const d = m && m.defaultEffort;
+    return this.allowedEfforts().map((v) => (v ? { value: v, label: v } : { value: '', label: 'default' + (d ? ' · ' + d : '') }));
+  }
 
   post(ev) {
     switch (ev.kind) {
       case 'status': this.lastStatus = ev.text; break;
-      case 'busy': this.busy = !!ev.busy; this.view.sendTabs(); break;
+      case 'busy': this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' }); return;
+      case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
       case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
       case 'clear': this.history = []; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
@@ -104,7 +143,7 @@ class Session {
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
-        model: cfg('claude.model') || undefined,
+        model: this.model || undefined,
         effort: this.effort || undefined,
         executable: cfg('claude.executable') || undefined,
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
@@ -114,7 +153,7 @@ class Session {
         cwd: cwd(), emit, resume,
         sandboxMode: this.mode,
         approvalPolicy: cfg('codex.approvalPolicy'),
-        model: cfg('codex.model') || undefined,
+        model: this.model || undefined,
         reasoningEffort: this.effort || undefined,
       });
     }
@@ -135,18 +174,28 @@ class Session {
     if (!MODES[this.kind].includes(value)) return;
     this.mode = value;
     this.view.persist();
-    if (!this.agent) { this.post({ kind: 'status', text: this.idleStatus() }); return; }
+    if (!this.agent) return;
     if (this.kind === 'claude') this.agent.setPermissionMode(value);
     else this.post({ kind: 'note', text: `sandbox ${value} applies to a new Codex tab; this thread keeps the sandbox it started with` });
   }
 
   setEffort(value) {
-    if (!EFFORTS[this.kind].includes(value)) return;
+    if (!this.allowedEfforts().includes(value)) return;
     this.effort = value;
     this.view.persist();
-    if (!this.agent) { this.post({ kind: 'status', text: this.idleStatus() }); return; }
+    if (!this.agent) return;
     if (this.kind === 'claude') this.agent.setEffort(value);          // live: applies from the next request
     else this.post({ kind: 'note', text: `effort ${value || 'default'} applies to a new Codex tab; this thread keeps the effort it started with` });
+  }
+
+  setModel(value) {
+    if (!this.allowedModels().includes(value)) return;
+    this.model = value;
+    const effortReset = this.reconcile();                              // the new model may not accept the current effort
+    this.view.persist();
+    if (!this.agent) return;
+    if (this.kind === 'claude') { this.agent.setModel(value); if (effortReset) this.agent.setEffort(''); }
+    else this.post({ kind: 'note', text: `model ${value || 'default'} applies to a new Codex tab; this thread keeps the model it started with` });
   }
 
   interrupt() { if (this.agent) this.agent.interrupt(); }
@@ -158,8 +207,16 @@ class Session {
     this.pending.clear();
   }
 
-  toTab() { return { id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, mode: this.mode, modes: MODES[this.kind], effort: this.effort, efforts: EFFORTS[this.kind] }; }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, resume: this.agentSessionId }; }
+  toTab() {
+    return {
+      id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, started: !!this.agent,
+      mode: this.mode, modes: MODES[this.kind],
+      model: this.model, models: this.modelOptions(), actualModel: this.actualModel,
+      effort: this.effort, efforts: this.effortOptions(),
+      approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
+    };
+  }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, resume: this.agentSessionId }; }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
@@ -171,7 +228,27 @@ class PerchView {
     this.sessions = [];
     this.activeId = null;
     this.counters = { claude: 0, codex: 0 };
+    this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
+    this.loading = null;
     this.restore();
+  }
+
+  /** Read both agents' model lists. Codex is a file read; Claude starts its CLI without sending a message. */
+  loadCatalogs(force) {
+    if (this.loading && !force) return this.loading;
+    const apply = (kind, cat) => {
+      if (!cat) return;
+      this.catalog[kind] = cat;
+      let changed = false; for (const s of this.sessions) if (s.kind === kind && s.reconcile()) changed = true;
+      if (changed) this.persist();
+      this.sendTabs();
+    };
+    try { apply('codex', loadCodexModels()); } catch (_) { /* keep the fallback lists */ }
+    this.loading = Promise.resolve()
+      .then(() => loadClaudeModels({ cwd: cwd(), executable: cfg('claude.executable') || undefined }))
+      .then((cat) => apply('claude', cat))
+      .catch(() => { /* keep the fallback lists */ });
+    return this.loading;
   }
 
   // ---- persistence: tabs survive a window reload by resuming the agent's own saved session
@@ -217,6 +294,7 @@ class PerchView {
       case 'ready':
         this.ready = true;
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
+        this.loadCatalogs();
         for (const x of this.sessions) this.replay(x);
         return;
       case 'send': if (s) s.send(msg.text); return;
@@ -224,6 +302,7 @@ class PerchView {
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision); return;
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
       case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
+      case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
       case 'activate': this.activate(msg.sid); return;
       case 'new': this.addSession(msg.kind); return;
       case 'close': this.closeSession(msg.sid); return;
@@ -293,6 +372,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { if (perch.activeId) perch.closeSession(perch.activeId); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    vscode.commands.registerCommand('perch.refreshModels', () => perch.loadCatalogs(true)),
     { dispose: () => perch.dispose() },
   );
   return perch;   // exposed for tests

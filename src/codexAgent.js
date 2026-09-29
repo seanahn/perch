@@ -39,7 +39,7 @@ class CodexAgent {
     if (this.opts.model) topts.model = this.opts.model;
     if (this.opts.reasoningEffort) topts.modelReasoningEffort = this.opts.reasoningEffort;
     this.thread = this.threadId ? codex.resumeThread(this.threadId, topts) : codex.startThread(topts);
-    this.emit({ kind: 'status', text: `ready · ${topts.sandboxMode} · approvals ${topts.approvalPolicy}` });
+    this.emit({ kind: 'status', text: 'ready' });
     return true;
   }
 

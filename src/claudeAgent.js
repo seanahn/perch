@@ -72,7 +72,7 @@ class ClaudeAgent {
     if (this.opts.executable) options.pathToClaudeCodeExecutable = this.opts.executable;
     if (options.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
 
-    this.emit({ kind: 'status', text: `ready · mode ${options.permissionMode}` });
+    this.emit({ kind: 'status', text: 'ready' });
     try {
       this.query = sdk.query({ prompt: this.queue, options });
       for await (const m of this.query) this._onMessage(m);
@@ -89,7 +89,7 @@ class ClaudeAgent {
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.emit({ kind: 'session', id: m.session_id }); }
     switch (m.type) {
       case 'system':
-        if (m.subtype === 'init') this.emit({ kind: 'status', text: `ready · ${m.model || ''} · ${m.permissionMode || ''}`.replace(/ · $/, '') });
+        if (m.subtype === 'init') { if (m.model) this.emit({ kind: 'model', id: m.model }); }   // the model actually in use, for the tab's tooltip
         else if (m.subtype === 'compact_boundary') this.emit({ kind: 'status', text: 'context compacted' });
         return;
       case 'stream_event': {
@@ -140,10 +140,12 @@ class ClaudeAgent {
   }
 
   async interrupt() { if (this.query && this.running) { try { await this.query.interrupt(); } catch (_) { /* older CLI */ } } }
-  async setPermissionMode(mode) { if (this.query) { try { await this.query.setPermissionMode(mode); this.emit({ kind: 'status', text: 'mode: ' + mode }); } catch (err) { this.emit({ kind: 'error', text: String(err.message || err) }); } } }
+  // The selectors in the panel already show mode, effort, and model, so a successful change is silent.
+  async setPermissionMode(mode) { if (this.query) { try { await this.query.setPermissionMode(mode); } catch (err) { this.emit({ kind: 'error', text: 'could not set mode: ' + String(err.message || err) }); } } }
   /** Live, session-scoped: the same layer /effort uses. An empty value returns to the model's default. */
-  async setEffort(level) { if (this.query) { try { await this.query.applyFlagSettings({ effortLevel: level || null }); this.emit({ kind: 'status', text: 'effort: ' + (level || 'default') }); } catch (err) { this.emit({ kind: 'error', text: 'could not set effort: ' + String(err.message || err) }); } } }
-  async setModel(model) { if (this.query) { try { await this.query.setModel(model || undefined); this.emit({ kind: 'status', text: 'model: ' + (model || 'default') }); } catch (err) { this.emit({ kind: 'error', text: String(err.message || err) }); } } }
+  async setEffort(level) { if (this.query) { try { await this.query.applyFlagSettings({ effortLevel: level || null }); } catch (err) { this.emit({ kind: 'error', text: 'could not set effort: ' + String(err.message || err) }); } } }
+  /** Live: applies from the next request. An empty value returns to Claude Code's default model. */
+  async setModel(model) { if (this.query) { try { await this.query.setModel(model || undefined); } catch (err) { this.emit({ kind: 'error', text: 'could not set model: ' + String(err.message || err) }); } } }
 
   dispose() { this.queue.close(); this.abort.abort(); }
 }

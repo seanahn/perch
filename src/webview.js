@@ -53,9 +53,14 @@ ${glyphCss}
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
   .bar label { flex: none; white-space: nowrap; }
-  .bar { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
+  .bar .ctl { display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; min-width: 0; }
+  .bar select { max-width: 150px; }
+  .bar select:disabled { opacity: .6; }
+  .bar { display: flex; gap: 6px; align-items: flex-start; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   .bar .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar select { font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 2px; }
+  .bar .dot, .bar .grow { margin-top: 3px; }
+  .bar .grow { min-width: 3em; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.busy { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
   .log { flex: 1; overflow-y: auto; padding: 8px; }
@@ -115,22 +120,36 @@ ${glyphCss}
 
   function makePane(tab) {
     const root = el('div', 'pane'); root.hidden = true;
-    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'grow', 'idle'), label = el('label'), sel = el('select');
-    label.append(tab.kind === 'claude' ? 'mode ' : 'sandbox ', sel);
-    for (const m of tab.modes) { const o = el('option', null, m); o.value = m; sel.append(o); }
-    sel.value = tab.mode;
-    sel.addEventListener('change', () => vscode.postMessage({ type: 'setMode', sid: tab.id, value: sel.value }));
-    const elabel = el('label'), eff = el('select');
-    elabel.append('effort ', eff);
-    for (const v of (tab.efforts || [''])) { const o = el('option', null, v || 'default'); o.value = v; eff.append(o); }
-    eff.value = tab.effort || '';
-    eff.title = tab.kind === 'claude' ? 'Reasoning effort. Changes apply from the next message.' : 'Reasoning effort. Set it before the first message in this tab.';
-    eff.addEventListener('change', () => vscode.postMessage({ type: 'setEffort', sid: tab.id, value: eff.value }));
-    bar.append(dot, status, elabel, label);
+    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'grow', 'idle'), ctl = el('span', 'ctl');
+    const mk = (name, type) => { const l = el('label'), c = el('select'); l.append(name + ' ', c); c.addEventListener('change', () => vscode.postMessage({ type, sid: tab.id, value: c.value })); ctl.append(l); return c; };
+    const mod = mk('model', 'setModel'), eff = mk('effort', 'setEffort'), sel = mk(tab.kind === 'claude' ? 'mode' : 'sandbox', 'setMode');
+    bar.append(dot, status, ctl);
     const log = el('div', 'log');
     root.append(bar, log); $panes.append(root);
-    const p = { root, log, dot, status, sel, eff, live: null, tools: {}, draft: '', kind: tab.kind };
+    const p = { root, log, dot, status, sel, eff, mod, live: null, tools: {}, draft: '', kind: tab.kind };
     panes.set(tab.id, p); return p;
+  }
+
+  // option lists come from the host and can change, for example when the model changes which efforts exist
+  function setOptions(select, list, value) {
+    const norm = list.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
+    const key = JSON.stringify(norm);
+    if (select.dataset.key !== key) {
+      select.textContent = '';
+      for (const o of norm) { const n = el('option', null, o.label); n.value = o.value; if (o.title) n.title = o.title; select.append(n); }
+      select.dataset.key = key;
+    }
+    select.value = value || '';
+    select.disabled = norm.length < 2;      // nothing to choose, for example a model with no effort control
+  }
+  function syncPane(p, t) {
+    setOptions(p.mod, t.models || [{ value: '', label: 'default' }], t.model);
+    setOptions(p.eff, t.efforts || [{ value: '', label: 'default' }], t.effort);
+    setOptions(p.sel, t.modes || [], t.mode);
+    const fixed = t.kind === 'codex' && t.started;
+    p.mod.title = fixed ? 'A Codex thread keeps the model it started with. Open a new tab to change it.' : (t.actualModel ? 'Running ' + t.actualModel : 'Model for this tab');
+    p.eff.title = fixed ? 'A Codex thread keeps the effort it started with. Open a new tab to change it.' : (p.eff.disabled ? 'This model has no effort control' : 'Reasoning effort. Applies from the next message.');
+    p.sel.title = t.kind === 'codex' ? (fixed ? 'A Codex thread keeps the sandbox it started with. ' : '') + 'Approvals: ' + (t.approvals || 'default') + ' (setting perch.codex.approvalPolicy)' : 'Permission mode. Applies immediately.';
   }
 
   function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); const stick = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 40; p.log.append(d); if (stick) p.log.scrollTop = p.log.scrollHeight; return d; }
@@ -157,7 +176,7 @@ ${glyphCss}
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); }
-    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.sel.value = t.mode; p.eff.value = t.effort || ''; p.root.hidden = t.id !== active; }
+    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); syncPane(p, t); p.root.hidden = t.id !== active; }
     $empty.hidden = tabs.length > 0;
     renderTabs();
     const cur = tabs.find((t) => t.id === active), p = panes.get(active);

@@ -60,18 +60,33 @@ resolve by policy (`perch.codex.approvalPolicy`) and the sandbox
 thread keeps the sandbox it started with, so choose it before the first
 message.
 
-## Effort
+## Model and effort
 
-Each tab has an **effort** selector beside its mode selector. `default`
-leaves the choice to the agent.
+Each tab has three selectors in its status bar: **model**, **effort**, and
+**mode** (Claude) or **sandbox** (Codex). The status text beside them
+shows state only: idle, working, or ready.
 
-Claude: low, medium, high, xhigh, max. A change applies from the next
-message, on the running session, the same way `/effort` does. The default
-for new tabs is `perch.claude.effort`.
+The lists come from the agents themselves, so they match your account:
 
-Codex: minimal, low, medium, high, xhigh. A Codex thread keeps the effort
-it started with, so choose it before the first message. The default for
-new tabs is `perch.codex.reasoningEffort`.
+| | Models from | Efforts from | Default labels |
+| --- | --- | --- | --- |
+| Claude | the Claude Code CLI, asked at startup without sending a message | each model's supported levels | `default · Opus 5.5` names the model the default resolves to |
+| Codex | `~/.codex/models_cache.json` | each model's supported levels | `default · GPT-5.6-Sol` and `default · ultra` come from `~/.codex/config.toml` |
+
+The effort list follows the selected model. A model with no effort
+control disables the selector, and an effort the new model does not
+accept resets to default. `Perch: Refresh Model Lists` re-reads both.
+
+Claude: model, effort, and mode all change live, from the next message.
+Hover the model selector to see the model actually running.
+
+Codex: a thread keeps the model, effort, and sandbox it started with, so
+choose them before the first message. Changing one later tells you it
+applies to a new tab. Hover the sandbox selector for the approval policy.
+
+Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
+`perch.claude.permissionMode`, `perch.codex.model`,
+`perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
 
 ## Cost
 
@@ -84,9 +99,11 @@ would require API-key billing under both vendors' terms.
 - `src/extension.js` — the view, sessions, tab state, persistence, commands
 - `src/claudeAgent.js` — Claude Agent SDK session, no VS Code dependency
 - `src/codexAgent.js` — Codex SDK thread, no VS Code dependency
+- `src/models.js` — model catalogs read from the agents, no VS Code dependency
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
+- `test/models.test.js` — catalog parsing, no model calls
 - `test/host.test.js` — host logic against a stubbed VS Code API, no model calls
 - `test/page.test.js` — the real page script in a DOM, no model calls
 - `test/harness.mjs` — one live turn through each agent, uses your logins
 
-`make test-offline` runs the first two. `make test` runs all three.
+`make test-offline` runs everything except the live harness. `make test` runs all of it.

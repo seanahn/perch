@@ -18,6 +18,15 @@ function waitFor(coll, kind, ms) {
 
 let failed = 0;
 {
+  // the real catalogs, from the real agents: no message is sent for either
+  const { loadClaudeModels, loadCodexModels } = require('../src/models.js');
+  const t0 = Date.now(); const cl = await loadClaudeModels({ cwd: process.cwd() }); const ms = Date.now() - t0;
+  const cx = loadCodexModels();
+  console.log(`claude models: ${cl ? cl.models.length : 0} in ${ms}ms, default "${cl && cl.defaultModel.label}" | codex models: ${cx ? cx.models.length : 0}, default "${cx && cx.defaultModel.label}" at effort "${cx && cx.defaultModel.defaultEffort}"`);
+  if (!cl || !cl.models.length || !cl.defaultModel.label) { console.log('claude catalog FAILED'); failed++; }
+  if (!cx || !cx.models.length) { console.log('codex catalog FAILED'); failed++; }
+}
+{
   const c = collector('claude');
   const a = new ClaudeAgent({ cwd: process.cwd(), emit: c.emit, permissionMode: 'default', effort: 'low', askPermission: async () => ({ decision: 'deny' }) });
   a.send('Reply with exactly: perch claude ok');

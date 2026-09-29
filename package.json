@@ -63,6 +63,11 @@
         "command": "perch.handoff",
         "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "perch.refreshModels",
+        "title": "Perch: Refresh Model Lists",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -91,6 +96,11 @@
           "command": "perch.closeTab",
           "when": "view == perch.main",
           "group": "1_new@3"
+        },
+        {
+          "command": "perch.refreshModels",
+          "when": "view == perch.main",
+          "group": "2_models@1"
         }
       ]
     },
@@ -112,20 +122,12 @@
         "perch.claude.model": {
           "type": "string",
           "default": "",
-          "description": "Claude model id for new sessions. Empty uses Claude Code's default."
+          "description": "Claude model for new tabs, for example opus, sonnet, or a full model id. Empty uses Claude Code's default. Each tab can change it live."
         },
         "perch.claude.effort": {
           "type": "string",
-          "enum": [
-            "",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
           "default": "",
-          "description": "Claude reasoning effort for new tabs. Empty uses the model's default. Each tab can change it live."
+          "description": "Claude reasoning effort for new tabs, for example high. Empty uses the model's default. Ignored if the tab's model does not accept it. Each tab can change it live."
         },
         "perch.claude.executable": {
           "type": "string",
@@ -156,20 +158,12 @@
         "perch.codex.model": {
           "type": "string",
           "default": "",
-          "description": "Codex model id for new threads. Empty uses Codex's default."
+          "description": "Codex model for new tabs, for example gpt-6-sol. Empty uses the model in ~/.codex/config.toml. Set per tab before its first message."
         },
         "perch.codex.reasoningEffort": {
           "type": "string",
-          "enum": [
-            "",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
           "default": "",
-          "description": "Codex reasoning effort for new tabs. Empty uses Codex's default. Set per tab before its first message."
+          "description": "Codex reasoning effort for new tabs, for example high. Empty uses ~/.codex/config.toml or the model's default. Ignored if the tab's model does not accept it."
         }
       }
     }
@@ -179,10 +173,10 @@
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
-    "check": "node --check src/extension.js && node --check src/claudeAgent.js && node --check src/codexAgent.js && node --check src/webview.js && node --check test/host.test.js && node --check test/page.test.js",
-    "test": "node test/host.test.js && node test/page.test.js && node test/harness.mjs",
+    "check": "for f in src/*.js test/*.js; do node --check \"$f\" || exit 1; done",
+    "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/models.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

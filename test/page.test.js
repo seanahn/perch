@@ -17,7 +17,16 @@ const $ = (s) => d.querySelector(s), $$ = (s) => [...d.querySelectorAll(s)];
 // rendered visibility, not the attribute: an author display rule can override [hidden]
 const shown = (n) => window.getComputedStyle(n).display !== 'none';
 const visiblePane = () => $$('.pane').filter(shown);
-const tab = (o) => Object.assign({ effort: '', efforts: o.kind === 'claude' ? ['', 'low', 'high', 'max'] : ['', 'minimal', 'high'], busy: false, attention: false, mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'plan'] : ['read-only', 'workspace-write'] }, o);
+const opt = (v, label) => ({ value: v, label: label || v || 'default' });
+const tab = (o) => Object.assign({
+  busy: false, attention: false, started: false, actualModel: '', approvals: o.kind === 'codex' ? 'on-failure' : '',
+  model: '', models: o.kind === 'claude' ? [opt('', 'default · Opus 5.5'), opt('opus', 'Opus 5.5'), opt('haiku', 'Haiku 4.5')] : [opt('', 'default · GPT-5.6-Sol'), opt('gpt-5.5', 'GPT-5.5')],
+  effort: '', efforts: o.kind === 'claude' ? [opt(''), opt('low'), opt('high'), opt('max')] : [opt('', 'default · ultra'), opt('high'), opt('ultra')],
+  mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'plan'] : ['read-only', 'workspace-write'],
+}, o);
+const names = (pane) => [...pane.querySelectorAll('select')].map((x) => x.parentElement.textContent.split(' ')[0]);
+const pick = (pane, name) => [...pane.querySelectorAll('select')].find((x) => x.parentElement.textContent.startsWith(name + ' '));
+const change = (select, v) => { select.value = v; select.dispatchEvent(new window.Event('change')); };
 
 assert.deepStrictEqual(out.shift(), { type: 'ready' }, 'page announces ready');
 
@@ -88,23 +97,48 @@ assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under i
 ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, cache_read: 7680, output: 11 } });
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));
 
-// mode selector is per tab and per kind
-assert.deepStrictEqual([...paneB.querySelectorAll('select')[1].options].map((o) => o.value), ['read-only', 'workspace-write']);
-const sel = paneA.querySelectorAll('select')[1]; sel.value = 'plan'; sel.dispatchEvent(new window.Event('change'));
-assert.deepStrictEqual(out.pop(), { type: 'setMode', sid: 'a', value: 'plan' });
+// three selectors per tab, in a fixed order; the status text carries state only
+assert.deepStrictEqual(names(paneA), ['model', 'effort', 'mode']);
+assert.deepStrictEqual(names(paneB), ['model', 'effort', 'sandbox']);
 
-// effort selector is per tab and per kind; 'default' is the empty value
-assert.deepStrictEqual([...paneA.querySelectorAll('select')].map((x) => x.parentElement.textContent.split(' ')[0]), ['effort', 'mode'], 'claude pane has effort and mode');
-assert.deepStrictEqual([...paneB.querySelectorAll('select')].map((x) => x.parentElement.textContent.split(' ')[0]), ['effort', 'sandbox']);
-const effA = paneA.querySelectorAll('select')[0];
+// mode
+assert.deepStrictEqual([...pick(paneB, 'sandbox').options].map((o) => o.value), ['read-only', 'workspace-write']);
+change(pick(paneA, 'mode'), 'plan');
+assert.deepStrictEqual(out.pop(), { type: 'setMode', sid: 'a', value: 'plan' });
+assert(/Approvals: on-failure/.test(pick(paneB, 'sandbox').title), 'codex approval policy is in the tooltip');
+
+// model: labels come from the host, the default says what it resolves to
+const modA = pick(paneA, 'model'), modB = pick(paneB, 'model');
+assert.deepStrictEqual([...modA.options].map((o) => [o.value, o.textContent]), [['', 'default · Opus 5.5'], ['opus', 'Opus 5.5'], ['haiku', 'Haiku 4.5']]);
+assert.deepStrictEqual([...modB.options].map((o) => o.textContent), ['default · GPT-5.6-Sol', 'GPT-5.5']);
+change(modA, 'haiku');
+assert.deepStrictEqual(out.pop(), { type: 'setModel', sid: 'a', value: 'haiku' });
+
+// effort: 'default' is the empty value
+const effA = pick(paneA, 'effort'), effB = pick(paneB, 'effort');
 assert.deepStrictEqual([...effA.options].map((o) => [o.value, o.textContent]), [['', 'default'], ['low', 'low'], ['high', 'high'], ['max', 'max']]);
-assert.deepStrictEqual([...paneB.querySelectorAll('select')[0].options].map((o) => o.value), ['', 'minimal', 'high']);
-effA.value = 'high'; effA.dispatchEvent(new window.Event('change'));
+assert.deepStrictEqual([...effB.options].map((o) => [o.value, o.textContent]), [['', 'default · ultra'], ['high', 'high'], ['ultra', 'ultra']]);
+change(effA, 'high');
 assert.deepStrictEqual(out.pop(), { type: 'setEffort', sid: 'a', value: 'high' });
 host({ type: 'tabs', tabs: [Object.assign({}, A, { effort: 'max' }), B], active: 'a' });
 assert.strictEqual(effA.value, 'max', 'selector follows the host');
+
+// the host answers a model change with a new effort list: the options are rebuilt, and a single option disables the control
+host({ type: 'tabs', tabs: [Object.assign({}, A, { model: 'haiku', effort: '', efforts: [opt('')], actualModel: 'claude-haiku-4-5' }), B], active: 'a' });
+assert.strictEqual(modA.value, 'haiku');
+assert.deepStrictEqual([...effA.options].map((o) => o.value), [''], 'effort options follow the model');
+assert.strictEqual(effA.disabled, true, 'nothing to choose');
+assert(/no effort control/.test(effA.title));
+assert(/Running claude-haiku-4-5/.test(modA.title), 'tooltip names the model actually running');
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
-assert.strictEqual(effA.value, '', 'and returns to default');
+assert.deepStrictEqual([...effA.options].map((o) => o.value), ['', 'low', 'high', 'max']); assert.strictEqual(effA.disabled, false);
+assert.strictEqual(effA.value, '', 'and returns to default'); assert.strictEqual(modA.value, '');
+assert.strictEqual(pick(paneA, 'effort'), effA, 'controls are updated in place, not recreated');
+
+// a started codex thread says its choices are fixed
+host({ type: 'tabs', tabs: [A, Object.assign({}, B, { started: true })], active: 'a' });
+assert(/keeps the model it started with/.test(modB.title) && /keeps the effort it started with/.test(effB.title) && /keeps the sandbox it started with/.test(pick(paneB, 'sandbox').title));
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
 
 // new-tab menu and close
 $('#add').click();
