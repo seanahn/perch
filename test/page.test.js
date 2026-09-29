@@ -11,10 +11,15 @@ const { window } = dom; const d = window.document;
 const host = (m) => window.dispatchEvent(new window.MessageEvent('message', { data: m }));
 const ev = (sid, e) => host({ type: 'event', sid, ev: e });
 const $ = (s) => d.querySelector(s), $$ = (s) => [...d.querySelectorAll(s)];
-const visiblePane = () => $$('.pane').filter((p) => !p.hidden);
+// rendered visibility, not the attribute: an author display rule can override [hidden]
+const shown = (n) => window.getComputedStyle(n).display !== 'none';
+const visiblePane = () => $$('.pane').filter(shown);
 const tab = (o) => Object.assign({ busy: false, attention: false, mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'plan'] : ['read-only', 'workspace-write'] }, o);
 
 assert.deepStrictEqual(out.shift(), { type: 'ready' }, 'page announces ready');
+
+host({ type: 'tabs', tabs: [], active: null });
+assert(shown($('#empty')), 'a fresh page shows the empty state'); assert.strictEqual($$('.tab').length, 0);
 
 const A = tab({ id: 'a', kind: 'claude', title: 'Claude 1' }), B = tab({ id: 'b', kind: 'codex', title: 'Codex 1' });
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
@@ -94,7 +99,11 @@ assert.strictEqual($$('.pane').length, 1, 'closed tab removes its pane');
 ev('a', { kind: 'fill', text: 'handed off' }); assert.strictEqual($('#input').value, 'handed off');
 ev('a', { kind: 'clear' }); assert.strictEqual(paneA.querySelectorAll('.msg').length, 0);
 host({ type: 'tabs', tabs: [], active: null });
-assert.strictEqual($('#empty').hidden, false); assert.strictEqual($('#input').disabled, true);
+assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strictEqual($('#input').disabled, true);
+assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
+$$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
+host({ type: 'tabs', tabs: [A], active: 'a' });
+assert(!shown($('#empty')), 'empty state hides once a tab exists');
 
 console.log('PAGE OK');
 window.close();

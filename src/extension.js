@@ -168,8 +168,7 @@ class PerchView {
     switch (msg.type) {
       case 'ready':
         this.ready = true;
-        if (!this.sessions.length) { this.addSession('claude', { quiet: true }); this.addSession('codex', { quiet: true }); this.activeId = this.sessions[0].id; this.persist(); }
-        this.sendTabs();
+        this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
         for (const x of this.sessions) this.replay(x);
         return;
       case 'send': if (s) s.send(msg.text); return;
@@ -184,12 +183,11 @@ class PerchView {
   }
 
   // ---- session management
-  addSession(kind, { quiet, fill } = {}) {
+  addSession(kind, { fill } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
     const n = ++this.counters[kind];
     const s = new Session(this, { kind, title: `${kind === 'claude' ? 'Claude' : 'Codex'} ${n}` });
     this.sessions.push(s);
-    if (quiet) return s;
     this.activeId = s.id;
     this.persist();
     this.sendTabs();

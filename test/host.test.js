@@ -9,10 +9,22 @@ const { install, fakeView, created } = require('./stubs');
   const p = registered['perch.main'];
   assert(p, 'single view registered');
 
-  // first open: one Claude tab and one Codex tab, no agent processes yet
+  // first open in a fresh workspace: no tabs, no agents, nothing saved
   const v1 = fakeView(); p.resolveWebviewView(v1.view); v1.fire({ type: 'ready' });
   let t = v1.lastTabs();
-  assert.deepStrictEqual(t.tabs.map((x) => x.kind), ['claude', 'codex'], 'default tabs');
+  assert.deepStrictEqual(t.tabs, [], 'starts with no tabs');
+  assert.strictEqual(t.active, null, 'nothing active');
+  assert.strictEqual(memento._dump()['perch.sessions.v1'], undefined, 'nothing persisted until the user opens a tab');
+  commands['perch.stop'](); commands['perch.closeTab'](); await commands['perch.handoff']();   // all safe with no tabs
+  v1.fire({ type: 'send', sid: 'nope', text: 'x' });                                          // unknown tab is ignored
+
+  // the user opens one of each
+  v1.fire({ type: 'new', kind: 'claude' });
+  v1.fire({ type: 'new', kind: 'codex' });
+  v1.fire({ type: 'new', kind: 'gemini' });                                                   // unknown kind is ignored
+  t = v1.lastTabs();
+  assert.deepStrictEqual(t.tabs.map((x) => x.title), ['Claude 1', 'Codex 1'], 'tabs opened on request');
+  v1.fire({ type: 'activate', sid: t.tabs[0].id }); t = v1.lastTabs();
   assert.strictEqual(t.active, t.tabs[0].id, 'first tab active');
   assert.strictEqual(created.length, 0, 'agents start lazily, not on open');
   const [c1, x1] = t.tabs.map((x) => x.id);
@@ -99,7 +111,16 @@ const { install, fakeView, created } = require('./stubs');
   v3.fire({ type: 'send', sid: rt.tabs[0].id, text: 'continue' });
   assert.strictEqual(created[before].o.resume, 'sess-0', 'agent resumed with its saved session id');
   v3.fire({ type: 'new', kind: 'claude' });
-  assert.strictEqual(v3.lastTabs().tabs.pop().title, 'Claude 3', 'numbering continues after reload');
+  assert.strictEqual(v3.lastTabs().tabs.slice(-1)[0].title, 'Claude 3', 'numbering continues after reload');
+
+  for (const x of v3.lastTabs().tabs) v3.fire({ type: 'close', sid: x.id });
+  assert.deepStrictEqual(v3.lastTabs().tabs, [], 'closing every tab returns to empty');
+  assert.strictEqual(v3.lastTabs().active, null);
+  const empty = install(again.memento._dump());
+  const v4 = fakeView(); empty.registered['perch.main'].resolveWebviewView(v4.view); v4.fire({ type: 'ready' });
+  assert.deepStrictEqual(v4.lastTabs().tabs, [], 'stays empty after reload; no tabs are re-created for you');
+  v4.fire({ type: 'new', kind: 'claude' });
+  assert.strictEqual(v4.lastTabs().tabs[0].title, 'Claude 4', 'numbering still continues');
 
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

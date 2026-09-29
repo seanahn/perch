@@ -51,17 +51,21 @@ function getHtml({ nonce, cspSource }) {
   .result { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: right; }
   .perm { border: 1px solid var(--vscode-inputValidation-warningBorder); background: var(--vscode-inputValidation-warningBackground); }
   .perm .btns { display: flex; gap: 6px; margin-top: 6px; }
-  .empty { padding: 24px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
+  .empty { padding: 32px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
+  .empty .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+  .empty button { font-size: 12px; padding: 4px 12px; display: inline-flex; gap: 6px; align-items: center; }
   button { font-size: 11px; padding: 2px 10px; border-radius: 2px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   #compose { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); flex: none; }
   textarea { flex: 1; resize: none; min-height: 40px; max-height: 160px; font-family: inherit; font-size: inherit; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 6px; }
   textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
+  /* last on purpose: an author display rule (.pane is flex) would otherwise override the hidden attribute */
+  [hidden] { display: none !important; }
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
-  <div id="panes"><div class="empty" id="empty" hidden>No sessions. Press + to open a Claude or Codex tab.</div></div>
-  <div id="compose"><textarea id="input" rows="2"></textarea><button id="send" class="primary">Send</button></div>
+  <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude"><span class="k claude">C</span>New Claude tab</button><button id="e-codex"><span class="k codex">X</span>New Codex tab</button></div></div></div>
+  <div id="compose"><textarea id="input" rows="2" disabled placeholder="Open a tab with +"></textarea><button id="send" class="primary" disabled>Send</button></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -175,6 +179,8 @@ function getHtml({ nonce, cspSource }) {
     const r = $add.getBoundingClientRect(); menu.style.top = (r.bottom + 2) + 'px'; menu.style.left = Math.max(4, Math.min(r.left, window.innerWidth - menu.offsetWidth - 4)) + 'px';
   });
   document.addEventListener('click', closeMenu);
+  document.getElementById('e-claude').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'claude' }));
+  document.getElementById('e-codex').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'codex' }));
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
