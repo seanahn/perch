@@ -69,6 +69,7 @@ async function transcribe(id, o) {
   const e = getEngine(o.engine); if (!e) return fail(NO_ENGINE, 'no-engine');
   try {
     const out = await e.transcribe({ pcm: r.pcm, sampleRate: r.sampleRate, language: o.language || null, prompt: o.prompt || null });
+    if (cfg('saveRecordings')) { try { require('fs').appendFileSync(require('path').join(cfg('saveRecordings'), 'transcripts.log'), `${new Date().toISOString()} ${r.device} ${r.seconds}s -> ${JSON.stringify(out.text || '')}\n`); } catch (_) { /* a diagnostic only */ } }
     return Object.assign({ ok: true, text: String(out.text || ''), language: out.language, took_ms: out.took_ms }, meta);
   } catch (err) { return fail(err.message, 'transcribe-failed'); }
 }
@@ -115,7 +116,22 @@ async function stop(id) {
   const a = mine(id); if (!a) return fail('No such recording.', 'unknown');
   active = null;
   const r = await a.rec.stop();
+  saveRecording(r);
   return { ok: true, pcm: r.pcm.toString('base64'), sampleRate: r.sampleRate, seconds: r.seconds, silent: r.peak === 0, device: r.device, ended: r.ended, error: r.error };
+}
+/** A diagnostic: with perchAudio.saveRecordings naming a directory, each recording is written there as a WAV, named by time and device. */
+function saveRecording(r) {
+  const dir = cfg('saveRecordings'); if (!dir || !r || !r.pcm) return null;
+  try {
+    const fs = require('fs'); const path = require('path');
+    fs.mkdirSync(dir, { recursive: true });
+    const h = Buffer.alloc(44), n = r.pcm.length, rate = r.sampleRate || 16000;
+    h.write('RIFF', 0); h.writeUInt32LE(36 + n, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+    h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(n, 40);
+    const file = path.join(dir, `perch-${new Date().toISOString().replace(/[:.]/g, '-')}-${String(r.device || 'mic').replace(/[^\w.-]+/g, '_')}.wav`);
+    fs.writeFileSync(file, Buffer.concat([h, r.pcm]));
+    return file;
+  } catch (_) { return null; }
 }
 async function cancel(id) { const a = id === undefined ? active : mine(id); if (!a) return { ok: true }; active = null; await a.rec.cancel(); return { ok: true }; }
 

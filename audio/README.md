@@ -15,6 +15,10 @@ It is installed with Perch. On its own it does nothing.
 - `Perch Audio: Choose Microphone…` picks the microphone to record from.
 - `perchAudio.device` names it; empty uses the system default.
 - `perchAudio.maxSeconds` is how long a recording may run, 180 by default.
+- `perchAudio.saveRecordings`, a diagnostic: a directory on this computer
+  where each recording is saved as a WAV, with a `transcripts.log` of what
+  was heard when the words are worked out here. Empty, the default, saves
+  nothing.
 
 Audio is held in memory only while a recording is in progress. Nothing is
 written to disk, and nothing here reads workspace files.

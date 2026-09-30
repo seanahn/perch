@@ -6,13 +6,13 @@ const Module = require('module');
 const FRAME = 512;
 const ui = { progress: [] };
 const fakeVscode = {
-  workspace: { getConfiguration: () => ({ get: (k) => (k === 'maxSeconds' ? 180 : ''), update: async () => {} }) },
+  workspace: { getConfiguration: () => ({ get: (k) => (k in cfgBox ? cfgBox[k] : k === 'maxSeconds' ? 180 : ''), update: async () => {} }) },
   window: { withProgress: async (o, task) => { ui.progress.push(o.title); return task({ report: (r) => ui.progress.push(r.message) }); }, showErrorMessage: () => {}, showQuickPick: async () => undefined },
   ProgressLocation: { Notification: 15 },
   ConfigurationTarget: { Global: 1 },
   commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; } },
 };
-const commands = {};
+const commands = {}; const cfgBox = {};
 const load = Module._load;
 Module._load = function (request, ...rest) { return request === 'vscode' ? fakeVscode : load.call(this, request, ...rest); };
 const ext = require('../src/extension');
@@ -72,6 +72,20 @@ class FakeEngine {
   assert.deepStrictEqual([box.requests.length, box.requests[0].language, box.requests[0].prompt, box.requests[0].sampleRate, box.requests[0].pcm.length > 0], [1, 'ko', 'Perch', 16000, true]);
   assert.deepStrictEqual(await run('transcribe', 'nope', {}), { ok: false, error: 'No such recording.', code: 'unknown' });
   assert.deepStrictEqual(run('unload'), { ok: true }); assert.strictEqual(box.stops, 2);
+
+  // ---- the diagnostic: with a directory named, each recording is saved as a WAV there, and what was heard is logged
+  const fs = require('fs'), os = require('os');
+  const dir = fs.mkdtempSync(Path.join(os.tmpdir(), 'perch-rec-')); cfgBox.saveRecordings = dir;
+  const s2 = run('start'); await new Promise((r) => setTimeout(r, 60)); const t2 = await run('transcribe', s2.id, { engine: { model: 'small' } });
+  const files = fs.readdirSync(dir).sort();
+  assert.deepStrictEqual([files.length, /^perch-\d{4}-\d{2}-\d{2}T.*-USB_Microphone\.wav$/.test(files[0]), files[1]], [2, true, 'transcripts.log'], 'named by time and device');
+  const wav = fs.readFileSync(Path.join(dir, files[0]));
+  assert.deepStrictEqual([wav.slice(0, 4).toString(), wav.slice(8, 12).toString(), wav.readUInt32LE(24), wav.readUInt16LE(22), wav.readUInt32LE(40) + 44], ['RIFF', 'WAVE', 16000, 1, wav.length], '16 kHz mono 16-bit, the whole recording');
+  assert(wav.readUInt32LE(40) >= 2 * FRAME * 2, 'more than a frame of audio');
+  assert(new RegExp(' USB Microphone ' + t2.seconds + 's -> "hello from the laptop"\n$').test(fs.readFileSync(Path.join(dir, 'transcripts.log'), 'utf8')));
+  delete cfgBox.saveRecordings; fs.rmSync(dir, { recursive: true, force: true });
+  const s3 = run('start'); await new Promise((r) => setTimeout(r, 20)); await run('transcribe', s3.id, { engine: { model: 'small' } });
+  assert.strictEqual(fs.existsSync(dir), false, 'nothing is written once it is off');
 
   // ---- no GPU, no engine
   ext._reset({ exec: (cmd) => { if (cmd === 'pactl') return '[]'; throw new Error('no ' + cmd); }, engine: FakeEngine });

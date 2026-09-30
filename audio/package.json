@@ -23,7 +23,8 @@
       "title": "Perch Audio",
       "properties": {
         "perchAudio.device": { "type": "string", "default": "", "description": "The microphone to record from, by name. Empty uses the system default. Choose one with Perch Audio: Choose Microphone." },
-        "perchAudio.maxSeconds": { "type": "number", "default": 180, "minimum": 5, "maximum": 600, "description": "Recording stops by itself after this many seconds." }
+        "perchAudio.maxSeconds": { "type": "number", "default": 180, "minimum": 5, "maximum": 600, "description": "Recording stops by itself after this many seconds." },
+        "perchAudio.saveRecordings": { "type": "string", "default": "", "description": "A diagnostic. A directory on this computer; each recording is saved there as a WAV, with a transcripts.log of what was heard when the words are worked out here. Empty saves nothing." }
       }
     }
   },
