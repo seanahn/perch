@@ -147,6 +147,21 @@ function claudeSaid(text) {
   return t;
 }
 
+/**
+ * The IDE context perch attaches to a message is not part of what the user wrote: a past message is shown without it,
+ * tagged as a live one is, with the file's name and the lines if any.
+ * @returns {{text: string, tag?: string}}
+ */
+function splitIde(said) {
+  const at = String(said || '').indexOf('\n<ide_context>');
+  if (at < 0) return { text: String(said || '').trim() };
+  const block = said.slice(at);
+  const file = /Active file: (.+?)(?: \([^)\n]*\))?\n/.exec(block), sel = /Selection: lines (\d+)-(\d+)/.exec(block);
+  const name = file ? path.basename(file[1]) : '';
+  const tag = name ? name + (sel ? `:${sel[1]}` + (sel[2] !== sel[1] ? `-${sel[2]}` : '') : '') : 'IDE context';
+  return { text: said.slice(0, at).trim(), tag };
+}
+
 /** @param {object[]} messages  as the Agent SDK returns them */
 function claudeEvents(messages) {
   const out = [];
@@ -155,8 +170,9 @@ function claudeEvents(messages) {
     const c = m.message.content;
     const blocks = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
     if (m.type === 'user') {
-      const said = blocks.filter((b) => b && b.type === 'text').map((b) => claudeSaid(b.text)).filter(Boolean).join('\n'), images = blocks.filter(isImage).length;
-      if (said || images) out.push(Object.assign({ kind: 'user', text: said, queued: false }, images ? { images } : {}));
+      const raw = blocks.filter((b) => b && b.type === 'text').map((b) => claudeSaid(b.text)).filter(Boolean).join('\n'), images = blocks.filter(isImage).length;
+      const { text: said, tag } = splitIde(raw);
+      if (said || images) out.push(Object.assign({ kind: 'user', text: said, queued: false }, images ? { images } : {}, tag ? { tag } : {}));
       for (const b of blocks) if (b && b.type === 'tool_result') {
         const text = Array.isArray(b.content) ? b.content.map((x) => (x && x.text) || '').join('\n') : String(b.content || '');
         out.push(Object.assign({ kind: 'tool_result', id: b.tool_use_id, isError: !!b.is_error }, cut(text, MAX_RESULT)));
@@ -187,8 +203,8 @@ function codexEvents(text) {
     if (p.type === 'message' && Array.isArray(p.content)) {
       if (p.role === 'user') {
         const said = p.content.filter((c) => c && c.type === 'input_text' && typeof c.text === 'string' && !c.text.trim().startsWith('<')).map((c) => c.text).join('\n');
-        const at = said.indexOf('\n<ide_context>'), words = (at < 0 ? said : said.slice(0, at)).trim(), images = p.content.filter(isImage).length;
-        if (words || images) out.push(Object.assign({ kind: 'user', text: words, queued: false }, images ? { images } : {}, at < 0 ? {} : { tag: 'IDE context' }));
+        const { text: words, tag } = splitIde(said), images = p.content.filter(isImage).length;
+        if (words || images) out.push(Object.assign({ kind: 'user', text: words, queued: false }, images ? { images } : {}, tag ? { tag } : {}));
       } else if (p.role === 'assistant') {
         const said = p.content.filter((c) => c && c.type === 'output_text' && typeof c.text === 'string').map((c) => c.text).join('\n');
         if (said) out.push({ kind: 'text', text: said });
@@ -254,4 +270,4 @@ async function renameSession(kind, id, title, opts = {}) {
   return name;
 }
 
-module.exports = { listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

@@ -138,7 +138,7 @@ function rollout(home, day, id, lines, mtime) {
     JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'Done.' } }), '{"torn',
     item({ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'data:' }] }), msg('assistant', 'Done.')];
   const expected = [
-    { kind: 'user', text: 'fix this', queued: false, tag: 'IDE context' }, { kind: 'thinking', text: 'thinking aloud' },
+    { kind: 'user', text: 'fix this', queued: false, tag: 'a.js' }, { kind: 'thinking', text: 'thinking aloud' },
     { kind: 'tool_use', id: 'c1', name: 'shell', input: { command: ['ls'] } }, { kind: 'tool_result', id: 'c1', isError: false, text: 'a.js', truncated: false },
     { kind: 'tool_use', id: 'c2', name: 'exec', input: 'text(1)' }, { kind: 'tool_result', id: 'c2', isError: false, text: ('Output:\n' + long).slice(0, 4000), truncated: true },
     { kind: 'user', text: '', queued: false, images: 1 }, { kind: 'text', text: 'Done.' },
@@ -158,5 +158,11 @@ function rollout(home, day, id, lines, mtime) {
   assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0 });
   await assert.rejects(S.loadTranscript('claude', 'c-1', { sdk: { getSessionMessages: async () => { throw new Error('unreadable'); } } }), /unreadable/);
 
-  console.log('SESSIONS OK');
+    // the IDE context perch attaches is shown as a tag, as on a live message, never as text
+  assert.deepStrictEqual(S.splitIde('what model am i using?\n\n<ide_context>\nActive file: docs/notes/821.md (markdown)\nCursor: line 167\n</ide_context>'), { text: 'what model am i using?', tag: '821.md' });
+  assert.deepStrictEqual(S.splitIde('why?\n\n<ide_context>\nActive file: src/a.js (javascript)\nSelection: lines 3-4\n```javascript\nconst a = 1;\n```\n</ide_context>'), { text: 'why?', tag: 'a.js:3-4' });
+  assert.deepStrictEqual(S.splitIde('one line\n\n<ide_context>\nActive file: /tmp/x.py\nSelection: lines 7-7 (first 12000 characters)\n</ide_context>'), { text: 'one line', tag: 'x.py:7' });
+  assert.deepStrictEqual([S.splitIde('plain'), S.splitIde(''), S.splitIde(undefined)], [{ text: 'plain' }, { text: '' }, { text: '' }]);
+  assert.deepStrictEqual(S.claudeEvents([{ type: 'user', message: { role: 'user', content: 'hangs\n\n<ide_context>\nActive file: docs/notes/658.md (markdown)\nCursor: line 7\n</ide_context>' } }]), [{ kind: 'user', text: 'hangs', queued: false, tag: '658.md' }], 'a Claude record too');
+console.log('SESSIONS OK');
 })().catch((e) => { console.error('SESSIONS FAILED:', e.stack || e.message); process.exit(1); });
