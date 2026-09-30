@@ -120,7 +120,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] }, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -178,6 +178,8 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       createWebviewPanel: (viewType, title, show, options) => makePanel(viewType, title, show, options),
       registerWebviewPanelSerializer: (viewType, z) => { ui.serializers[viewType] = z; return { dispose() {} }; },
       get activeTextEditor() { return ui.editor; },
+      get visibleTextEditors() { return ui.visible !== undefined ? ui.visible : (ui.editor ? [ui.editor] : []); },
+      onDidChangeActiveTextEditor: (f) => { ui.listeners.editor.push(f); return { dispose() {} }; },
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); ui.executed.push(id); } },

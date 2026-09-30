@@ -541,6 +541,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.ui.editor = editor('/big.txt', 'plaintext', 'x'.repeat(20000), sel(0, 0, 0, 20000));
     v2.fire({ type: 'send', sid: x, text: 'big' }); await flush();
     const big = cx.sent.pop(); assert(/Selection: lines 1-1 \(first 12000 characters\)/.test(big) && big.length < 12300, 'a long selection is cut, and says so');
+    // a Perch tab in the editor area has the focus while the message is written, so there is no active editor: the file
+    // last focused is used, read from the editor still showing it; once it is off the screen, nothing is attached
+    m.ui.editor = editor(path.join(process.cwd(), 'src', 'b.js'), 'javascript', '', sel(1, 0, 1, 0)); for (const f of m.ui.listeners.editor) f(m.ui.editor);
+    const keep = m.ui.editor; m.ui.editor = undefined; for (const f of m.ui.listeners.editor) f(undefined); m.ui.visible = [keep];
+    v2.fire({ type: 'send', sid: x, text: 'focus' }); await flush();
+    assert(/\nActive file: src\/b\.js \(javascript\)\nCursor: line 2\n<\/ide_context>$/.test(cx.sent.pop()), 'the last file focused, while it is on screen');
+    m.ui.visible = []; v2.fire({ type: 'send', sid: x, text: 'gone' }); await flush();
+    assert.strictEqual(cx.sent.pop(), 'gone', 'a file no longer on screen is not attached');
+    m.ui.visible = undefined;
     for (const ed of [undefined, { selection: sel(0, 0, 0, 0), document: { uri: { scheme: 'untitled', fsPath: 'Untitled-1' }, languageId: 'plaintext', getText: () => '' } }]) {
       m.ui.editor = ed; v2.fire({ type: 'send', sid: x, text: 'nothing open' }); await flush();
       assert.strictEqual(cx.sent.pop(), 'nothing open', 'no editor, or an unsaved one: the message goes as written');

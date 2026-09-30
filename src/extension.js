@@ -115,8 +115,23 @@ const IDE_MAX_CHARS = 12000;          // a selection longer than this is cut, an
  * What the editor is looking at, for a Codex message: the active file and, if there is one, the selection.
  * @returns {{ block: string, tag: string } | null}  the text appended to the message, and a short label for the transcript
  */
-function ideContext() {
+// The file editor last focused. activeTextEditor is undefined while a Perch tab (a webview panel in the editor area) has
+// the focus, which is exactly when a message is written; Claude Code's own panel remembers the last file the same way.
+let lastFile = null;
+function watchEditors(context) {
+  const note = (ed) => { if (ed && ed.document && ed.document.uri.scheme === 'file') lastFile = ed.document.uri.fsPath; };
+  note(vscode.window.activeTextEditor);
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(note));
+}
+/** The editor to read: the active one, or the last file focused while it is still open somewhere on screen. */
+function contextEditor() {
   const ed = vscode.window.activeTextEditor;
+  if (ed) return ed;
+  if (!lastFile) return null;
+  return (vscode.window.visibleTextEditors || []).find((v) => v.document && v.document.uri.fsPath === lastFile) || null;
+}
+function ideContext() {
+  const ed = contextEditor();
   if (!ed || !ed.document || ed.document.uri.scheme !== 'file') return null;
   const path = require('path');
   const abs = ed.document.uri.fsPath, r = path.relative(cwd(), abs);
@@ -991,6 +1006,7 @@ class PerchView {
 }
 
 function activate(context) {
+  watchEditors(context);
   const perch = new PerchView(context);
   perch.meter.start();
   context.subscriptions.push(

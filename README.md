@@ -224,6 +224,9 @@ the active file and, if there is one, the selection with its line numbers,
 as the vendors' own panels do. The transcript shows your message and a tag naming what
 was attached, not the attachment itself. The context is read when you
 write the message, so a queued message keeps the file that was open then.
+A Perch tab in the editor area takes the focus while you type, so the
+file attached is the one last focused, as long as it is still open on
+screen; the tag on your message says which.
 
 **Queueing.** Enter always sends. While the agent is working, the message
 is queued behind the current turn and marked so. Claude Code queues it
