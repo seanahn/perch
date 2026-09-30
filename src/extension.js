@@ -22,6 +22,7 @@ const EFFORTS = {
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 const STATE_KEY = 'perch.sessions.v1';
+const UNSANDBOXED_KEY = 'perch.codex.unsandboxed';   // { hostname: true } for machines where Codex's sandbox cannot start
 const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
 // how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
 const RESTORE_GRACE_MS = Number(process.env.PERCH_RESTORE_GRACE_MS) > 0 ? Number(process.env.PERCH_RESTORE_GRACE_MS) : 4000;
@@ -233,6 +234,8 @@ class Session {
   post(ev) {
     // a login that has expired shows as 401 from the API; the same offer follows the error
     if (ev.kind === 'error' && this.kind === 'codex' && /\b401\b.*Unauthorized/i.test(String(ev.text))) this.view.codexLogin(`Codex was refused: the login on ${require('os').hostname()} has expired or is missing.`);
+    // Codex's Linux sandbox is bubblewrap, which needs user namespaces; a container that forbids them fails every command this way
+    if (ev.kind === 'tool_result' && this.kind === 'codex' && this.mode !== 'danger-full-access' && !this.sandboxAsked && /bwrap: No permissions to create a new namespace/.test(String(ev.text))) { this.sandboxAsked = true; this.view.codexNoSandbox(this); }
     switch (ev.kind) {
       case 'status':
         this.lastStatus = ev.text;
@@ -484,6 +487,29 @@ class PerchView {
   }
 
   /** Put text into a session's message box, at the cursor. If its page is not there to take it, it waits. */
+  /** Machines where Codex must run without a sandbox, by hostname; remembered across windows and reloads. */
+  unsandboxedHosts() { const v = this.context.globalState.get(UNSANDBOXED_KEY); return v && typeof v === 'object' ? v : {}; }
+  codexUnsandboxedHere() { return !!this.unsandboxedHosts()[require('os').hostname()]; }
+
+  /**
+   * Codex's sandbox could not start here: bubblewrap needs unprivileged user namespaces, which a container often
+   * forbids, and Codex has no other sandbox on Linux (its legacy Landlock path is deprecated and, tried, fails too). The
+   * way on is to run without one, which the user decides: for this tab, or for every tab on this machine from now on.
+   */
+  async codexNoSandbox(s) {
+    if (this.sandboxOpen) return;
+    this.sandboxOpen = true;
+    try {
+      const host = require('os').hostname();
+      const pick = await vscode.window.showWarningMessage(`Codex's sandbox cannot start on ${host}: the kernel forbids the user namespaces it needs, and Codex has no other sandbox on Linux. Codex can run here without one, as you, with approvals as perch.codex.approvalPolicy says.`, 'Full Access, This Tab', `Full Access on ${host}`);
+      if (!pick) return;
+      if (pick !== 'Full Access, This Tab') { const hosts = this.unsandboxedHosts(); hosts[host] = true; await this.context.globalState.update(UNSANDBOXED_KEY, hosts); }
+      if (s.disposed) return;
+      s.setMode('danger-full-access'); this.sendTabs();
+      s.post({ kind: 'note', text: `Codex runs without a sandbox in this tab${pick !== 'Full Access, This Tab' ? `, and in new tabs on ${host}` : ''}. Send the message again.` });
+    } finally { this.sandboxOpen = false; }
+  }
+
   /**
    * Offer the way into Claude, for a machine with nothing to authenticate with. On a subscription: Claude Code's own
    * sign-in (the meter's login), watched until it lands; or the switch to API / Bedrock. On API / Bedrock: the settings
@@ -773,10 +799,13 @@ class PerchView {
   addSession(kind, { fill, location, resume, title } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
     const vendor = kind === 'claude' ? 'Claude' : 'Codex';
+    // a machine where Codex's sandbox cannot start (codexNoSandbox): new Codex tabs run without one, and say so
+    const mode = kind === 'codex' && this.codexUnsandboxedHere() ? 'danger-full-access' : undefined;
     const s = new Session(this, resume
-      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, location: location || this.where() }
-      : { kind, title: `${vendor} ${++this.counters[kind]}`, location: location || this.where() });
+      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where() }
+      : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where() });
     this.sessions.push(s);
+    if (mode) s.history.push({ kind: 'note', text: `Codex runs without a sandbox on ${require('os').hostname()}: the kernel forbids the user namespaces its sandbox needs.` });
     if (fill) s.prefill = fill;
     if (s.location === 'editor') { this.openPanel(s); this.sendTabs(); return s; }     // its page asks for the replay when it is ready
     this.activeId = s.id;

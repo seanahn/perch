@@ -186,6 +186,14 @@ Codex: the SDK runs `codex exec`, which is non-interactive. Approvals
 resolve by policy (`perch.codex.approvalPolicy`) and the sandbox
 (`perch.codex.sandboxMode`). There is no per-command prompt.
 
+Codex's sandbox on Linux is bubblewrap, which needs unprivileged user
+namespaces; a container that forbids them (a JupyterHub pod, say) fails
+every command with `bwrap: No permissions to create a new namespace`, and
+Codex has no other sandbox there. When that happens Perch asks whether to
+run Codex without a sandbox, for that tab or for every tab on that
+machine from then on; the choice is remembered by hostname, and such tabs
+say so when they open.
+
 ## The composer
 
 Each kind of tab takes its own vendor's look, so a Claude tab feels like

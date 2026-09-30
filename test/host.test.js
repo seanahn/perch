@@ -977,6 +977,39 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- Codex's sandbox cannot start on the machine: the choice to run without one, for the tab or for the machine
+  {
+    const HOST = require('os').hostname(), BWRAP = 'bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with \'sysctl kernel.unprivileged_userns_clone=1\'.';
+    const m = install(undefined, { remote: 'ssh-remote' }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'what branch am i on?' }); await flush();
+    const a = created[created.length - 1];
+    a.emit({ kind: 'tool_use', id: 'c1', name: 'shell', input: { command: 'git status' } }); a.emit({ kind: 'tool_result', id: 'c1', text: BWRAP, isError: true }); await flush(); await flush();
+    assert.strictEqual(m.ui.warnings.pop(), `Codex's sandbox cannot start on ${HOST}: the kernel forbids the user namespaces it needs, and Codex has no other sandbox on Linux. Codex can run here without one, as you, with approvals as perch.codex.approvalPolicy says.`);
+    assert.deepStrictEqual([v.lastTabs().tabs.find((t) => t.id === x).mode, a.modes], ['workspace-write', []], 'declined: nothing changes');
+    a.emit({ kind: 'tool_result', id: 'c2', text: BWRAP, isError: true }); await flush();
+    assert.strictEqual(m.ui.warnings.length, 0, 'asked once per tab');
+    // for this tab only
+    v.fire({ type: 'new', kind: 'codex' }); const y = v.lastTabs().active; v.fire({ type: 'send', sid: y, text: 'ls' }); await flush();
+    const b = created[created.length - 1]; m.ui.answers.push('Full Access, This Tab');
+    b.emit({ kind: 'tool_result', id: 'c3', text: BWRAP, isError: true }); await flush(); await flush();
+    assert.deepStrictEqual([v.lastTabs().tabs.find((t) => t.id === y).mode, b.modes, m.globalState._dump()['perch.codex.unsandboxed']], ['danger-full-access', ['danger-full-access'], undefined]);
+    assert.strictEqual(v.events(y).filter((e) => e.kind === 'note').pop().text, 'Codex runs without a sandbox in this tab. Send the message again.');
+    v.fire({ type: 'new', kind: 'codex' }); assert.strictEqual(v.lastTabs().tabs.find((t) => t.id === v.lastTabs().active).mode, 'workspace-write', 'other tabs are as before');
+    // for the machine: remembered, and new Codex tabs here start without a sandbox and say so
+    v.fire({ type: 'new', kind: 'codex' }); const z = v.lastTabs().active; v.fire({ type: 'send', sid: z, text: 'ls' }); await flush();
+    const c = created[created.length - 1]; m.ui.answers.push(`Full Access on ${HOST}`);
+    c.emit({ kind: 'tool_result', id: 'c4', text: BWRAP, isError: true }); await flush(); await flush();
+    assert.deepStrictEqual([v.lastTabs().tabs.find((t) => t.id === z).mode, m.globalState._dump()['perch.codex.unsandboxed']], ['danger-full-access', { [HOST]: true }]);
+    assert.strictEqual(v.events(z).filter((e) => e.kind === 'note').pop().text, `Codex runs without a sandbox in this tab, and in new tabs on ${HOST}. Send the message again.`);
+    v.fire({ type: 'new', kind: 'codex' }); const w = v.lastTabs().active; await flush();
+    assert.strictEqual(v.lastTabs().tabs.find((t) => t.id === w).mode, 'danger-full-access');
+    assert.strictEqual(v.events(w).filter((e) => e.kind === 'note').pop().text, `Codex runs without a sandbox on ${HOST}: the kernel forbids the user namespaces its sandbox needs.`);
+    v.fire({ type: 'new', kind: 'claude' }); assert.strictEqual(v.lastTabs().tabs.find((t) => t.id === v.lastTabs().active).mode, 'default', 'Claude tabs are untouched');
+    m.perch.dispose();
+  }
+
   // ---- Codex with no login on the machine: the first message is held back, the login offered, the text put back
   {
     const m = install(undefined, { meter: { codexLoggedIn: false }, remote: 'ssh-remote' }); await flush();
