@@ -219,9 +219,8 @@ and a round send button. "Work locally" sits beneath, because perch runs
 Codex on this machine through the SDK.
 
 **IDE context**, on both kinds of tab, is on by default for new tabs
-(`perch.ideContext`) and remembered per tab. The toggle shows its state
-without a hover: coloured with a filled dot when on, dim and reading
-"IDE context off" when off. When on, each message carries
+(`perch.ideContext`) and remembered per tab. The toggle is green when on
+and grey when off. When on, each message carries
 the active file and, if there is one, the selection with its line numbers,
 as the vendors' own panels do. The transcript shows your message with a
 small tag, the file's name and the lines if any, not the attachment itself. The context is read when you
