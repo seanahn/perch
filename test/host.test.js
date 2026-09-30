@@ -1420,6 +1420,23 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([ut.images, ut.thumbs, ca.images[1]], [3, [T, '', ''], [PNG, JPG, PNG]]);
     assert.deepStrictEqual(m.perch.get(c).history.filter((h) => h.kind === 'user').pop().thumbs, [T, '', ''], 'kept for a page made again');
     assert(!JSON.stringify(m.memento._dump()).includes(PNG.data), 'nor does what is saved');
+    // the thumbnails are saved with the tab, and after a reload rejoin the messages the record says had images
+    const st = m.memento._dump()['perch.sessions.v1'].sessions.find((s) => s.id === c);
+    assert.deepStrictEqual(st.kept, [['', ''], [T, '', '']], 'one entry per message sent with images, oldest first');
+    {
+      const events = [{ kind: 'user', text: 'what is wrong here', queued: false, images: 2 }, { kind: 'text', text: 'nothing' }, { kind: 'user', text: 'thumbs', queued: false, images: 3 }, { kind: 'text', text: 'three' }];
+      const r = install(m.memento._dump(), { past: { transcripts: { [st.resume]: { events, earlier: 0 } } } }); await flush();
+      const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush(); await flush();
+      assert.deepStrictEqual(vr.events(c).filter((e) => e.kind === 'user').map((e) => e.thumbs), [undefined, [T, '', '']], 'the last message with images has its thumbnails back; one whose thumbnails were all dropped has none');
+      // when the record holds more image messages than were saved with the tab, the saved ones go to the latest
+      const r2 = install(m.memento._dump(), { past: { transcripts: { [st.resume]: { events: [{ kind: 'user', text: 'older', queued: false, images: 1 }, ...events], earlier: 0 } } } }); await flush();
+      const v2 = fakeView(); r2.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush(); await flush();
+      assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'user').map((e) => e.thumbs), [undefined, undefined, [T, '', '']]);
+      // what is saved is bounded: the oldest thumbnails go once they weigh too much
+      const s2 = r2.perch.get(c); for (let i = 0; i < 3; i++) s2.keep(['data:image/jpeg;base64,' + 'A'.repeat(700000)]);
+      assert.deepStrictEqual([s2.kept.length, s2.kept[0][0].length > 100000], [2, true], 'about 1.5 MB in all');
+      r.perch.dispose(); r2.perch.dispose();
+    }
 
     // an image with no words is a message; it does not name the tab
     v.fire({ type: 'new', kind: 'claude' }); const c2 = v.lastTabs().active;

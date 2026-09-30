@@ -57,6 +57,7 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+const MAX_KEPT_BYTES = 1500000;    // thumbnails saved with a tab, all messages together: about fifty screenshots at 320 px
 // what both agents take as an image. The size is of the base64 text, which is what the services measure.
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_IMAGES = 8, MAX_IMAGE_CHARS = 5000000;
@@ -167,7 +168,7 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar }) {
+  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -184,6 +185,7 @@ class Session {
     this.costSoFar = typeof costSoFar === 'number' ? costSoFar : null;   // claude only: the session's cost at API rates, as last reported, so each turn's own cost can be told
     this.queue = [];                 // codex only: messages waiting for the current turn to end
     this.thumbs = [];                // the thumbnails of each message sent, until the agent reports the message and they join it
+    this.kept = Array.isArray(kept) ? kept : [];   // the thumbnails of every message sent with images, oldest first, saved with the tab: the agent's record has the images, not these
     this.ide = ide === undefined ? cfg('ideContext') !== false : !!ide;   // attach the active file and selection to each message, as the vendors' own panels do
     this.location = location === 'sidebar' || location === 'editor' ? location : view.where();   // which surface shows this tab
     this.paneled = !!paneled;        // an editor tab has been opened for it at some point, so VS Code will restore that tab
@@ -206,6 +208,9 @@ class Session {
     if (this.disposed || at < 0 || !past || !past.events.length) return;
     // the transcript speaks for itself; only what is missing from it is said, where it is missing
     const cut = past.earlier ? [{ kind: 'note', text: `${past.earlier} earlier entries are not shown, the agent still has them` }] : [];
+    // the record has the images themselves, too large to show; the thumbnails saved with the tab rejoin the last messages that had images
+    const withImages = past.events.filter((e) => e.kind === 'user' && e.images);
+    for (let i = withImages.length - 1, k = this.kept.length - 1; i >= 0 && k >= 0; i--, k--) if (this.kept[k].some(Boolean)) withImages[i].thumbs = this.kept[k];
     this.history.splice(at, 1, ...cut, ...past.events);
     this.resumed = null;
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
@@ -277,7 +282,7 @@ class Session {
       case 'user':
         // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
         if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
-        if (ev.images && this.thumbs.length) { const t = this.thumbs.shift(); if (t.some(Boolean)) ev.thumbs = t; }
+        if (ev.images && this.thumbs.length) { const t = this.thumbs.shift(); if (t.some(Boolean)) ev.thumbs = t; this.keep(t); }
         if (!this.titled) { const name = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28); if (name) { this.title = name; this.titled = true; this.view.sendTabs(); this.view.persist(); } }   // a message that is only an image names nothing
         this.history.push(ev); break;
       case 'permission': case 'question':
@@ -444,7 +449,15 @@ class Session {
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : ''), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept }; }
+
+  /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
+  keep(thumbs) {
+    this.kept.push(thumbs.map((t) => (typeof t === 'string' ? t : '')));
+    let bytes = this.kept.reduce((n, a) => n + a.reduce((m, t) => m + t.length, 0), 0);
+    while (this.kept.length > 1 && bytes > MAX_KEPT_BYTES) bytes -= this.kept.shift().reduce((m, t) => m + t.length, 0);
+    this.view.persist();
+  }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
