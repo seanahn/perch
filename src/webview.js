@@ -69,7 +69,9 @@ ${glyphCss}
   .work.ask .sp { border-color: var(--vscode-charts-red); animation: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
-  .user { background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 8px; }
+  /* a message of the user's stands apart from the answers: to the right, a filled tint of the foreground so it shows in any theme, and space above it that marks where a turn begins */
+  .user { margin: 18px 0 10px auto; width: fit-content; max-width: 88%; padding: 8px 12px; background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); border-radius: 12px 12px 4px 12px; }
+  .user:first-child { margin-top: 4px; }
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
   .user .pics { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
