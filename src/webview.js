@@ -203,7 +203,11 @@ ${glyphCss}
   #composer.codex #t-model { color: var(--vscode-foreground); }
   #composer.codex #t-model .e { color: #b48ead; }
   #composer.codex #t-model .chev { display: block; width: 12px; height: 12px; opacity: .7; }
-  #composer.codex #t-ide.on { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+  /* the IDE-context toggle says its state without a hover: on is coloured with a filled dot, off is dim and says so */
+  #t-ide { color: var(--vscode-descriptionForeground); opacity: .7; }
+  #t-ide .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; flex: none; }
+  #t-ide.on { color: var(--vscode-textLink-foreground); opacity: 1; }
+  #t-ide.on .dot { background: currentColor; }
   /* a neutral disc mixed from the text colour, so it shows on any theme; a theme's secondary button colour can match the box */
   #composer.codex #send { width: 30px; height: 30px; border-radius: 50%; background: rgba(128,128,128,.4); background: color-mix(in srgb, var(--vscode-foreground) 26%, transparent); color: var(--vscode-foreground); }
   #composer.codex #send.stop { background: var(--vscode-foreground); color: var(--vscode-editor-background); }
@@ -296,7 +300,7 @@ ${glyphCss}
   };
   $tAdd.innerHTML = SVG.plus; $tSlash.innerHTML = SVG.slash; $tCtx.innerHTML = SVG.ring; $tModel.querySelector('.chev').innerHTML = SVG.chev;
   $tMic.querySelector('.ic').innerHTML = SVG.mic;
-  $tIde.innerHTML = SVG.cursor; $tIde.append(el0('span', 'IDE context'));
+  $tIde.innerHTML = SVG.cursor; $tIde.append(el0('span', 'IDE context'), el('span', 'dot'));
   $where.innerHTML = SVG.laptop; $where.append(el0('span', 'Work locally')); $where.title = 'Perch runs Codex on this machine, through the Codex SDK. Cloud tasks are not available here.';
   function el0(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
   const RING = 2 * Math.PI * 6;
@@ -422,7 +426,7 @@ ${glyphCss}
     $input.placeholder = !t ? 'Open a tab with +' : t.busy ? 'Queue another message…' : claude ? 'Message Claude…' : 'Do anything';
     $input.title = t ? 'Paste an image to attach it' : '';
     $tIde.hidden = !t; $sep.hidden = !t || claude;   // the rule before it is Codex's look
-    $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
+    $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide))); $tIde.querySelector('span').textContent = t && t.ide ? 'IDE context' : 'IDE context off';
     $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
     $tSlash.hidden = !claude || !commands.claude.length;
     $tCtx.hidden = !claude; $tCache.hidden = !claude;

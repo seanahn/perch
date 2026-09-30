@@ -155,11 +155,11 @@ assert(shown($('#t-model .chev')) && shown($('#t-ide')) && shown($('#tools .sep'
 assert.strictEqual(window.getComputedStyle($('#send')).borderRadius, '50%');
 assert(/#composer\.codex #send \{[^}]*background: rgba\(128,128,128,\.4\); background: color-mix\(in srgb, var\(--vscode-foreground\) 26%, transparent\)/.test(css), 'the disc is mixed from the text colour, with a plain fallback, so it shows on any theme');
 assert(/#composer\.codex #tools \{ border-top: none;/.test(css), 'no rule between the message and the tools');   // the test DOM does not resolve border shorthands, so the stylesheet is checked
-assert.deepStrictEqual([$('#t-ide').textContent, $('#t-ide').getAttribute('aria-pressed'), $('#t-ide').classList.contains('on')], ['IDE context', 'false', false]);
+assert.deepStrictEqual([$('#t-ide').textContent, $('#t-ide').getAttribute('aria-pressed'), $('#t-ide').classList.contains('on')], ['IDE context off', 'false', false], 'off says so, without a hover');
 assert(/^IDE context is off\./.test($('#t-ide').title));
 $('#t-ide').click(); assert.deepStrictEqual(out.pop(), { type: 'setIde', sid: 'b', value: true });
 host({ type: 'tabs', tabs: [A, with_(B, { ide: true, mode: 'danger-full-access' })], active: 'b' });
-assert.deepStrictEqual([$('#t-ide').getAttribute('aria-pressed'), $('#t-ide').classList.contains('on')], ['true', true]); assert(/^IDE context is on: the active file and selection are attached/.test($('#t-ide').title));
+assert.deepStrictEqual([$('#t-ide').getAttribute('aria-pressed'), $('#t-ide').classList.contains('on'), $('#t-ide').textContent], ['true', true, 'IDE context'], 'on: coloured, with a filled dot'); assert(/^IDE context is on: the active file and selection are attached/.test($('#t-ide').title));
 $('#t-ide').click(); assert.deepStrictEqual(out.pop(), { type: 'setIde', sid: 'b', value: false });
 assert.deepStrictEqual([$('#t-mode').textContent, $('#t-mode').classList.contains('risk')], ['Full access', true], 'full access is flagged in amber');
 host({ type: 'tabs', tabs: [A, with_(B, { busy: true })], active: 'b' });
