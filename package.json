@@ -2,7 +2,7 @@
   "name": "perch",
   "displayName": "Perch",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.1",
+  "version": "0.6.11",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,9 @@
     "url": "https://github.com/seanahn/perch"
   },
   "extensionPack": [
-    "seanahn.perch-audio"
+    "seanahn.perch-audio",
+    "anthropic.claude-code",
+    "openai.chatgpt"
   ],
   "engines": {
     "vscode": "^1.90.0"
@@ -397,8 +399,23 @@
         },
         "perch.voice.model": {
           "type": "string",
-          "default": "large-v3-turbo",
-          "description": "The Whisper model for dictation. large-v3-turbo is accurate and fast on a GPU. On a machine with no GPU, small or base is quicker. Changing it fetches the new model on next use."
+          "default": "auto",
+          "description": "The Whisper model for dictation. auto picks by device: large-v3-turbo on a GPU, small on a CPU. Any faster-whisper model name can be given (large-v3-turbo, medium, small, base). Changing it fetches the new model on next use."
+        },
+        "perch.voice.runOn": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "local",
+            "remote"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "The computer you sit at when it has an NVIDIA GPU, otherwise the machine with the workspace.",
+            "The computer you sit at, in Perch Audio.",
+            "The machine with the workspace, in Perch."
+          ],
+          "description": "Where speech-to-text runs when the workspace is remote. The microphone is always on the computer you sit at; the words can be worked out there, and only the text sent to the workspace, or the audio can be sent to the workspace machine. With no remote, both are the same machine."
         },
         "perch.voice.device": {
           "type": "string",
@@ -413,12 +430,12 @@
             "The NVIDIA GPU only.",
             "The CPU only."
           ],
-          "description": "Where speech-to-text runs, on the machine that has the workspace."
+          "description": "The processor for speech-to-text, on whichever machine runs it (perch.voice.runOn)."
         },
         "perch.voice.language": {
           "type": "string",
           "default": "",
-          "description": "The language you dictate in, as a code such as en or ko. Empty detects it each time."
+          "description": "The language you dictate in, as a code such as en or ko. Empty detects it each time, which on a CPU costs as much again as the transcription."
         },
         "perch.voice.vocabulary": {
           "type": "string",
@@ -447,7 +464,7 @@
     "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

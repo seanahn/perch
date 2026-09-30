@@ -73,8 +73,8 @@ Press **+** to open a Claude or a Codex tab: in the editor title bar, or in
 the sidebar view's tab bar. Each tab is its own session
 with its own agent process, context, mode, draft, and transcript. Open as
 many as you like of either kind. Paste an image into the message box to
-attach it: up to eight to a message, each scaled down if it is larger
-than the agents take. A tab is titled from its first message,
+attach it: up to eight to a message, each scaled down to at most 1568 px
+on its long side, the most the API keeps as is. A tab is titled from its first message,
 or by you (see below).
 While a session works, the foot of its transcript says what it is doing
 and for how long. A dot on a tab means it is working; a red dot means it is waiting on a
@@ -90,7 +90,10 @@ a letter, C or X.
 Answers are drawn as Markdown: headings, lists, tables, code, links. A
 link to a file opens it in the editor, at its line if it names one. The
 transcript keeps to its end as more arrives, until you scroll away to
-read; scroll back to the end and it follows again.
+read; scroll back to the end and it follows again. A long tool result is
+clipped and lets the wheel pass, so scrolling the transcript never
+catches on one; click it to open it and scroll inside, click again to
+close it.
 
 Agents start lazily: an open tab costs nothing until you send a message.
 
@@ -127,8 +130,9 @@ only bridge, on purpose: shared context would defeat each agent's caching.
 ## Install
 
 From the marketplace: install **Perch**; Perch Audio, the microphone
-companion, comes with it. Have the Claude Code and ChatGPT extensions
-installed too, and be logged in to each.
+companion, and the Claude Code and ChatGPT extensions come with it. Log
+in to each vendor when Perch asks, on the first message to a tab of that
+kind (see Logins below).
 
 From a checkout:
 
@@ -138,6 +142,39 @@ make install     # npm install, syntax check, symlink into the extension dirs
 
 Reload the window, then run `Perch: New Tab…` from the command palette, or
 click the Perch icon in the activity bar.
+
+## Logins
+
+Both agents run on the logins already on the machine with the workspace:
+Claude Code's (`~/.claude`) and Codex's (`~/.codex/auth.json`). Nothing
+is copied from elsewhere, so a fresh remote has neither.
+
+- **Claude, on a subscription**: the first message to a Claude tab on a
+  machine with no login is held back, the text put back in the box, and
+  **Log In** offered: Claude Code's own sign-in page (or `claude /login`
+  in a terminal when that extension is absent). Perch notices when the
+  login lands and says so; send the message again. The footer's "log in"
+  does the same at any time.
+- **Claude, on API / Bedrock**: the `API` switch in the footer moves
+  Claude to those credentials. They are Claude Code's, not Perch's: AWS
+  credentials or a profile on the workspace machine (`~/.aws`, or
+  `AWS_*` variables), or `ANTHROPIC_API_KEY`; the region and model go in
+  the `env` block of `~/.claude/settings.json` (`AWS_REGION`,
+  `ANTHROPIC_MODEL`, and the small/fast model if you use one). With none
+  of that in place the first message is held back and the offer opens
+  that file, or switches back to the subscription.
+- **Codex**: the first message to a Codex tab on a machine with no login is
+  held back, the text put back in the box, and the login offered two ways.
+  **Log In** runs `codex login` on the workspace machine and opens
+  ChatGPT's sign-in page in your browser; the page returns to a local port,
+  which VS Code forwards to the workspace machine when it is remote, so
+  this works for anyone with a browser. **Device Code** runs
+  `codex login --device-auth` in a terminal instead: a link and a one-time
+  code, for a machine with no forwarding, which ChatGPT has to allow first
+  (Settings → Security and login → App security → "Enable device code
+  sign-in"). Either way Perch notices when the login lands and says so;
+  send the message again. The same offer appears if Codex later answers
+  401, a login that has expired.
 
 ## Permissions
 
@@ -231,11 +268,13 @@ is shown as full again. perch re-reads after each Codex turn it runs.
 
 **Under a Claude tab**:
 
-- a **backend switch**, `sub` or `API`. Click it to move new Claude tabs
-  and sessions between your subscription login and API / Bedrock. It
-  writes `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json` and
-  leaves the rest of the file alone. Running tabs keep the backend they
-  started on, and are told so.
+- a **backend switch**, `sub` or `API`. Click it to move Claude between
+  your subscription login and API / Bedrock. It writes
+  `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json` and leaves
+  the rest of the file alone. Open tabs come along: each one's process
+  ends (after its current turn, if one is running) and the next message
+  resumes the same conversation on the new backend, as after a window
+  reload. The prompt cache starts over, being the backend's.
 - a **usage gauge**. On a subscription: percent remaining and time to
   reset for the 5-hour session, the week, and any model-scoped weekly
   limit, amber or red when one runs low. On API / Bedrock: the model in
@@ -272,7 +311,10 @@ start, click again to finish, Escape to discard.
 
 Speech-to-text is Whisper, running locally. Nothing you say leaves your
 machines. The first use asks to set it up: about 4 GB, into a private
-environment under `~/.local/share/perch/voice`.
+environment under `~/.local/share/perch/voice`. It needs a `python3`;
+one without `venv`/`pip` support (Debian and Ubuntu before
+`python3-venv` is installed) is fine, pip is fetched from
+`bootstrap.pypa.io` into the private environment.
 
 Recording is done by a second extension, **Perch Audio**, which must be
 installed on the computer you sit at, because that is where the
@@ -281,12 +323,25 @@ microphone is:
 | You work | Install Perch Audio on | Whisper runs on |
 | --- | --- | --- |
 | Directly on this machine | this machine (`make install-audio`) | this machine |
-| From a laptop over Remote-SSH | the laptop (`make package-audio`, then install the `.vsix` there) | the remote machine |
+| From a computer with an NVIDIA GPU, over Remote-SSH | that computer (it comes with Perch) | that computer, in Perch Audio; only the text goes to the remote |
+| From a laptop with no GPU, over Remote-SSH | the laptop | the remote machine; the audio goes there |
+
+`perch.voice.runOn` overrides the choice (`local` or `remote`). Perch Audio
+carries the same engine as Perch, so a GPU under your desk is used even
+when the workspace is a CPU-only container far away.
 
 If no microphone is connected, the button says so. `Perch Audio: Choose
 Microphone` picks among several.
 
-Verified end to end on 2026-09-30, dictating messages into a tab.
+The model follows the machine: `large-v3-turbo` on an NVIDIA GPU, `small`
+on a CPU (`perch.voice.model` names one instead). On a CPU the turbo
+model's encoder alone takes seconds; `small` returns a sentence in about
+one, at a little less accuracy. Setting `perch.voice.language` (`en`,
+`ko`, …) halves the wait again, because detecting the language is a
+second pass over the audio.
+
+Verified end to end on 2026-09-30, dictating messages into a tab, on
+this machine (GPU) and over Remote-SSH to a CPU-only container.
 
 ## Cost
 
@@ -300,17 +355,19 @@ would require API-key billing under both vendors' terms.
 two SDKs but not the `claude` and `codex` programs they run: those are
 hundreds of megabytes, and built for one platform. A packaged Perch runs
 the programs inside the Claude Code and ChatGPT extensions, so those two
-extensions must be installed where Perch is. `perch.claude.executable` and
-`perch.codex.executable` name a program of your own instead. In this
-checkout, installed from npm, the SDKs bring their own programs and those
-are used.
+extensions must be installed where Perch is: they are in Perch's
+`extensionPack`, so the marketplace installs them with it, on the
+workspace side, and either can be removed if only one vendor is wanted.
+`perch.claude.executable` and `perch.codex.executable` name a program of
+your own instead. In this checkout, installed from npm, the SDKs bring
+their own programs and those are used.
 
 Install the file on another machine with
 `code --install-extension perch-<version>.vsix`.
 
 To publish to the marketplace, as AI Meter is: create the publisher named
-in `package.json`, run `make login` once (or put `VSCE_PAT=<token>` in
-`.env`), then `make publish`. `make publish-patch` and `make publish-minor`
+in `package.json`, run `make login` once (or keep the token in
+`~/.ssh/azure-dev.pat`, or put `VSCE_PAT=<token>` in `.env`), then `make publish`. `make publish-patch` and `make publish-minor`
 bump the version, commit, and tag first.
 
 Perch Audio, the microphone companion, is an extension of its own,

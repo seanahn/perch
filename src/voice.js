@@ -7,10 +7,25 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const cp = require('child_process');
+const https = require('https');
 
 const DEFAULT_HOME = path.join(os.homedir(), '.local', 'share', 'perch', 'voice');
 const START_TIMEOUT_MS = 10 * 60000;     // the first start may download the model
 const REQUEST_TIMEOUT_MS = 5 * 60000;
+const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py';
+
+/** A small text download, following redirects. Only used to fetch pip's installer. */
+function fetchText(url, hops = 0) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (res) => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location && hops < 3) { res.resume(); resolve(fetchText(new URL(res.headers.location, url).href, hops + 1)); return; }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error(`${url} answered ${res.statusCode}`)); return; }
+      let body = ''; res.setEncoding('utf8'); res.on('data', (d) => { body += d; }); res.on('end', () => resolve(body)); res.on('error', reject);
+    });
+    req.on('error', (e) => reject(new Error(`${url} could not be fetched: ${e.message}`)));
+    req.setTimeout(60000, () => req.destroy(new Error('timed out')));
+  });
+}
 
 class VoiceEngine {
   /**
@@ -27,11 +42,12 @@ class VoiceEngine {
   constructor(o) {
     this.server = o.server; this.requirements = o.requirements;
     this.home = o.home || DEFAULT_HOME;
-    this.model = o.model || 'large-v3-turbo';
+    this.model = o.model || 'auto';       // auto: the server picks by device, large-v3-turbo on a GPU and small on a CPU
     this.device = o.device || 'auto';
     this.idleMs = o.idleMs === undefined ? 10 * 60000 : Math.max(0, Number(o.idleMs) || 0);
     this.python = o.python || (process.platform === 'win32' ? 'python' : 'python3');
     this.spawn = o.spawn || cp.spawn;
+    this.fetch = o.fetch || fetchText;
     this.proc = null; this.ready = null; this.info = null;
     this.pending = new Map(); this.nextId = 1; this.buffer = ''; this.stderr = ''; this.idleTimer = null;
   }
@@ -64,20 +80,41 @@ class VoiceEngine {
     });
   }
 
+  hasPip() { return this.run(this.venvPython, ['-c', 'import pip']).then(() => true, () => false); }
+
+  /** An environment made without pip: ensurepip first, then pip's own installer from PyPI's bootstrap site. */
+  async bootstrapPip() {
+    try { await this.run(this.venvPython, ['-m', 'ensurepip', '--upgrade']); return; } catch (_) { /* no ensurepip on this Python */ }
+    const script = path.join(this.home, 'get-pip.py');
+    try {
+      fs.writeFileSync(script, await this.fetch(GET_PIP_URL));
+      await this.run(this.venvPython, [script, '--quiet']);
+    } catch (e) {
+      throw new Error(`pip could not be installed into the voice environment (${e.message}). Install python3-venv, or set perch.voice.python to a Python that has pip.`);
+    } finally { try { fs.unlinkSync(script); } catch (_) { /* never written */ } }
+  }
+
   /** One-time setup. Safe to run again: each step is skipped or is quick when its work is already done. */
   async install(onStep = () => {}) {
     fs.mkdirSync(this.modelsDir, { recursive: true });
-    if (!fs.existsSync(this.venvPython)) { onStep('Creating a private Python environment', 5); await this.run(this.python, ['-m', 'venv', this.venv]); }
+    if (!fs.existsSync(this.venvPython)) {
+      onStep('Creating a private Python environment', 5);
+      // Debian and Ubuntu ship python3 without ensurepip until python3-venv is installed: venv then lays the
+      // environment out and exits 1. Take it without pip; pip is brought in below.
+      try { await this.run(this.python, ['-m', 'venv', this.venv]); }
+      catch (e) { if (!/ensurepip/.test(e.message)) throw e; await this.run(this.python, ['-m', 'venv', '--without-pip', this.venv]); }
+    }
     onStep('Installing the speech-to-text runtime', 15);
+    if (!(await this.hasPip())) await this.bootstrapPip();
     await this.run(this.venvPython, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip']);
     await this.run(this.venvPython, ['-m', 'pip', 'install', '--quiet', '-r', this.requirements]);
-    onStep(`Fetching the ${this.model} model and checking it runs`, 60);
+    onStep(`Fetching the ${this.model === 'auto' ? '' : this.model + ' '}model and checking it runs`, 60);
     let ready = null;
     await this.run(this.venvPython, [this.server, '--model', this.model, '--device', this.device, '--models-dir', this.modelsDir, '--download-only'], (line) => { try { const j = JSON.parse(line); if ('ready' in j) ready = j; } catch (_) { /* a log line */ } });
     if (!ready || !ready.ready) throw new Error('the model could not be loaded: ' + ((ready && ready.error) || 'no answer from the server'));
     const m = this.marker();
     const models = Array.isArray(m.models) && m.requirements === this.requirementsHash() ? m.models : [];
-    fs.writeFileSync(this.markerPath, JSON.stringify({ requirements: this.requirementsHash(), models: [...new Set([...models, this.model])], device: ready.device, at: new Date().toISOString() }, null, 2) + '\n');
+    fs.writeFileSync(this.markerPath, JSON.stringify({ requirements: this.requirementsHash(), models: [...new Set([...models, this.model])], resolved: ready.model, device: ready.device, at: new Date().toISOString() }, null, 2) + '\n');
     onStep('Ready', 100);
     return ready;
   }

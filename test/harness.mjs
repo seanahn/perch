@@ -75,8 +75,11 @@ let failed = 0;
   const t1 = Date.now();
   while (c.seen.filter((k) => k === 'result').length < 2 && Date.now() - t1 < 120000) await new Promise((r) => setTimeout(r, 100));
   const users = c.all.filter((e) => e.kind === 'user').slice(-2).map((e) => !!e.queued);
-  console.log('claude queue:', JSON.stringify(c.texts), '| queued flags', JSON.stringify(users), '| went idle', busy.filter((b) => !b).length, 'time(s) | running after', a.running);
-  if (!/first/i.test(c.texts[0] || '') || !/second/i.test(c.texts[1] || '') || users.join() !== 'false,true' || busy.filter((b) => !b).length !== 1 || a.running) { console.log('claude queue FAILED'); failed++; }
+  await new Promise((r) => setTimeout(r, 1500));      // the CLI's idle word follows the result by a moment
+  console.log('claude queue:', JSON.stringify(c.texts), '| queued flags', JSON.stringify(users), '| went idle', busy.filter((b) => !b).length, 'time(s) | running after', a.running, '| CLI state words', a.stated || 0);
+  // The CLI's own idle/running word must arrive (it is what clears a tab when two messages are answered by one turn),
+  // and two queued messages must still show as one stretch of work, not idle in between.
+  if (!/first/i.test(c.texts[0] || '') || !/second/i.test(c.texts[1] || '') || users.join() !== 'false,true' || busy.filter((b) => !b).length !== 1 || a.running || !a.stated) { console.log('claude queue FAILED'); failed++; }
   a.dispose();
 }
 {

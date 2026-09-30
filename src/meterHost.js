@@ -119,7 +119,7 @@ class MeterHost {
   }
 
   /** Switch the backend the NEXT Claude session uses, by flipping env.CLAUDE_CODE_USE_BEDROCK in ~/.claude/settings.json.
-   * Running sessions keep their auth: a live process cannot change how it authenticated. */
+   * A live process cannot change how it authenticated; the view ends each Claude tab's process and lets the next message resume it. */
   async toggleBackend() {
     const on = this.meter.bedrockConfigured();
     if (!on && !this.meter.apiCredentialsPresent()) {
@@ -132,13 +132,31 @@ class MeterHost {
     const gs = this.context.globalState;
     try { this.meter.setBedrockSetting(!on, { get: (k) => gs.get(STASH + k), set: (k, v) => gs.update(STASH + k, v) }); }
     catch (e) { vscode.window.showErrorMessage('Perch: could not update ' + this.meter.settingsPath + '. ' + e.message); return false; }
-    const msg = 'Claude will use ' + (!on ? 'API / Bedrock' : 'subscription (login)') + ' for new tabs and new sessions. Running ones keep their current backend.';
+    const msg = 'Claude will use ' + (!on ? 'API / Bedrock' : 'subscription (login)') + ' from now on. Open tabs continue on it from their next message; a tab in the middle of a turn, after that turn.';
     if (on && !this.meter.readCredentials()) {
       // Switched to subscription on a machine that has never logged in: offer the login directly.
       vscode.window.showInformationMessage(msg + ' This machine has no subscription login yet.', 'Log In').then((pick) => { if (pick === 'Log In') this.login(); });
     } else vscode.window.showInformationMessage(msg);
     await this.poll('backend');        // the gauge follows when the mode is auto
     return true;
+  }
+
+  /** Whether a Claude session started now would have something to authenticate with, on the backend it would get. */
+  canRun() {
+    if (this.meter.bedrockConfigured()) return this.meter.apiCredentialsPresent();
+    return !!(process.env.ANTHROPIC_API_KEY || this.meter.readCredentials());
+  }
+
+  /** Resolves true once a subscription login is there, false when the wait runs out. Polled; the credentials file may not exist yet. */
+  waitForLogin({ timeoutMs = 15 * 60000, intervalMs = 2000 } = {}) {
+    return new Promise((resolve) => {
+      if (this.meter.readCredentials()) { resolve(true); return; }
+      const t0 = Date.now();
+      const timer = unref(setInterval(() => {
+        if (this.meter.readCredentials()) { clearInterval(timer); resolve(true); }
+        else if (Date.now() - t0 >= timeoutMs) { clearInterval(timer); resolve(false); }
+      }, intervalMs));
+    });
   }
 
   /** Locate the claude CLI: PATH first, then the binary bundled inside the Claude Code extension. */

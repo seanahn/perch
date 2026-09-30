@@ -133,7 +133,7 @@ const until = async (f, ms = 2000) => { const t0 = Date.now(); while (!f()) { if
   {
     const { Fake, log } = fakeLibrary({ frames: [1200, -1200] });
     const x = load({ library: Fake, config: { device: '', maxSeconds: 30 } });
-    assert.deepStrictEqual(x.commands['_perch.audio.available'](), { ok: true, api: 1, devices: LINUX, states: {}, device: 'Built-in Audio Analog Stereo', busy: false });
+    assert.deepStrictEqual(x.commands['_perch.audio.available'](), { ok: true, api: 2, devices: LINUX, states: {}, device: 'Built-in Audio Analog Stereo', busy: false });
     const s = x.commands['_perch.audio.start']();
     assert.deepStrictEqual([s.ok, s.device, s.sampleRate, s.maxSeconds, s.picked, typeof s.id], [true, 'Built-in Audio Analog Stereo', 16000, 30, 'first-input', 'string']);
     assert.deepStrictEqual([x.commands['_perch.audio.start']().code, x.commands['_perch.audio.available']().busy], ['busy', true], 'one recording at a time');

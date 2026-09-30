@@ -99,7 +99,12 @@ ${glyphCss}
   .tool { font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-textCodeBlock-background); border-left: 3px solid var(--vscode-charts-blue); }
   .tool .name { font-weight: 600; }
   .tool .in { color: var(--vscode-descriptionForeground); white-space: pre-wrap; max-height: 6em; overflow: hidden; }
-  .toolres { font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground); border-left: 3px solid var(--vscode-panel-border); max-height: 8em; overflow: auto; }
+  /* A long result is clipped, and does not take the wheel: scrolling the transcript passes over it. A click opens it to scroll on its own; another closes it. */
+  .toolres { font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground); border-left: 3px solid var(--vscode-panel-border); max-height: 8em; overflow: hidden; position: relative; }
+  .toolres.more { cursor: pointer; }
+  .toolres.more::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2.5em; background: linear-gradient(to bottom, transparent, var(--vscode-sideBar-background, var(--vscode-editor-background))); pointer-events: none; }
+  .toolres.open { overflow: auto; cursor: auto; }
+  .toolres.open::after { content: none; }
   .toolres.err { border-left-color: var(--vscode-charts-red); color: var(--vscode-errorForeground); }
   .status { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: center; }
   .error { color: var(--vscode-errorForeground); border-left: 3px solid var(--vscode-charts-red); }
@@ -481,10 +486,10 @@ ${glyphCss}
     $input.value = ''; p.draft = ''; p.shots = []; grow(); renderShots();
   }
 
-  // ---- pasted images. They wait above the message and go with it. A large one is scaled down first: the agents take
-  // images up to a size, and a full-screen capture of a large display is over it.
+  // ---- pasted images. They wait above the message and go with it. A large one is scaled down first, to the size the
+  // API keeps; a full-screen capture of a large display is several times that.
   const $shots = $('shots');
-  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_SHOTS = 8, MAX_SIDE = 2000, MAX_CHARS = 5000000, THUMB_SIDE = 320;
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_SHOTS = 8, MAX_SIDE = 1568, MAX_CHARS = 5000000, THUMB_SIDE = 320;   // 1568: the most the API keeps; larger is scaled down there anyway, so sending more is only upload
   const parts = (url) => { const at = url.indexOf(','), head = url.slice(5, at); return head.endsWith(';base64') ? { mime: head.slice(0, -7), data: url.slice(at + 1) } : null; };
   function renderShots() {
     const p = panes.get(active), list = p ? p.shots : [];
@@ -668,7 +673,13 @@ ${glyphCss}
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
       case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
         const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input))); if (m.id) p.tools[m.id] = d; break; }
-      case 'tool_result': { const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : '')); const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d); break; }
+      case 'tool_result': {
+        const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : ''));
+        const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d);
+        if (d.scrollHeight > d.clientHeight + 1 || (m.text || '').split('\\n').length > 8) d.classList.add('more');
+        d.addEventListener('click', () => { if (d.classList.contains('more') && !String(window.getSelection && window.getSelection()).length) d.classList.toggle('open'); });
+        break;
+      }
       case 'permission': {
         endLive(p); const d = add(p, 'perm', ''); const head = el('div'); head.append(el('b', null, 'Allow '), el('span', null, m.tool), '?');
         const btns = el('div', 'btns');
@@ -681,8 +692,8 @@ ${glyphCss}
         d.append(head, el('div', 'in', fmtIn(m.input)), btns); p.stick = true; break; }
       case 'question': { endLive(p); asking(add(p, 'ask', ''), m, sid, p); p.stick = true; break; }
       case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
-      case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' : m.cost !== undefined ? ' · session \u2248$' + usd(m.cost) : '') + ((m.costTurn !== undefined || m.cost !== undefined) && cur() && cur().backend === 'subscription' ? ' at API rates' : ''));
-        if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far \u2248$' + usd(m.cost) + '.' : 'What the whole conversation so far would cost at Anthropic\\'s API list prices, as Claude Code reckons it.') + (cur() && cur().backend === 'subscription' ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : ''); break; }
+      case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' + (cur() && cur().backend === 'subscription' ? ' at API rates' : '') : ''));   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
+        if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far \u2248$' + usd(m.cost) + '.' : 'The whole conversation so far \u2248$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (cur() && cur().backend === 'subscription' ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : ''); break; }
       case 'note': endLive(p); add(p, 'status', m.text); break;
       case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); add(p, 'error', m.text); break;

@@ -8,7 +8,8 @@ const say = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 if (mode === 'silent-start') { setInterval(() => {}, 1000); return; }
 if (mode === 'fail-load') { process.stderr.write('Traceback\nRuntimeError: CUDA out of memory\n'); say({ ready: false, error: 'CUDA out of memory' }); process.exit(1); }
 process.stdout.write('a log line that is not JSON\n');
-say({ ready: true, device: arg('--device') === 'cpu' ? 'cpu' : 'cuda', compute: 'float16', model: arg('--model'), load_ms: 5, models_dir: arg('--models-dir') });
+const device = arg('--device') === 'cpu' ? 'cpu' : 'cuda';
+say({ ready: true, device, compute: 'float16', model: arg('--model') === 'auto' ? (device === 'cuda' ? 'large-v3-turbo' : 'small') : arg('--model'), load_ms: 5, models_dir: arg('--models-dir') });
 if (args.includes('--download-only')) process.exit(0);
 if (mode === 'exit-after-ready') { process.stderr.write('killed by the system\n'); setTimeout(() => process.exit(137), 20); }
 let buf = '', chain = Promise.resolve();

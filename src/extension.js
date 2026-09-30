@@ -8,6 +8,7 @@ const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./mode
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
 const { resolveProgram } = require('./binaries');
+const codexAuth = require('./codexAuth');
 const { listSessions, renameSession, loadTranscript, cleanTitle, ago } = require('./sessionStore');
 
 const MODES = {
@@ -59,6 +60,7 @@ const MAX_HISTORY = 2000;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_IMAGES = 8, MAX_IMAGE_CHARS = 5000000;
 const MAX_THUMB_CHARS = 80000;   // a thumbnail is kept in the transcript; the image itself is not
+const MANY_IMAGES = 20;   // past this many images in a request, the API refuses any image of 2000 px or more; the agent keeps every earlier image until it compacts
 
 /** The images of a message that can be sent, and how many of those offered cannot. */
 function usableImages(list) {
@@ -229,6 +231,8 @@ class Session {
   }
 
   post(ev) {
+    // a login that has expired shows as 401 from the API; the same offer follows the error
+    if (ev.kind === 'error' && this.kind === 'codex' && /\b401\b.*Unauthorized/i.test(String(ev.text))) this.view.codexLogin(`Codex was refused: the login on ${require('os').hostname()} has expired or is missing.`);
     switch (ev.kind) {
       case 'status':
         this.lastStatus = ev.text;
@@ -242,6 +246,7 @@ class Session {
         if (ev.busy && !this.busy) this.busySince = Date.now(); else if (!ev.busy) this.busySince = 0;
         this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
         if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
+        if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
         return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
       case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
@@ -302,7 +307,30 @@ class Session {
     text = String(text || '');
     const { images, dropped } = usableImages(offered);
     if (dropped) this.post({ kind: 'note', text: `${dropped} image${dropped > 1 ? 's' : ''} left out: a message takes ${MAX_IMAGES} images, each a PNG, JPEG, GIF, or WebP of up to 5 MB` });
+    // Once a Claude conversation carries more than 20 images, the API refuses every request in which any image is 2000 px
+    // or wider, and every earlier image stays in the conversation until the agent compacts. Images pasted here are scaled
+    // below that; those pasted through earlier versions, or read by Claude Code itself, may not be. The agent reports only
+    // that an image could not be processed: so the tab says, once, what to do.
+    if (images.length && this.kind === 'claude') {
+      const before = this.history.reduce((n, h) => n + (h.kind === 'user' && h.images ? h.images : 0), 0), after = before + images.length;
+      if (before < MANY_IMAGES && after >= MANY_IMAGES) this.post({ kind: 'note', text: `This conversation now carries ${after} images. Past ${MANY_IMAGES}, the API refuses a conversation holding any image 2000 px or wider, which images from earlier versions of perch or from Claude Code's own reading may be. If a turn then fails with "an image could not be processed", /compact lets the earlier images go.` });
+    }
     if (!text.trim() && !images.length) return;
+    // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
+    if (this.kind === 'claude' && !this.agent && this.view.meter && !this.view.meter.canRun()) {
+      const api = this.view.meter.backend() === 'api';
+      this.post({ kind: 'note', text: api ? `Claude is set to API / Bedrock on ${require('os').hostname()}, and no credentials for it were found there. Set them up, or use your subscription, then send the message again.` : `Claude is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
+      this.view.deliver(this.id, text);
+      this.view.claudeLogin();
+      return;
+    }
+    // Codex with no login here would only be refused (401, five reconnects, an error): hold the message, offer the login
+    if (this.kind === 'codex' && !this.agent && !codexAuth.loggedIn()) {
+      this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
+      this.view.deliver(this.id, text);
+      this.view.codexLogin();
+      return;
+    }
     const agent = this.ensureAgent();
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
@@ -364,6 +392,17 @@ class Session {
   /** Stops the current turn and drops anything queued behind it. */
   interrupt() { if (!this.agent) return; if (this.queue.length) { this.post({ kind: 'note', text: `${this.queue.length} queued message${this.queue.length > 1 ? 's' : ''} dropped` }); this.queue = []; this.shown = []; this.view.sendTabs(); } this.stopping = true; this.agent.interrupt(); }
   lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
+
+  /** End the agent process and keep the session: the next message resumes it, as after a window reload. */
+  restart() {
+    this.restartWhenIdle = false;
+    if (!this.agent) return;
+    this.agent.dispose(); this.agent = null; this.backend = '';
+    for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
+    this.pending.clear();
+    this.busy = false; this.busySince = 0; this.attention = false;
+    this.view.sendTabs();
+  }
 
   dispose() {
     this.disposed = true;
@@ -429,10 +468,12 @@ class PerchView {
   onMeter(state, why, codex) {
     this.raw({ type: 'meter', meter: state, codex });
     if (why !== 'backend') return;
-    // models differ by backend, and a running agent cannot change how it authenticated
+    // models differ by backend, and a running process cannot change how it authenticated: so the process ends and the
+    // session goes on, resumed by the next message on the new backend, as after a window reload
     this.loadCatalogs(true);
     for (const s of this.sessions) if (s.kind === 'claude' && s.agent && s.backend && s.backend !== state.backend) {
-      s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab keeps ${s.backend === 'api' ? 'API / Bedrock' : 'subscription'} until it is closed; open a new tab to use the new backend.` });
+      if (s.busy) { s.restartWhenIdle = true; s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab moves to it after the current turn; the conversation continues, the prompt cache starts over.` }); }
+      else { s.restart(); s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab continues on it from the next message; the prompt cache starts over.` }); }
     }
   }
   setCommands(kind, list) {
@@ -443,6 +484,72 @@ class PerchView {
   }
 
   /** Put text into a session's message box, at the cursor. If its page is not there to take it, it waits. */
+  /**
+   * Offer the way into Claude, for a machine with nothing to authenticate with. On a subscription: Claude Code's own
+   * sign-in (the meter's login), watched until it lands; or the switch to API / Bedrock. On API / Bedrock: the settings
+   * file, where the credentials and region go; or the switch to the subscription, which offers its login. One at a time.
+   */
+  async claudeLogin() {
+    if (this.claudeLoginOpen) return;
+    this.claudeLoginOpen = true;
+    try {
+      const host = require('os').hostname();
+      if (this.meter.backend() === 'api') {
+        const pick = await vscode.window.showWarningMessage(`Claude is set to API / Bedrock on ${host}, but nothing to authenticate with was found there: no ~/.aws credentials or profile, no AWS_* variables, no ANTHROPIC_API_KEY. Put AWS credentials on ${host}, and the region and model in the env block of ${this.meter.meter.settingsPath} (AWS_REGION, ANTHROPIC_MODEL), or use your subscription.`, 'Open settings.json', 'Use Subscription');
+        if (pick === 'Use Subscription') await this.meter.toggleBackend();        // with no login, the switch offers it
+        else if (pick === 'Open settings.json') await this.openSettingsFile();
+        return;
+      }
+      const pick = await vscode.window.showWarningMessage(`Claude is not logged in on ${host}. Perch runs Claude Code with its login, kept in ${this.meter.meter.claudeDir}. Log In opens Claude Code's sign-in; or use API / Bedrock credentials instead.`, 'Log In', 'Use API / Bedrock');
+      if (pick === 'Use API / Bedrock') { await this.meter.toggleBackend(); return; }
+      if (pick !== 'Log In') return;
+      await this.meter.login();
+      if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.');
+    } finally { this.claudeLoginOpen = false; }
+  }
+
+  /** Claude Code's settings file, made with an empty env block when there is none, so there is something to fill in. */
+  async openSettingsFile() {
+    const fs = require('fs'), path = require('path');
+    const p = this.meter.meter.settingsPath;
+    try { fs.accessSync(p); } catch (_) { try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, '{\n  "env": {\n  }\n}\n'); } catch (e) { vscode.window.showErrorMessage('Perch: could not create ' + p + '. ' + e.message); return; } }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(p)));
+  }
+
+  /**
+   * Offer the Codex login. "Log In" runs the browser sign-in here (`codex login`, which listens on a local port for the
+   * browser's return) and opens its page on the user's machine; when remote, VS Code forwards the port, so the return
+   * reaches this machine. That works for any user with a browser. "Device Code" is the terminal way, a link and a code,
+   * for a ChatGPT account that allows it. One offer at a time.
+   */
+  async codexLogin(why) {
+    if (this.codexLoginOpen) return;
+    this.codexLoginOpen = true;
+    try {
+      const lead = why || `Codex is not logged in on ${require('os').hostname()}.`;
+      const pick = await vscode.window.showWarningMessage(`${lead} Perch runs it with your ChatGPT login, kept in ${codexAuth.codexHome()}. Log In opens ChatGPT's sign-in page in your browser. Device Code prints a link and a one-time code in a terminal instead, which ChatGPT must allow first (Settings, Security and login, App security).`, 'Log In', 'Device Code');
+      if (!pick) return;
+      const prog = program('codex');
+      if (prog.from === 'none') { vscode.window.showErrorMessage('Perch: ' + MISSING.codex); return; }
+      const exe = prog.path || 'codex';
+      let child = null;
+      if (pick === 'Device Code') {
+        const term = vscode.window.createTerminal({ name: 'Codex login' }); term.show(); term.sendText(codexAuth.loginCommand(exe));
+      } else {
+        let started;
+        try { started = await codexAuth.startLogin(exe); } catch (e) { vscode.window.showErrorMessage('Perch: the Codex login could not start. ' + e.message); return; }
+        child = started.child;
+        // the browser returns to localhost on the user's machine; when remote, VS Code carries that port here
+        try { await vscode.env.asExternalUri(vscode.Uri.parse(`http://localhost:${codexAuth.CALLBACK_PORT}`)); } catch (_) { /* no forwarding: the browser may still reach it directly */ }
+        await vscode.env.openExternal(vscode.Uri.parse(started.url));
+      }
+      const ok = await codexAuth.waitForLogin();
+      if (child) { try { child.kill(); } catch (_) { /* ended on its own */ } }
+      if (ok) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
+      else vscode.window.showWarningMessage('Perch: the Codex login did not complete.');
+    } finally { this.codexLoginOpen = false; }
+  }
+
   deliver(sid, text) {
     const s = this.get(sid); if (!s || !text) return;
     const f = this.surface(s);
@@ -875,10 +982,10 @@ function activate(context) {
     vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
     vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
     vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),
-    vscode.commands.registerCommand('perch.voice.setup', async () => { if (perch.voice.getEngine().isInstalled()) { vscode.window.showInformationMessage('Perch: voice input is already set up here.'); return; } if (await perch.voice.setup(true)) vscode.window.showInformationMessage('Perch: voice input is ready.'); }),
+    vscode.commands.registerCommand('perch.voice.setup', async () => { const r = await perch.voice.prepare(true); if (r === 'already') vscode.window.showInformationMessage('Perch: voice input is already set up here.'); else if (r) vscode.window.showInformationMessage('Perch: voice input is ready.'); }),
     vscode.commands.registerCommand('perch.voice.toggle', () => { const s = perch.active(); if (s) perch.voice.start(s.id); }),
     vscode.commands.registerCommand('perch.voice.cancel', () => perch.voice.cancel()),
-    vscode.commands.registerCommand('perch.voice.unload', () => { if (perch.voice.engine) perch.voice.engine.stop(); }),
+    vscode.commands.registerCommand('perch.voice.unload', () => perch.voice.unload()),
     { dispose: () => perch.dispose() },
   );
   perch.start();

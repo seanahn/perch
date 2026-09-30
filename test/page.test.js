@@ -386,14 +386,24 @@ ev('a', { kind: 'text', text: 'between' });
 ev('a', { kind: 'tool_result', id: 't1', text: 'file body' });
 const kids = [...paneA.querySelectorAll('.msg')]; const ti = kids.findIndex((k) => k.classList.contains('tool'));
 assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under its tool call');
+{
+  // a short result is a plain block; a long one is clipped, takes no wheel, and opens to scroll on its own when clicked
+  const short = kids[ti + 1]; short.click();
+  assert.deepStrictEqual([short.classList.contains('more'), short.classList.contains('open')], [false, false], 'nothing to open');
+  ev('a', { kind: 'tool_use', id: 't2', name: 'Bash', input: { command: 'ls' } });
+  ev('a', { kind: 'tool_result', id: 't2', text: Array.from({ length: 12 }, (_, i) => 'line ' + i).join('\n') });
+  const long = [...paneA.querySelectorAll('.toolres')].pop();
+  assert(long.classList.contains('more') && !long.classList.contains('open'), 'clipped, not scrollable');
+  long.click(); assert(long.classList.contains('open'), 'a click opens it'); long.click(); assert(!long.classList.contains('open'), 'and closes it');
+}
 ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, cache_read: 7680, output: 11 } });
 {
   // the cost figure is Claude Code's running estimate for the whole session at API rates, and says so; on a subscription it is not a bill
   host({ type: 'tabs', tabs: [with_(A, { backend: 'subscription' }), B], active: 'a' });
   ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 43.567 });
   const r = [...paneA.querySelectorAll('.result')].pop();
-  assert(/ · session ≈\$43\.57 at API rates$/.test(r.textContent), r.textContent);
-  assert(/nothing is billed per token/.test(r.title));
+  assert(/ · out 3$/.test(r.textContent), 'a first turn shows no figure: ' + r.textContent);
+  assert(/so far ≈\$43\.57 .*from the next turn on/.test(r.title) && /nothing is billed per token/.test(r.title), 'the total is in the tooltip');
   // once the agent can tell, each turn's own cost is shown, which is what matters in a session that runs for months
   ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 43.591, costTurn: 0.0241 });
   const rt = [...paneA.querySelectorAll('.result')].pop();
@@ -402,7 +412,7 @@ ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, ca
   host({ type: 'tabs', tabs: [with_(A, { backend: 'api' }), B], active: 'a' });
   ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 0.5 });
   const r2 = [...paneA.querySelectorAll('.result')].pop();
-  assert(/ · session ≈\$0\.500$/.test(r2.textContent), r2.textContent); assert(!/billed/.test(r2.title));
+  assert(/ · out 3$/.test(r2.textContent), r2.textContent); assert(/so far ≈\$0\.500/.test(r2.title) && !/billed/.test(r2.title));
   host({ type: 'tabs', tabs: [A, B], active: 'a' });
 }
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));

@@ -194,7 +194,7 @@ would, and only shows what happens.
 | --- | --- | --- |
 | IDE context on a message | With the toggle on, which it is by default | The active file's selection, up to 12,000 characters |
 | Compaction on a Codex model switch | Only when the model is changed mid-thread | One compaction of the thread |
-| A pasted image | Only when one is sent | Scaled to at most 2000 px on the long side; roughly 3,000 tokens for a full-width screenshot, by the vendors' area-based estimates |
+| A pasted image | Only when one is sent | Scaled to at most 1568 px on the long side, the most the API keeps; roughly 1,800 tokens for a full-width screenshot, by the vendors' area-based estimates. Past 20 images in a conversation the API refuses any image of 2000 px or wider (measured: 2000 exactly is refused), and the agent keeps every earlier image until it compacts; the tab says so at the twentieth |
 
 Nothing else. In particular perch adds no per-message instructions, no
 retrieval, no summaries, and no hidden calls.
@@ -666,7 +666,11 @@ limit.
   Switching back restores them.
 - The file is written atomically, by rename.
 - A settings file that is not valid JSON is **refused**, not replaced.
-- A running tab keeps its backend, and is told so.
+- An open Claude tab moves to the new backend: its process ends (after
+  the current turn, if one is running) and the next message resumes the
+  session on the new backend, as after a window reload. The transcript
+  and the session id stay; the prompt cache starts over, being a
+  property of the backend. The tab is told so.
 
 **No status bar items.** The gauge is the footer of each tab, where it
 follows the tab's vendor. An earlier version put AI Meter's two items in
@@ -708,11 +712,23 @@ either. So dictation is two extensions:
 
 | Part | `extensionKind` | Runs on | Does |
 | --- | --- | --- | --- |
-| **perch-audio** | `ui` | the machine the user sits at | Records |
-| **perch** | `workspace` | the machine with the workspace | Transcribes |
+| **perch-audio** | `ui` | the machine the user sits at | Records; transcribes when that machine is the one with the GPU |
+| **perch** | `workspace` | the machine with the workspace | Transcribes otherwise; decides which |
 
 OpenAI's Codex extension is built the same way, with a `codex-audio`
 companion, for the same reason.
+
+**Where the words are worked out** (`perch.voice.runOn`): both
+extensions carry the same engine (`src/voice.js` and `voice/`, copied
+into perch-audio by `make audio-engine`, so each package is whole). With
+no remote they are one machine and perch's own engine is used. Under
+Remote-SSH, `auto` asks perch-audio whether its machine has an NVIDIA
+GPU (`nvidia-smi -L`, once) and, if so, has it transcribe: a desktop
+with a GPU keeps its own audio, and a CPU-only container is spared the
+work; only the text crosses. Otherwise the audio crosses and perch
+transcribes, as before. `local` and `remote` force either. Each side
+sets up its own environment, in the same place
+(`~/.local/share/perch/voice`) so that on one machine the two share it.
 
 ```mermaid
 sequenceDiagram
@@ -722,17 +738,29 @@ sequenceDiagram
   participant W as Whisper server
   Pg->>H: voiceStart
   H->>A: _perch.audio.available
+  opt remote, runOn auto or local
+    H->>A: _perch.audio.engine (installed? GPU?)
+  end
   H->>A: _perch.audio.start
-  H-->>W: start, load model
+  alt words worked out by perch
+    H-->>W: start, load model
+  else by perch-audio
+    H->>A: _perch.audio.warm
+  end
   loop every 120 ms
     H->>A: _perch.audio.level
     H->>Pg: voice: recording, level, seconds
   end
   Pg->>H: voiceStop
-  H->>A: _perch.audio.stop
-  A-->>H: PCM, base64
-  H->>W: transcribe
-  W-->>H: text
+  alt by perch
+    H->>A: _perch.audio.stop
+    A-->>H: PCM, base64
+    H->>W: transcribe
+    W-->>H: text
+  else by perch-audio
+    H->>A: _perch.audio.transcribe
+    A-->>H: text
+  end
   H->>Pg: insert
 ```
 
@@ -750,6 +778,16 @@ Internal commands, prefixed with an underscore:
 | `_perch.audio.level(id)` | `{ level, seconds, ended, silent }` |
 | `_perch.audio.stop(id)` | `{ pcm, sampleRate, seconds, silent, ended }` |
 | `_perch.audio.cancel(id)` | `{ ok }` |
+| `_perch.audio.engine(opts)` | `{ ok, installed, gpu, home, host }` (api 2) |
+| `_perch.audio.setup(opts)` | `{ ok }` after the one-time setup there, with its progress shown there |
+| `_perch.audio.warm(opts)` | `{ ok }`; loads the model |
+| `_perch.audio.transcribe(id, { engine, language, prompt })` | `{ text, language, seconds, silent, ended }`: stops the recording and transcribes it there |
+| `_perch.audio.unload()` | `{ ok }` |
+
+`opts` are the engine settings (`model`, `device`, `python`, `idleMs`),
+sent with each request so that perch-audio needs no settings of its own.
+`api` is 2 with these; a perch-audio at 1 still records, and perch then
+transcribes, whatever `runOn` says short of `local`.
 
 Audio is 16 kHz, mono, 16-bit, carried as base64 because a command's
 arguments and results must be JSON to cross between machines. That is
@@ -792,6 +830,17 @@ Python:
 `requirements.txt`, and this model has been fetched. A changed
 requirements file means a fresh install.
 
+The environment is `python3 -m venv`. Debian and Ubuntu ship `python3`
+without `ensurepip` until `python3-venv` is installed, and a container
+often has no `sudo` to add it: `venv` then lays the environment out and
+exits 1, and a second try finds a `python` with no `pip`. Setup takes
+such an environment as it is (`--without-pip`), and brings pip in:
+`ensurepip` if the interpreter has it, otherwise pip's own installer
+fetched from `bootstrap.pypa.io`, run once and deleted. Only when both
+fail does the user see a message, naming `python3-venv` and
+`perch.voice.python`. Seen on seclab (Ubuntu 22.04 image, no
+`python3-venv`, no `sudo`) on 2026-09-30.
+
 **The server** speaks JSON lines over stdin and stdout:
 
 ```
@@ -804,6 +853,9 @@ requirements file means a fresh install.
 | CUDA libraries are loaded by path at start | NVIDIA's wheels install them where the loader does not look |
 | The model is run once on silence at load | A GPU that loads a model can still fail on first use |
 | Falls back `cuda float16` to `cuda int8_float16` to `cpu int8` | Works without a GPU |
+| `--model auto` is `large-v3-turbo` on a GPU and `small` on a CPU | Measured on a 30-core container: turbo's encoder is 4 s a pass on the CPU, `small` under 1 s |
+| On a CPU, threads follow the cores allowed (affinity, cgroup quota; at most 16) | CTranslate2's default is 4 threads whatever the machine: 6.8 s a pass became 4.0 |
+| On a CPU, greedy decoding; a beam of 5 on a GPU | The beam is most of the CPU wait for a few words |
 | Voice-activity detection is on | A pause is not transcribed as words |
 | Stops after ten idle minutes | Frees about 2.5 GB of GPU memory for other work |
 | Asked to quit before being killed | It can exit cleanly |
@@ -914,6 +966,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Live effort change | Started at low, switched to medium, completed a turn |
 | Context usage and slash commands | 3% of a 1M window; 69 to 70 commands |
 | Claude queueing | Two messages sent together answered in order, idle once |
+| Claude's idle word | `session_state_changed` running/idle arrives when `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` is in the CLI's environment; without it the SDK has the CLI mark it host-only and swallows it (probed 2026-09-30; 6 state words over the harness run) |
 | Claude catalog without a request | 11 models in about 0.5 s |
 | Codex usage, fresh after a turn | A reading zero to one second old |
 | Claude usage response shape | Parsed three limits from a live response |
@@ -985,6 +1038,14 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Lock an editor group of sessions | Leave it | Files opened from the Explorer landed among the sessions |
 | Codex settings changed by resuming the thread | Fixed for the thread's life | Each turn is a process anyway; the cost is one compaction |
 | perch-audio through `extensionPack`, not a dependency | `extensionDependencies` | A missing companion must not stop perch from starting |
+| The vendors' extensions in the `extensionPack` too | Leave them to the user; bundle the programs | Perch runs their programs, so a remote with one vendor's extension missing showed only a message; the pack installs both, and either can be removed |
+| Claude's credentials looked for before the first message, on the backend the tab would get | Let the process fail and show its error | A first-time user on a fresh machine sees a way in (Claude Code's sign-in, or the settings file for Bedrock) instead of the CLI's refusal; the same shape as the Codex check |
+| A backend switch resumes open Claude tabs on the new backend | Tabs keep their backend until closed | The user switches sub and API mid-conversation and wants the same tab; a process cannot change its auth, but the session is a file, and resuming it is what a reload does anyway |
+| Codex login looked for before the first message; the browser sign-in run by perch, its port forwarded when remote; device code as the other way | Let the turn fail; the ChatGPT panel's sign-in; device code only | Without a login the SDK reconnects five times on 401 and shows nothing useful. `codex login` returns to `localhost:1455`, which `asExternalUri` carries from the user's machine to the remote, so any user with a browser can sign in. Device code needs a ChatGPT setting that some accounts cannot turn on (seen 2026-09-30). Both land in the same `auth.json` the ChatGPT extension uses |
+| Voice setup brings pip in itself when `venv` cannot | Tell the user to install `python3-venv` | Containers often have no `sudo`; pip's installer is one fetch from `bootstrap.pypa.io` |
+| Voice model `auto`, chosen by device | `large-v3-turbo` always, with a setting | A remote workspace is usually CPU-only; "hello" took 10 s there, and nobody reads a setting's description to learn why |
+| Ask the CLI for its idle/running word (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) | Count results against messages sent | A message sent mid-turn can be folded into that turn and answered by its one result, which left the tab working for good; the count cannot tell, the CLI can |
+| Transcribe in perch-audio when the user's machine has the GPU | Always with the workspace; Whisper in the webview | The user's desktop has an RTX 3090 and the remote is a CPU-only container. Same engine, copied at build; the webview route would be a second engine, and slower |
 
 ## 18. References
 

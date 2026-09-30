@@ -293,15 +293,21 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(m.globalState._dump()['perch.meter.stash.model'], undefined, 'model pins go through the stash');
     st = v.lastMeter();
     assert.deepStrictEqual([st.backend, st.backendLabel, st.mode, st.text], ['api', 'API', 'cost', 'opus-5 5.2M $18.9'], 'auto mode follows the backend into cost mode');
-    assert(/new tabs and new sessions\. Running ones keep/.test(m.ui.infos.pop()));
+    assert(/from now on\. Open tabs continue on it from their next message; a tab in the middle of a turn, after that turn\./.test(m.ui.infos.pop()));
     assert.strictEqual(m.loads.claude, loads0 + 1, 'the model list is re-read, because models differ by backend');
-    assert(v.events(run).some((e) => e.kind === 'note' && /backend is now API \/ Bedrock\. This tab keeps subscription/.test(e.text)), 'a running tab is told it keeps its backend');
+    // the tab that had run is moved: its process ends, the session stays, and the next message resumes it on the new backend
+    const runAgent = created.filter((a) => a.claude).pop(), runSession = 'sess-' + created.indexOf(runAgent);
+    assert(v.events(run).some((e) => e.kind === 'note' && /^Claude backend is now API \/ Bedrock\. This tab continues on it from the next message; the prompt cache starts over\.$/.test(e.text)), 'an idle tab is moved at once, and told');
+    assert.deepStrictEqual([runAgent.disposed, v.lastTabs().tabs.find((x) => x.id === run).backend, v.lastTabs().tabs.find((x) => x.id === run).started], [true, '', false], 'its process is ended; the tab stays');
     assert(!v.events(idle).some((e) => e.kind === 'note' && /backend/.test(e.text)), 'a tab that has not started is not');
     assert(!v.events(cx).some((e) => e.kind === 'note' && /backend/.test(e.text)), 'nor is a codex tab');
+    v.fire({ type: 'send', sid: run, text: 'more' });
+    const resumed = created.filter((a) => a.claude).pop();
+    assert.deepStrictEqual([resumed !== runAgent, resumed.o.resume, v.lastTabs().tabs.find((x) => x.id === run).backend], [true, runSession, 'api'], 'the same session, resumed on the new backend');
     v.fire({ type: 'send', sid: idle, text: 'go' });
     assert.strictEqual(v.lastTabs().tabs.find((x) => x.id === idle).backend, 'api', 'the tab started after the switch is on the new backend');
 
-    // and back, on a machine with no subscription login: the login is offered
+    // and back, on a machine with no subscription login: the login is offered; both tabs, now on API, are moved again
     m.box.login = false; m.ui.answers.push('Log In');
     await m.commands['perch.meter.toggleBackend'](); await flush(); await flush();
     assert.deepStrictEqual(m.box.writes, [true, false]);
@@ -309,7 +315,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(m.ui.executed, ['claude-vscode.editor.openLast'], 'login opens the Claude Code panel when that extension is installed');
     assert.strictEqual(v.lastMeter().backend, 'subscription');
     assert.strictEqual(v.events(idle).filter((e) => e.kind === 'note' && /backend is now subscription/.test(e.text)).length, 1);
-    assert.strictEqual(v.events(run).filter((e) => e.kind === 'note' && /backend is now/.test(e.text)).length, 1, 'a tab already on that backend is not told again');
+    assert.strictEqual(v.events(run).filter((e) => e.kind === 'note' && /backend is now/.test(e.text)).length, 2, 'moved each time the backend changes');
+    assert.deepStrictEqual([resumed.disposed, v.lastTabs().tabs.find((x) => x.id === run).started], [true, false]);
 
     // no API credentials: a modal first, and cancelling writes nothing
     m.box.apiCreds = false; m.box.login = true;
@@ -814,8 +821,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'voice').map((e) => e.phase), ['starting', 'idle']);
     assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: ' + NOMIC, 'the reason is passed on as the recorder gave it');
     assert.deepStrictEqual([m.abox.calls.map((k) => k[0]), m.vbox.starts, m.vbox.installs], [['available'], 0, []], 'and nothing is started or installed');
-    m.abox.available = { ok: true, api: 2, devices: ['Mic'], device: 'Mic' }; v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
-    assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: Perch Audio is a different version from Perch. Update both.');
+    m.abox.available = { ok: true, api: 3, devices: ['Mic'], device: 'Mic' }; v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: Perch Audio is a newer version than Perch. Update Perch.');
     m.abox.available = { ok: true, api: 1, devices: ['Mic'], device: 'Mic' }; m.abox.start = { ok: false, code: 'capture-failed', error: 'Could not open the microphone: Failed to open device.' };
     v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
     assert.strictEqual(v.events(c).filter((e) => e.kind === 'error').pop().text, 'Voice input: Could not open the microphone: Failed to open device.');
@@ -833,10 +840,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
     v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush();
     assert.strictEqual(m.ui.infos.pop(), 'Set up voice input on this machine?');
-    assert(/private Python environment and fetches the large-v3-turbo model, about 4 GB in all, under .*perch.voice\. Nothing is installed system-wide, and nothing you say leaves this machine\./.test(m.ui.details.pop()));
+    assert(/private Python environment and fetches a model sized for the machine \(large-v3-turbo with a GPU, small without\), up to 4 GB in all, under .*perch.voice\. Nothing is installed system-wide, and nothing you say leaves this machine\./.test(m.ui.details.pop()));
     assert.deepStrictEqual([m.vbox.installs, m.abox.calls.map((k) => k[0]), v.events(x).filter((e) => e.kind === 'voice').pop().phase, v.events(x).filter((e) => e.kind === 'error').length], [[], ['available'], 'idle', 0], 'declined: nothing is installed, nothing is recorded, and it is not an error');
     m.ui.answers.push('Set Up'); v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); await flush();
-    assert.deepStrictEqual([m.vbox.installs, m.ui.progress], [['large-v3-turbo'], ['Perch voice input', 'Creating a private Python environment', 'Installing the speech-to-text runtime', 'Ready']]);
+    assert.deepStrictEqual([m.vbox.installs, m.ui.progress], [['auto'], ['Perch voice input', 'Creating a private Python environment', 'Installing the speech-to-text runtime', 'Ready']]);
     assert.strictEqual(v.events(x).filter((e) => e.kind === 'voice').pop().phase, 'recording', 'and dictation begins once it is ready');
     v.fire({ type: 'voiceCancel' }); await flush();
     const asked = m.ui.infos.length; v.fire({ type: 'voiceStart', sid: x }); await flush(); await flush(); assert.strictEqual(m.ui.infos.length, asked, 'it is asked once'); v.fire({ type: 'voiceCancel' }); await flush();
@@ -859,6 +866,150 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(r.ui.infos.pop(), `Set up voice input on ${require('os').hostname()}, the remote machine?`);
     assert(/nothing you say leaves your machines\./.test(r.ui.details.pop()), 'audio crosses from the laptop to the workspace machine, and no further');
     r.perch.dispose();
+
+    // ---- the laptop has a GPU: the words are worked out there, in Perch Audio, and only the text crosses
+    const A2 = { ok: true, api: 2, devices: ['Headset Microphone'], device: 'Headset Microphone', busy: false };
+    const OPTS = { model: 'auto', device: 'auto', python: undefined, idleMs: 0 };
+    const last = (a) => a[a.length - 1];
+    const L = install(undefined, { voice: { installed: false }, audio: { available: A2 }, remote: 'ssh-remote' }); await flush();
+    const lv = fakeView(); L.registered['perch.main'].resolveWebviewView(lv.view); lv.fire({ type: 'ready' }); await flush();
+    lv.fire({ type: 'new', kind: 'claude' }); const lx = lv.lastTabs().active;
+    L.changeConfig({ 'voice.language': 'ko', 'voice.vocabulary': 'Perch', 'voice.idleMinutes': 0 });
+    const ops = () => L.abox.calls.map((k) => k[0]).filter((k) => k !== 'level');
+    const dictate = async () => { lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush(); lv.fire({ type: 'voiceStop', sid: lx }); await flush(); await flush(); };
+    lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush();
+    assert.deepStrictEqual(ops(), ['available', 'engine', 'start', 'warm'], 'Perch Audio is asked what it can do, then to record, and to load its model meanwhile');
+    assert.deepStrictEqual([L.abox.calls[1][1], L.abox.calls[3][1]], [OPTS, OPTS], 'with the engine settings from here');
+    assert.deepStrictEqual([L.ui.infos.length, L.vbox.installs, L.vbox.starts], [0, [], 0], 'nothing is asked, and the engine here is left alone');
+    lv.fire({ type: 'voiceStop', sid: lx }); await flush(); await flush();
+    assert.deepStrictEqual(last(L.abox.calls), ['transcribe', 'rec-1', { engine: OPTS, language: 'ko', prompt: 'Perch' }], 'the recording is stopped and transcribed there, with the words settings');
+    assert.deepStrictEqual([last(lv.events(lx).filter((e) => e.kind === 'insert')).text, L.vbox.requests.length, lv.events(lx).filter((e) => e.kind === 'voice' && e.phase === 'transcribing').pop().where], ['local words ', 0, 'local']);
+
+    // not yet set up there: the question names the laptop, and the set-up runs there
+    L.abox.engine = Object.assign({}, L.abox.engine, { installed: false });
+    lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush();
+    assert.strictEqual(L.ui.infos.pop(), 'Set up voice input on this computer, laptop?');
+    assert(/on the computer you sit at, not on the remote/.test(L.ui.details.pop()));
+    assert.deepStrictEqual([last(L.abox.calls)[0], last(lv.events(lx).filter((e) => e.kind === 'voice')).phase], ['engine', 'idle'], 'declined: nothing more is asked of it');
+    L.ui.answers.push('Set Up'); lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([ops().slice(-3), last(L.abox.calls.filter((k) => k[0] === 'setup'))[1], L.vbox.installs, L.ui.progress.length], [['setup', 'start', 'warm'], OPTS, [], 0], 'set up there, with the progress shown there');
+    lv.fire({ type: 'voiceCancel' }); await flush();
+    L.abox.setup = { ok: false, error: 'no Python', code: 'setup-failed' }; L.ui.answers.push('Set Up'); lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([L.ui.errors.pop(), last(lv.events(lx).filter((e) => e.kind === 'voice')).phase], ['Perch: voice input could not be set up on this computer. no Python', 'idle']);
+    L.abox.setup = { ok: true }; L.abox.engine = Object.assign({}, L.abox.engine, { installed: true });
+    // the setup command and unloading follow the same choice
+    await L.commands['perch.voice.setup'](); assert.strictEqual(L.ui.infos.pop(), 'Perch: voice input is already set up here.');
+    await L.commands['perch.voice.unload'](); assert.deepStrictEqual([last(L.abox.calls)[0], L.vbox.stops], ['unload', 0]);
+
+    // no GPU on the laptop: the audio comes here, as before
+    L.abox.engine = Object.assign({}, L.abox.engine, { gpu: false }); L.vbox.installed = true; L.abox.calls.length = 0;
+    await dictate();
+    assert.deepStrictEqual([ops(), L.vbox.requests.length, last(lv.events(lx).filter((e) => e.kind === 'insert')).text], [['available', 'engine', 'start', 'stop'], 1, 'hello world ']);
+    // asked for outright, the laptop is used without a GPU; asked for the remote, the laptop is not consulted
+    L.changeConfig({ 'voice.runOn': 'local' }); L.abox.calls.length = 0; await dictate();
+    assert.deepStrictEqual([ops(), L.vbox.requests.length], [['available', 'engine', 'start', 'warm', 'transcribe'], 1]);
+    L.changeConfig({ 'voice.runOn': 'remote' }); L.abox.engine = Object.assign({}, L.abox.engine, { gpu: true }); L.abox.calls.length = 0; await dictate();
+    assert.deepStrictEqual([ops(), L.vbox.requests.length], [['available', 'start', 'stop'], 2]);
+    // an older Perch Audio records but cannot transcribe: local is refused outright, auto goes back to here
+    L.changeConfig({ 'voice.runOn': 'local' }); L.abox.available = Object.assign({}, A2, { api: 1 }); L.abox.calls.length = 0;
+    lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush();
+    assert.deepStrictEqual([last(lv.events(lx).filter((e) => e.kind === 'error')).text, ops()], ['Voice input: Perch Audio on this computer is too old to transcribe there. Update it, or set perch.voice.runOn to remote.', ['available']]);
+    L.changeConfig({ 'voice.runOn': 'auto' }); L.abox.calls.length = 0; await dictate();
+    assert.deepStrictEqual([ops(), L.vbox.requests.length], [['available', 'start', 'stop'], 3]);
+    // and one newer than this perch
+    L.abox.available = Object.assign({}, A2, { api: 3 }); lv.fire({ type: 'voiceStart', sid: lx }); await flush(); await flush();
+    assert.strictEqual(last(lv.events(lx).filter((e) => e.kind === 'error')).text, 'Voice input: Perch Audio is a newer version than Perch. Update Perch.');
+    L.perch.dispose();
+  }
+
+  // ---- a backend switch during a turn: the tab moves once the turn is over, and nothing is cut off
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hold this thought' }); await flush();
+    const holding = created.filter((a) => a.claude).pop();
+    assert.strictEqual(v.lastTabs().tabs.find((t) => t.id === x).busy, true);
+    v.fire({ type: 'meterToggle' }); await flush(); await flush();
+    assert(v.events(x).some((e) => e.kind === 'note' && /^Claude backend is now API \/ Bedrock\. This tab moves to it after the current turn; the conversation continues, the prompt cache starts over\.$/.test(e.text)));
+    assert.deepStrictEqual([holding.disposed, holding.interrupted, v.lastTabs().tabs.find((t) => t.id === x).busy], [false, 0, true], 'the turn runs on');
+    holding.finish(); await flush(); await flush();
+    assert.deepStrictEqual([holding.disposed, v.lastTabs().tabs.find((t) => t.id === x).started, v.lastTabs().tabs.find((t) => t.id === x).busy], [true, false, false], 'moved once the turn is over');
+    assert(v.events(x).some((e) => e.kind === 'note' && /^Moved to the new Claude backend; the conversation continues from the next message\.$/.test(e.text)));
+    v.fire({ type: 'send', sid: x, text: 'on we go' }); await flush();
+    const again = created.filter((a) => a.claude).pop();
+    assert.deepStrictEqual([again !== holding, again.o.resume, v.lastTabs().tabs.find((t) => t.id === x).backend], [true, 'sess-' + created.indexOf(holding), 'api']);
+    m.perch.dispose();
+  }
+
+  // ---- Claude with nothing to authenticate with: the first message is held back, the way in offered, the text put back
+  {
+    const m = install(undefined, { meter: { login: false }, remote: 'ssh-remote' }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active; const made = created.length;
+    v.fire({ type: 'send', sid: x, text: 'hello' }); await flush(); await flush();
+    assert.strictEqual(created.length, made, 'no process is started: it would only be refused');
+    assert(/^Claude is not logged in on .+\. Log in, then send the message again\.$/.test(v.events(x).filter((e) => e.kind === 'note').pop().text));
+    assert.strictEqual(v.events(x).filter((e) => e.kind === 'insert').pop().text, 'hello', 'the message goes back into the box');
+    assert(/^Claude is not logged in on .+\. Perch runs Claude Code with its login, kept in \/nonexistent\/perch-test\/\.claude\. Log In opens Claude Code's sign-in; or use API \/ Bedrock credentials instead\.$/.test(m.ui.warnings.pop()));
+    assert.deepStrictEqual(m.ui.executed, [], 'declined: nothing opens');
+    // Log In: Claude Code's own sign-in, watched until the login lands
+    m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: x, text: 'hello' }); m.box.login = true; await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.executed, m.ui.infos.pop()], [['claude-vscode.editor.openLast'], 'Perch: Claude is logged in. Send your message again.']);
+    v.fire({ type: 'send', sid: x, text: 'hello' }); await flush();
+    assert.strictEqual(created.length, made + 1, 'logged in: the message goes to a Claude of its own');
+    // the other way: switch to API / Bedrock, which has credentials here
+    m.box.login = false; m.box.apiCreds = true; m.ui.answers.push('Use API / Bedrock');
+    v.fire({ type: 'new', kind: 'claude' }); const y = v.lastTabs().active;
+    v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.box.writes, v.lastMeter().backend], [[true], 'api'], 'switched');
+    v.fire({ type: 'send', sid: y, text: 'hi' }); await flush();
+    assert.strictEqual(created.length, made + 2, 'and on API / Bedrock the message goes through');
+    // API / Bedrock with nothing to authenticate with: the settings file, or back to the subscription
+    m.box.apiCreds = false; v.fire({ type: 'new', kind: 'claude' }); const z = v.lastTabs().active;
+    v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush();
+    assert(/^Claude is set to API \/ Bedrock on .+, and no credentials for it were found there\. Set them up, or use your subscription, then send the message again\.$/.test(v.events(z).filter((e) => e.kind === 'note').pop().text));
+    assert(/no ~\/\.aws credentials or profile, no AWS_\* variables, no ANTHROPIC_API_KEY\. Put AWS credentials on .+, and the region and model in the env block of \/nonexistent\/perch-test\/\.claude\/settings\.json \(AWS_REGION, ANTHROPIC_MODEL\), or use your subscription\.$/.test(m.ui.warnings.pop()));
+    m.ui.answers.push('Open settings.json'); v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush(); await flush();
+    assert(/^Perch: could not create \/nonexistent\/perch-test\/\.claude\/settings\.json\. /.test(m.ui.errors.pop()), 'a file is made to fill in; here the place for it cannot exist');
+    m.ui.answers.push('Use Subscription'); m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.box.writes, v.lastMeter().backend, /has no subscription login yet/.test(m.ui.infos.pop())], [[true, false], 'subscription', true], 'back to the subscription, whose login is offered by the switch');
+    m.perch.dispose();
+  }
+
+  // ---- Codex with no login on the machine: the first message is held back, the login offered, the text put back
+  {
+    const m = install(undefined, { meter: { codexLoggedIn: false }, remote: 'ssh-remote' }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active; const made = created.length;
+    v.fire({ type: 'send', sid: x, text: 'hello' }); await flush(); await flush();
+    assert.strictEqual(created.length, made, 'no agent is started: it would only be refused');
+    assert(/^Codex is not logged in on .+\. Log in, then send the message again\.$/.test(v.events(x).filter((e) => e.kind === 'note').pop().text));
+    assert.strictEqual(v.events(x).filter((e) => e.kind === 'insert').pop().text, 'hello', 'the message goes back into the box');
+    assert(/^Codex is not logged in on .+\. Perch runs it with your ChatGPT login, kept in \/home\/me\/\.codex\. Log In opens ChatGPT's sign-in page in your browser\. Device Code prints a link and a one-time code in a terminal instead, which ChatGPT must allow first \(Settings, Security and login, App security\)\.$/.test(m.ui.warnings.pop()), 'and the offer says where the login lives, and the two ways');
+    assert.deepStrictEqual([m.ui.terminals.length, m.box.codexWaits || 0, m.box.codexLogins], [0, 0, undefined], 'declined: nothing runs');
+    // taken up: the browser sign-in runs here, its page opens on the user's machine, the return port is forwarded, and the login is watched for
+    m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: x, text: 'hello again' }); await flush(); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, /codex$/.test(m.box.codexLogins[0]), m.ui.forwarded, m.ui.external.pop(), m.ui.terminals.length, m.box.codexWaits, m.box.codexKilled, m.ui.infos.pop()],
+      [1, true, ['http://localhost:1455'], 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', 0, 1, 1, 'Perch: Codex is logged in. Send your message again.'],
+      'the program here, the page there, the port between, and the server let go once the login is in');
+    v.fire({ type: 'send', sid: x, text: 'hello again' }); await flush(); await flush();
+    assert.strictEqual(created.length, made + 1, 'logged in: the message goes to a Codex of its own');
+    // the other way: the device code, in a terminal
+    m.box.codexLoggedIn = false; m.ui.answers.push('Device Code'); v.fire({ type: 'new', kind: 'codex' }); const y = v.lastTabs().active;
+    v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
+    const t = m.ui.terminals.pop();
+    assert.deepStrictEqual([t.o.name, t.sent.length, /login --device-auth$/.test(t.sent[0]), m.box.codexWaits, m.box.codexLogins.length], ['Codex login', 1, true, 2, 1]);
+    // and the browser sign-in that cannot start says so
+    m.box.codexLoggedIn = false; m.box.codexLoginFails = 'spawn ENOENT'; m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
+    assert.strictEqual(m.ui.errors.pop(), 'Perch: the Codex login could not start. spawn ENOENT');
+    m.box.codexLoginFails = null; m.box.codexLoggedIn = true;
+    // a login that expires later shows as 401 from the API; the same offer follows the error
+    created[created.length - 1].emit({ kind: 'error', text: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header' }); await flush();
+    assert(/^Codex was refused: the login on .+ has expired or is missing\. Perch runs it/.test(m.ui.warnings.pop()));
+    const w = m.ui.warnings.length; created[created.length - 1].emit({ kind: 'error', text: 'something else' }); await flush();
+    assert.strictEqual(m.ui.warnings.length, w, 'other errors are not a login matter');
+    m.perch.dispose();
   }
 
   // ---- names, and the sessions of the past
@@ -1147,6 +1298,25 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     for (const target of ['src/nowhere.js', 'src', 'javascript:alert(1)', '../../../../../../nonexistent/x', '', undefined]) { v.fire({ type: 'open', target }); await flush(); }
     assert.strictEqual(m.ui.opened.length, 8, 'only a file that is there is opened');
     assert.deepStrictEqual(m.ui.warnings.slice(0, 2), ['Perch: src/nowhere.js is not a file in this workspace.', 'Perch: src is not a file in this workspace.']);
+    m.perch.dispose();
+  }
+
+  // ---- past 20 images a Claude conversation is held to a size limit: the tab says so at the twentieth, once
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    const P = { mime: 'image/png', data: 'iVBORw0KGgo=' }, notes = () => v.events(c).filter((e) => e.kind === 'note').map((e) => e.text);
+    for (let i = 0; i < 6; i++) v.fire({ type: 'send', sid: c, text: 'shot ' + i, images: [P, P, P] });   // 18
+    await flush(); assert.deepStrictEqual(notes(), []);
+    v.fire({ type: 'send', sid: c, text: 'two more', images: [P, P] }); await flush();                    // 20
+    assert.deepStrictEqual(notes(), ['This conversation now carries 20 images. Past 20, the API refuses a conversation holding any image 2000 px or wider, which images from earlier versions of perch or from Claude Code\'s own reading may be. If a turn then fails with "an image could not be processed", /compact lets the earlier images go.']);
+    v.fire({ type: 'send', sid: c, text: 'words only' }); await flush(); assert.strictEqual(notes().length, 1, 'a message without an image says nothing');
+    v.fire({ type: 'send', sid: c, text: 'one over', images: [P] }); await flush();
+    assert.strictEqual(notes().length, 1, 'said once: images pasted here are within the limit');
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    for (let i = 0; i < 8; i++) v.fire({ type: 'send', sid: x, text: 'x' + i, images: [P, P, P] }); await flush();
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'note'), [], 'Codex is not held to it');
     m.perch.dispose();
   }
 

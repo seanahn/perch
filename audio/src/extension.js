@@ -3,15 +3,76 @@
 //
 // This extension runs on the UI side, the machine you are sitting at, whatever the workspace is. Perch itself runs with
 // the workspace, which under Remote-SSH is another machine with no access to your microphone. Perch asks this extension
-// to record, through the commands below, and does the speech-to-text itself. Nothing here reads workspace files, and
-// audio is held in memory only while a recording is in progress.
+// to record, through the commands below. The speech-to-text can happen here too (engine.js, the same engine Perch has,
+// copied in at build time): when this computer has a GPU and the workspace machine does not, only the text crosses.
+// Nothing here reads workspace files, and audio is held in memory only while a recording is in progress.
 const vscode = require('vscode');
+const os = require('os');
+const path = require('path');
 const { execFileSync } = require('child_process');
 const { Recorder, pickDevice, probeInputs, isMonitor } = require('./recorder');
 
-const API = 1;
+const API = 2;                       // 2: can transcribe here (engine, setup, warm, transcribe, unload)
 let lib = null, libError = null, active = null;
 let exec = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
+let Engine = null, engineError = null, engine = null, engineKey = '', gpu = null;
+
+function engineClass() {
+  if (Engine || engineError) return Engine;
+  try { Engine = require('./engine').VoiceEngine; } catch (e) { engineError = String((e && e.message) || e); }
+  return Engine;
+}
+/** Whether this computer has an NVIDIA GPU, which is what makes transcribing here worth it. Asked once. */
+function hasGpu() {
+  if (gpu !== null) return gpu;
+  try { gpu = /\bGPU \d/.test(exec('nvidia-smi', ['-L'])); } catch (_) { gpu = false; }
+  return gpu;
+}
+const NO_ENGINE = 'This Perch Audio cannot transcribe: its speech-to-text engine is missing. Reinstall it from the marketplace, or set perch.voice.runOn to remote.';
+/** One engine per combination of settings, as Perch keeps its own; the settings arrive with each request. */
+function getEngine(o) {
+  const E = engineClass(); if (!E) return null;
+  o = o || {};
+  const opts = { model: o.model || 'auto', device: o.device || 'auto', python: o.python || undefined, idleMs: o.idleMs === undefined ? 10 * 60000 : o.idleMs };
+  const key = JSON.stringify(opts);
+  if (!engine || engineKey !== key) {
+    if (engine) engine.stop();
+    engine = new E(Object.assign({ server: path.join(__dirname, '..', 'voice', 'server.py'), requirements: path.join(__dirname, '..', 'voice', 'requirements.txt') }, opts));
+    engineKey = key;
+  }
+  return engine;
+}
+function engineStatus(o) {
+  const e = getEngine(o); if (!e) return fail(NO_ENGINE, 'no-engine');
+  return { ok: true, installed: e.isInstalled(), gpu: hasGpu(), home: e.home, host: os.hostname() };
+}
+/** The one-time setup on this computer. Perch asks the user first; the progress shows here, in the same window. */
+async function setup(o) {
+  const e = getEngine(o); if (!e) return fail(NO_ENGINE, 'no-engine');
+  if (e.isInstalled()) return { ok: true };
+  try {
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Perch voice input', cancellable: false }, async (progress) => {
+      let last = 0;
+      await e.install((message, pct) => { progress.report({ message, increment: Math.max(0, pct - last) }); last = pct; });
+    });
+    return { ok: true };
+  } catch (err) { return fail(err.message, 'setup-failed'); }
+}
+/** Load the model now, while the user is still speaking. */
+function warm(o) { const e = getEngine(o); if (e) e.start().catch(() => {}); return { ok: !!e }; }
+/** Stop the recording and turn it into text here. What comes back is the text, not the audio. */
+async function transcribe(id, o) {
+  o = o || {};
+  const r = await stop(id); if (!r.ok) return r;
+  const meta = { seconds: r.seconds, silent: r.silent, device: r.device, ended: r.ended };
+  if (r.silent || r.seconds < 0.3) return Object.assign({ ok: true, text: '' }, meta);
+  const e = getEngine(o.engine); if (!e) return fail(NO_ENGINE, 'no-engine');
+  try {
+    const out = await e.transcribe({ pcm: r.pcm, sampleRate: r.sampleRate, language: o.language || null, prompt: o.prompt || null });
+    return Object.assign({ ok: true, text: String(out.text || ''), language: out.language, took_ms: out.took_ms }, meta);
+  } catch (err) { return fail(err.message, 'transcribe-failed'); }
+}
+function unload() { if (engine) engine.stop(); return { ok: true }; }
 
 function library() {
   if (lib || libError) return lib;
@@ -77,10 +138,15 @@ function activate(context) {
     vscode.commands.registerCommand('_perch.audio.level', (id) => level(id)),
     vscode.commands.registerCommand('_perch.audio.stop', (id) => stop(id)),
     vscode.commands.registerCommand('_perch.audio.cancel', (id) => cancel(id)),
+    vscode.commands.registerCommand('_perch.audio.engine', (o) => engineStatus(o)),
+    vscode.commands.registerCommand('_perch.audio.setup', (o) => setup(o)),
+    vscode.commands.registerCommand('_perch.audio.warm', (o) => warm(o)),
+    vscode.commands.registerCommand('_perch.audio.transcribe', (id, o) => transcribe(id, o)),
+    vscode.commands.registerCommand('_perch.audio.unload', () => unload()),
     vscode.commands.registerCommand('perchAudio.listDevices', () => chooseDevice()),
-    { dispose: () => { if (active) { const a = active; active = null; a.rec.cancel(); } } },
+    { dispose: () => { if (active) { const a = active; active = null; a.rec.cancel(); } unload(); } },
   );
 }
-function deactivate() { if (active) { const a = active; active = null; return a.rec.cancel(); } }
+function deactivate() { unload(); if (active) { const a = active; active = null; return a.rec.cancel(); } }
 
-module.exports = { activate, deactivate, _reset: (o) => { lib = null; libError = null; active = null; if (o && o.exec) exec = o.exec; } };
+module.exports = { activate, deactivate, _reset: (o) => { lib = null; libError = null; active = null; engine = null; engineKey = ''; gpu = null; Engine = null; engineError = null; if (o && o.exec) exec = o.exec; if (o && o.engine) Engine = o.engine; } };

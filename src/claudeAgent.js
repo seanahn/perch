@@ -59,6 +59,9 @@ class ClaudeAgent {
       permissionMode: this.opts.permissionMode || 'default',
       includePartialMessages: true,
       abortController: this.abort,
+      // Claude Code's word on whether a turn is running (session_state_changed, read by _state) is only sent to a host
+      // that asks for it. Without the flag the SDK has the CLI send it marked host-only, and swallows it.
+      env: Object.assign({}, process.env, { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }),
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();
@@ -102,6 +105,7 @@ class ClaudeAgent {
    * shown as working for good.
    */
   _state(state) {
+    this.stated = (this.stated || 0) + 1;    // how many times the CLI has said; the live test checks the signal arrives at all
     if (state === 'idle') { if (this.running || this.pending) { this.running = false; this.pending = 0; this.emit({ kind: 'busy', busy: false }); } }
     else if (state === 'running' && !this.running) { this.running = true; this.pending = Math.max(1, this.pending); this.emit({ kind: 'busy', busy: true }); }
   }

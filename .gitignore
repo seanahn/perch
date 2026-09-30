@@ -4,3 +4,6 @@ audio/node_modules/
 __pycache__/
 *.pyc
 .env
+# copies made by 'make audio-engine' from src/voice.js and voice/
+audio/src/engine.js
+audio/voice/

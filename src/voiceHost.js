@@ -1,14 +1,15 @@
 'use strict';
-// Dictation. Recording happens on the machine the user is sitting at, in the Perch Audio extension; speech-to-text
-// happens here, with the workspace. Under Remote-SSH those are two machines, and audio crosses between them as a
-// command's return value, over VS Code's own connection.
+// Dictation. Recording happens on the machine the user is sitting at, in the Perch Audio extension. Speech-to-text
+// happens either here, with the workspace, or there, in Perch Audio, which carries the same engine: under Remote-SSH
+// those are two machines, and what crosses between them, over VS Code's own connection, is the audio in the first
+// case and only the text in the second. perch.voice.runOn chooses; auto means "where the GPU is".
 const vscode = require('vscode');
 const os = require('os');
 const path = require('path');
 const { VoiceEngine } = require('./voice');
 
 const TICK_MS = 120;
-const AUDIO_API = 1;
+const AUDIO_API = 2;             // what this perch was written against; 1 still records, but cannot transcribe there
 const NO_COMPANION = 'Perch Audio is not installed on this computer. It records from your microphone, so it has to be installed where you are sitting, even when the workspace is remote. It comes with Perch from the marketplace; if it was removed, install Perch Audio (seanahn.perch-audio) from the Extensions view on this computer. From a checkout of perch: make install-audio, then reload the window.';
 
 class VoiceHost {
@@ -27,9 +28,12 @@ class VoiceHost {
 
   cfg(k) { return vscode.workspace.getConfiguration('perch').get('voice.' + k); }
 
+  /** The engine's settings: for the engine here, and sent along to the one in Perch Audio. */
+  engineOpts() { return { model: this.cfg('model') || 'auto', device: this.cfg('device') || 'auto', python: this.cfg('python') || undefined, idleMs: Math.max(0, Number(this.cfg('idleMinutes') === undefined || this.cfg('idleMinutes') === '' ? 10 : this.cfg('idleMinutes')) || 0) * 60000 }; }
+
   /** One engine per combination of settings; changing the model or device replaces it. */
   getEngine() {
-    const o = { model: this.cfg('model') || 'large-v3-turbo', device: this.cfg('device') || 'auto', python: this.cfg('python') || undefined, idleMs: Math.max(0, Number(this.cfg('idleMinutes') === undefined || this.cfg('idleMinutes') === '' ? 10 : this.cfg('idleMinutes')) || 0) * 60000 };
+    const o = this.engineOpts();
     const key = JSON.stringify(o);
     if (!this.engine || this.engineKey !== key) {
       if (this.engine) this.engine.stop();
@@ -49,13 +53,30 @@ class VoiceHost {
   /** What a page should show for this session right now; sent again when a page is rebuilt. */
   resend(sid) { if (this.now && this.now.sid === sid) this.phase(sid, this.now.phase, { device: this.now.device, maxSeconds: this.now.maxSeconds }); }
 
+  /**
+   * Where the words are worked out for a recording: 'local', in Perch Audio on the computer the user sits at, or
+   * 'remote', here. With no remote the two are one machine and the engine here is used. auto takes the local machine
+   * when it has an NVIDIA GPU, so a laptop with one keeps its own audio and a CPU-only remote is spared the work.
+   * @param {object} a  what _perch.audio.available answered
+   * @returns {Promise<{where: 'local'|'remote', status?: object, error?: string}>}
+   */
+  async where(a) {
+    const want = this.cfg('runOn') || 'auto';
+    if (!vscode.env.remoteName || want === 'remote') return { where: 'remote' };
+    const tooOld = 'Perch Audio on this computer is too old to transcribe there. Update it, or set perch.voice.runOn to remote.';
+    if (!(a.api >= 2)) return want === 'local' ? { where: 'local', error: tooOld } : { where: 'remote' };
+    const st = await this.audio('engine', this.engineOpts());
+    if (!st || !st.ok) return want === 'local' ? { where: 'local', error: (st && st.error) || tooOld } : { where: 'remote' };
+    return want === 'local' || st.gpu ? { where: 'local', status: st } : { where: 'remote' };
+  }
+
   /** The one-time setup, with the user's agreement. It says which machine it installs on, which matters when remote. */
   async setup(ask = true) {
     const e = this.getEngine();
     if (e.isInstalled()) return true;
     const where = vscode.env.remoteName ? `${os.hostname()}, the remote machine` : 'this machine';
     if (ask) {
-      const pick = await vscode.window.showInformationMessage(`Set up voice input on ${where}?`, { modal: true, detail: `This installs Whisper into a private Python environment and fetches the ${e.model} model, about 4 GB in all, under ${e.home}. Nothing is installed system-wide, and nothing you say leaves ${vscode.env.remoteName ? 'your machines' : 'this machine'}.` }, 'Set Up');
+      const pick = await vscode.window.showInformationMessage(`Set up voice input on ${where}?`, { modal: true, detail: `This installs Whisper into a private Python environment and fetches ${e.model === 'auto' ? 'a model sized for the machine (large-v3-turbo with a GPU, small without)' : `the ${e.model} model`}, up to 4 GB in all, under ${e.home}. Nothing is installed system-wide, and nothing you say leaves ${vscode.env.remoteName ? 'your machines' : 'this machine'}.` }, 'Set Up');
       if (pick !== 'Set Up') return false;
     }
     try {
@@ -67,6 +88,33 @@ class VoiceHost {
     } catch (err) { vscode.window.showErrorMessage('Perch: voice input could not be set up. ' + err.message); return false; }
   }
 
+  /** The same, on the computer the user sits at, done by Perch Audio. The question is asked here; the progress shows there. */
+  async setupLocal(st, ask = true) {
+    if (st.installed) return true;
+    const e = this.engineOpts();
+    if (ask) {
+      const pick = await vscode.window.showInformationMessage(`Set up voice input on this computer, ${st.host}?`, { modal: true, detail: `This installs Whisper into a private Python environment on the computer you sit at, not on the remote, and fetches ${e.model === 'auto' ? 'a model sized for it (large-v3-turbo with a GPU, small without)' : `the ${e.model} model`}, up to 4 GB in all, under ${st.home}. Nothing is installed system-wide, and nothing you say leaves your machines.` }, 'Set Up');
+      if (pick !== 'Set Up') return false;
+    }
+    const r = await this.audio('setup', e);
+    if (r && r.ok) return true;
+    vscode.window.showErrorMessage('Perch: voice input could not be set up on this computer. ' + ((r && r.error) || 'Perch Audio gave no answer.'));
+    return false;
+  }
+
+  /** Set up wherever dictation would run, for the command. 'already' when nothing needed doing, 'ready' when set up now, false otherwise. */
+  async prepare(ask = true) {
+    const a = await this.audio('available');
+    if (!a || !a.ok) { vscode.window.showErrorMessage('Perch: ' + ((a && a.error) || 'the microphone is not available.')); return false; }
+    const w = await this.where(a);
+    if (w.error) { vscode.window.showErrorMessage('Perch: ' + w.error); return false; }
+    if (w.where === 'local' ? w.status.installed : this.getEngine().isInstalled()) return 'already';
+    return (w.where === 'local' ? await this.setupLocal(w.status, ask) : await this.setup(ask)) ? 'ready' : false;
+  }
+
+  /** Free the model's memory, wherever it is loaded. */
+  unload() { if (this.engine) this.engine.stop(); return this.audio('unload'); }
+
   async start(sid) {
     if (this.busy) return;
     if (this.now) { if (this.now.sid === sid && this.now.phase === 'recording') return this.stop(sid); this.send(sid, { kind: 'error', text: 'Voice input: another tab is dictating.' }); return; }
@@ -75,12 +123,15 @@ class VoiceHost {
       this.phase(sid, 'starting');
       const a = await this.audio('available');
       if (!a || !a.ok) { this.fail(sid, (a && a.error) || 'the microphone is not available.'); return; }
-      if (a.api !== AUDIO_API) { this.fail(sid, 'Perch Audio is a different version from Perch. Update both.'); return; }
-      if (!(await this.setup())) { this.phase(sid, 'idle'); return; }
+      if (!(a.api >= 1 && a.api <= AUDIO_API)) { this.fail(sid, 'Perch Audio is a newer version than Perch. Update Perch.'); return; }
+      const w = await this.where(a);
+      if (w.error) { this.fail(sid, w.error); return; }
+      if (!(w.where === 'local' ? await this.setupLocal(w.status) : await this.setup())) { this.phase(sid, 'idle'); return; }
       const s = await this.audio('start');
       if (!s || !s.ok) { this.fail(sid, (s && s.error) || 'recording could not start.'); return; }
-      this.getEngine().start().catch(() => {});          // load the model while the user is speaking
-      this.now = { sid, id: s.id, phase: 'recording', device: s.device, maxSeconds: s.maxSeconds, warned: false };
+      // load the model while the user is speaking
+      if (w.where === 'local') this.audio('warm', this.engineOpts()); else this.getEngine().start().catch(() => {});
+      this.now = { sid, id: s.id, phase: 'recording', where: w.where, device: s.device, maxSeconds: s.maxSeconds, warned: false };
       this.phase(sid, 'recording', { level: 0, seconds: 0, device: s.device, maxSeconds: s.maxSeconds });
       this.now.timer = setInterval(() => this.tick(), TICK_MS); if (this.now.timer.unref) this.now.timer.unref();
     } finally { this.busy = false; }
@@ -103,14 +154,18 @@ class VoiceHost {
     this.busy = true;
     try {
       clearInterval(n.timer); n.phase = 'transcribing';
-      this.phase(sid, 'transcribing', { device: n.device });
-      const r = await this.audio('stop', n.id);
+      this.phase(sid, 'transcribing', { device: n.device, where: n.where });
+      const words = { language: this.cfg('language') || null, prompt: this.cfg('vocabulary') || null };
+      // local: Perch Audio stops the recording and answers with the text. remote: it answers with the audio, transcribed here.
+      const r = n.where === 'local' ? await this.audio('transcribe', n.id, Object.assign({ engine: this.engineOpts() }, words)) : await this.audio('stop', n.id);
       if (!r || !r.ok) { this.fail(sid, (r && r.error) || 'the recording could not be collected.'); return; }
       if (r.silent) { this.fail(sid, `nothing was heard from "${r.device}". It may be muted, or the wrong input. Choose another with Perch Audio: Choose Microphone.`); return; }
       if (r.seconds < 0.3) { this.phase(sid, 'idle'); return; }
-      let out;
-      try { out = await this.getEngine().transcribe({ pcm: r.pcm, sampleRate: r.sampleRate, language: this.cfg('language') || null, prompt: this.cfg('vocabulary') || null }); }
-      catch (e) { this.fail(sid, e.message); return; }
+      let out = r;
+      if (n.where !== 'local') {
+        try { out = await this.getEngine().transcribe(Object.assign({ pcm: r.pcm, sampleRate: r.sampleRate }, words)); }
+        catch (e) { this.fail(sid, e.message); return; }
+      }
       this.phase(sid, 'idle');
       const text = String(out.text || '').trim();
       if (!text) { this.send(sid, { kind: 'note', text: 'Voice input heard no words.' }); return; }

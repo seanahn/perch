@@ -1,8 +1,8 @@
 {
   "name": "perch-audio",
   "displayName": "Perch Audio",
-  "description": "Microphone capture for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
-  "version": "0.1.0",
+  "description": "Microphone capture and, on a machine with a GPU, speech-to-text for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
+  "version": "0.2.0",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,7 @@
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Other"],
   "extensionKind": ["ui"],
-  "activationEvents": ["onCommand:_perch.audio.available", "onCommand:_perch.audio.start"],
+  "activationEvents": ["onCommand:_perch.audio.available", "onCommand:_perch.audio.start", "onCommand:_perch.audio.engine", "onCommand:_perch.audio.unload"],
   "main": "./src/extension.js",
   "contributes": {
     "commands": [
@@ -28,5 +28,5 @@
     }
   },
   "dependencies": { "@picovoice/pvrecorder-node": "^1.2.9" },
-  "scripts": { "test": "node test/recorder.test.js" }
+  "scripts": { "test": "node test/recorder.test.js && node test/engine.test.js" }
 }

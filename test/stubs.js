@@ -98,7 +98,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     stop() { vbox.stops++; }
   }
   const abox = Object.assign({ missing: false, calls: [], available: { ok: true, api: 1, devices: ['Headset Microphone'], device: 'Headset Microphone', busy: false }, start: { ok: true, id: 'rec-1', device: 'Headset Microphone', sampleRate: 16000, maxSeconds: 180, picked: 'first-input' },
-    levels: [], level: { ok: true, level: 0.4, seconds: 1.2, ended: null, silent: false }, stop: { ok: true, pcm: Buffer.alloc(64000).toString('base64'), sampleRate: 16000, seconds: 2, silent: false, device: 'Headset Microphone', ended: null } }, audio);
+    levels: [], level: { ok: true, level: 0.4, seconds: 1.2, ended: null, silent: false }, stop: { ok: true, pcm: Buffer.alloc(64000).toString('base64'), sampleRate: 16000, seconds: 2, silent: false, device: 'Headset Microphone', ended: null },
+    // a Perch Audio that can transcribe on the user's own machine (api 2)
+    engine: { ok: true, installed: true, gpu: true, home: '/home/me/.local/share/perch/voice', host: 'laptop' }, setup: { ok: true }, warm: { ok: true }, unload: { ok: true },
+    transcribe: { ok: true, text: 'local words', language: 'en', seconds: 2, silent: false, device: 'Headset Microphone', ended: null } }, audio);
   const companion = async (id, ...args) => {
     const op = id.slice('_perch.audio.'.length); abox.calls.push([op, ...args]);
     if (abox.missing) throw new Error(`command '${id}' not found`);
@@ -117,7 +120,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] }, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] }, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -178,7 +181,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); ui.executed.push(id); } },
-    env: { remoteName: remote },
+    env: { remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
     extensions: {
       getExtension: (id) => { const e = installed[String(id).toLowerCase()]; const root = e && e.__root ? e.__root : '/ext/' + id; return e ? { extensionUri: { path: root, fsPath: root }, extensionPath: root, packageJSON: e } : undefined; },
@@ -190,7 +193,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     ThemeIcon: class { constructor(id) { this.id = id; } },
     Range: class { constructor(a, b, c, d) { Object.assign(this, { a, b, c, d }); } },
     MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } appendCodeblock(v) { this.value += '\n```\n' + v + '\n```\n'; return this; } },
-    Uri: { file: (p) => ({ path: p, fsPath: p }), joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), fsPath: [base.path, ...parts].join('/') }) },
+    Uri: { file: (p) => ({ path: p, fsPath: p }), parse: (p) => ({ path: p, fsPath: p, toString: () => p }), joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), fsPath: [base.path, ...parts].join('/') }) },
   };
   Module._load = function (req, parent, isMain) {
     if (req === 'vscode') return vscodeStub;
@@ -200,6 +203,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './voice') return { VoiceEngine: FakeEngine, DEFAULT_HOME: '/home/u/.local/share/perch/voice' };
     if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
+    // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, and is counted
+    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, waitForLogin: async () => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexLoggedIn = true; return true; },
+      // the browser sign-in: what program was run, and the page it printed; box.codexLoginFails makes it fail to start
+      startLogin: async (program) => { (box.codexLogins = box.codexLogins || []).push(program); if (box.codexLoginFails) throw new Error(box.codexLoginFails); return { url: 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', child: { kill() { box.codexKilled = (box.codexKilled || 0) + 1; } } }; } });
     if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
