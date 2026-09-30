@@ -73,7 +73,9 @@ ${glyphCss}
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
   .user .pics { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
-  .user .pics img { max-height: 120px; max-width: 200px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); display: block; }
+  /* pasted images in a sent message: small, as the vendors' own panels show them; a click shows one at the size it was kept, another puts it back */
+  .user .pics img { max-height: 48px; max-width: 96px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); display: block; cursor: zoom-in; }
+  .user .pics img.big { max-height: none; max-width: 100%; cursor: zoom-out; }
   .assistant { padding-left: 2px; padding-right: 2px; }
   .live { opacity: .85; }
 
@@ -688,7 +690,7 @@ ${glyphCss}
         const unseen = (m.images || 0) - thumbs.length;    // images with no thumbnail are counted instead
         const tags = [m.queued ? 'queued' : '', unseen > 0 ? unseen + (unseen > 1 ? ' images' : ' image') : '', m.tag || ''].filter(Boolean);
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
-        if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; row.append(i); } d.append(row); }
+        if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; i.title = 'Click to see it larger'; i.addEventListener('click', () => { i.classList.toggle('big'); i.title = i.classList.contains('big') ? 'Click to shrink it' : 'Click to see it larger'; }); row.append(i); } d.append(row); }
         d.append(m.text); break; }
       case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); break;
       case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); break; }

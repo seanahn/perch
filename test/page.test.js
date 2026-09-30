@@ -705,6 +705,11 @@ window.close();
   p4.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'see these', queued: false, images: 3, thumbs: [T, '', 'javascript:alert(1)'] } });
   const last = [...p4.$$('.pane')[0].querySelectorAll('.user')].pop();
   assert.deepStrictEqual([[...last.querySelectorAll('.pics img')].map((i) => i.getAttribute('src')), last.querySelector('.tag').textContent, last.textContent.endsWith('see these')], [[T], '2 images', true]);
+  // a thumbnail is small; a click shows it at the size it was kept, another puts it back
+  const pic = last.querySelector('.pics img');
+  assert.deepStrictEqual([pic.classList.contains('big'), pic.title], [false, 'Click to see it larger']);
+  pic.click(); assert.deepStrictEqual([pic.classList.contains('big'), pic.title], [true, 'Click to shrink it']);
+  pic.click(); assert.strictEqual(pic.classList.contains('big'), false);
   p4.w.close();
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });
