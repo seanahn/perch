@@ -221,8 +221,8 @@ Codex on this machine through the SDK.
 **IDE context**, on both kinds of tab, is on by default for new tabs
 (`perch.ideContext`) and remembered per tab. When on, each message carries
 the active file and, if there is one, the selection with its line numbers,
-as the vendors' own panels do. The transcript shows your message and a tag naming what
-was attached, not the attachment itself. The context is read when you
+as the vendors' own panels do. The transcript shows your message with a
+small tag, the file's name and the lines if any, not the attachment itself. The context is read when you
 write the message, so a queued message keeps the file that was open then.
 A Perch tab in the editor area takes the focus while you type, so the
 file attached is the one last focused, as long as it is still open on

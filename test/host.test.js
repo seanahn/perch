@@ -528,13 +528,13 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: x, text: 'why is b 2?' }); await flush();
     const F = path.join('src', 'a.js');
     assert.strictEqual(cx.sent.pop(), 'why is b 2?\n\n<ide_context>\nActive file: ' + F + ' (javascript)\nSelection: lines 3-4\n```javascript\nconst a = 1;\nconst b = 2;\n```\n</ide_context>', 'the agent gets the file, the lines, and the text');
-    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'why is b 2?', queued: false, tag: 'IDE context · ' + F + ':3-4' }, 'the transcript shows the message, and what was attached');
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'why is b 2?', queued: false, tag: 'a.js:3-4' }, 'the transcript shows the message, and the file attached by name');
     assert.strictEqual(v2.tab(x).title.includes('ide_context'), false);
 
     m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', '', sel(7, 4, 7, 4));
     v2.fire({ type: 'send', sid: x, text: 'here' }); await flush();
     assert(/\nActive file: .*a\.js \(javascript\)\nCursor: line 8\n<\/ide_context>$/.test(cx.sent.pop()), 'with no selection: the file and the cursor');
-    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, 'IDE context · ' + F);
+    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, 'a.js');
     m.ui.editor = editor('/elsewhere/x.py', 'python', 'a ``` b ```` c', sel(0, 0, 0, 14));
     v2.fire({ type: 'send', sid: x, text: 'fences' }); await flush();
     assert(/Active file: \/elsewhere\/x\.py \(python\)\nSelection: lines 1-1\n`````python\na ``` b ```` c\n`````\n/.test(cx.sent.pop()), 'a file outside the workspace keeps its path; the fence is longer than any inside the selection');
@@ -561,7 +561,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: x, text: 'hold it' });
     v2.fire({ type: 'send', sid: x, text: 'queued about one' });
     m.ui.editor = editor(path.join(process.cwd(), 'two.js'), 'javascript', 'TWO', sel(0, 0, 0, 3));
-    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'queued about one', queued: true, tag: 'IDE context · one.js:1' });
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'queued about one', queued: true, tag: 'one.js:1' });
     cx.finish(); await flush(); await flush();
     assert(/queued about one\n\n<ide_context>\nActive file: one\.js/.test(cx.sent.pop()) , 'the queued message carries the file that was open when it was written');
     assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user' && e.text === 'queued about one').length, 1);
@@ -574,7 +574,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: c, text: 'what is a?' }); await flush();
     const cl = created.filter((a) => a.claude).pop();
     assert(/^what is a\?\n\n<ide_context>\nActive file: src\/a\.js \(javascript\)\nSelection: lines 1-1\n/.test(cl.sent.pop()), 'Claude gets the file and the selection');
-    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'what is a?', queued: false, tag: 'IDE context · src/a.js:1' });
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'what is a?', queued: false, tag: 'a.js:1' });
     // new tabs follow the setting
     const on = install(undefined, { config: { ideContext: true } }); await flush();
     const von = fakeView(); on.registered['perch.main'].resolveWebviewView(von.view); von.fire({ type: 'ready' }); await flush();

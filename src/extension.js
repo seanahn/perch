@@ -138,13 +138,13 @@ function ideContext() {
   const file = r && !r.startsWith('..') && !path.isAbsolute(r) ? r : abs;
   const sel = ed.selection, lang = ed.document.languageId || '';
   const lines = ['', '', '<ide_context>', `Active file: ${file}` + (lang ? ` (${lang})` : '')];
-  let tag = file;
+  let tag = path.basename(file);     // the transcript's tag: the name, not the path; the agent gets the path
   if (sel && !sel.isEmpty) {
     let text = ed.document.getText(sel); const a = sel.start.line + 1, b = sel.end.line + (sel.end.character === 0 && sel.end.line > sel.start.line ? 0 : 1);
     const cut = text.length > IDE_MAX_CHARS; if (cut) text = text.slice(0, IDE_MAX_CHARS);
     const fence = '`'.repeat(Math.max(3, ...(text.match(/`+/g) || []).map((x) => x.length + 1)));   // longer than any run inside
     lines.push(`Selection: lines ${a}-${b}` + (cut ? ` (first ${IDE_MAX_CHARS} characters)` : ''), fence + lang, text.replace(/\n$/, ''), fence);
-    tag = `${file}:${a}` + (b > a ? `-${b}` : '');
+    tag = `${path.basename(file)}:${a}` + (b > a ? `-${b}` : '');
   } else if (sel) lines.push(`Cursor: line ${sel.active.line + 1}`);
   lines.push('</ide_context>');
   return { block: lines.join('\n'), tag };
@@ -353,7 +353,7 @@ class Session {
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
     const ctx = this.ide ? ideContext() : null;
-    const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? 'IDE context · ' + ctx.tag : undefined };
+    const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? ctx.tag : undefined };
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       this.queue.push({ text: full, shown, images: sent }); (this.shown = this.shown || []).push(text);
