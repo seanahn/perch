@@ -28,6 +28,33 @@ function probeInputs(exec, platform = process.platform) {
 }
 
 /**
+ * Bluetooth headsets the sound server knows, whether or not their microphone is exposed at the moment. On Linux a headset
+ * in its high-fidelity profile (A2DP) has no source at all; the microphone appears only in the headset profile (HSP/HFP),
+ * which the sound server does not switch to by itself for a recorder that opens a device by name. So they are found
+ * from the card list, and the recorder switches the profile around a recording.
+ * @returns {{card: string, name: string, active: string, headset: string, inHeadsetMode: boolean}[]}
+ */
+function bluetoothHeadsets(exec, platform = process.platform) {
+  if (platform !== 'linux') return [];
+  let cards;
+  try { cards = JSON.parse(exec('pactl', ['-f', 'json', 'list', 'cards'])); } catch (_) { return []; }
+  const out = [];
+  for (const c of Array.isArray(cards) ? cards : []) {
+    if (!c || typeof c.name !== 'string' || !/^bluez_card\./.test(c.name)) continue;
+    const profiles = c.profiles && typeof c.profiles === 'object' ? c.profiles : {};
+    const withMic = (p) => profiles[p] && profiles[p].available !== false && Number(profiles[p].sources) > 0;
+    // the headset profile with a microphone: mSBC (16 kHz, clearer) over the plain one over CVSD (8 kHz)
+    const headset = ['headset-head-unit-msbc', 'headset-head-unit', 'headset-head-unit-cvsd'].find(withMic) || Object.keys(profiles).find((p) => /^headset/.test(p) && withMic(p));
+    if (!headset) continue;
+    const props = c.properties && typeof c.properties === 'object' ? c.properties : {};
+    const name = String(props['device.description'] || props['device.alias'] || c.name);
+    const active = String(c.active_profile || '');
+    out.push({ card: c.name, name, active, headset, inHeadsetMode: /^headset/.test(active) });
+  }
+  return out;
+}
+
+/**
  * Which device to record from. The system "default" is not trusted: on Linux the first device is often a monitor
  * source, which records what the speakers play and hears nothing of the room.
  * @returns {{ index: number, name: string, why: 'chosen'|'first-input'|'system-default' }}
@@ -117,4 +144,4 @@ class Recorder {
   async cancel() { await this._close(); this.chunks = []; this.samples = 0; }
 }
 
-module.exports = { Recorder, pickDevice, probeInputs, isMonitor, FRAME };
+module.exports = { Recorder, pickDevice, probeInputs, bluetoothHeadsets, isMonitor, FRAME };

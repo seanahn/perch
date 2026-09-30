@@ -65,7 +65,7 @@ class FakeEngine {
 
   // ---- warm, record, transcribe: the text comes back, the audio does not
   assert.deepStrictEqual([run('warm', { model: 'small' }), box.starts], [{ ok: true }, 1]);
-  const s = run('start'); assert.strictEqual(s.ok, true);
+  const s = await run('start'); assert.strictEqual(s.ok, true);
   await new Promise((r) => setTimeout(r, 120));
   const t = await run('transcribe', s.id, { engine: { model: 'small' }, language: 'ko', prompt: 'Perch' });
   assert.deepStrictEqual([t.ok, t.text, t.language, t.silent, 'pcm' in t, t.seconds > 0], [true, 'hello from the laptop', 'ko', false, false, true]);
@@ -76,7 +76,7 @@ class FakeEngine {
   // ---- the diagnostic: with a directory named, each recording is saved as a WAV there, and what was heard is logged
   const fs = require('fs'), os = require('os');
   const dir = fs.mkdtempSync(Path.join(os.tmpdir(), 'perch-rec-')); cfgBox.saveRecordings = dir;
-  const s2 = run('start'); await new Promise((r) => setTimeout(r, 60)); const t2 = await run('transcribe', s2.id, { engine: { model: 'small' } });
+  const s2 = await run('start'); await new Promise((r) => setTimeout(r, 60)); const t2 = await run('transcribe', s2.id, { engine: { model: 'small' } });
   const files = fs.readdirSync(dir).sort();
   assert.deepStrictEqual([files.length, /^perch-\d{4}-\d{2}-\d{2}T.*-USB_Microphone\.wav$/.test(files[0]), files[1]], [2, true, 'transcripts.log'], 'named by time and device');
   const wav = fs.readFileSync(Path.join(dir, files[0]));
@@ -84,7 +84,7 @@ class FakeEngine {
   assert(wav.readUInt32LE(40) >= 2 * FRAME * 2, 'more than a frame of audio');
   assert(new RegExp(' USB Microphone ' + t2.seconds + 's -> "hello from the laptop"\n$').test(fs.readFileSync(Path.join(dir, 'transcripts.log'), 'utf8')));
   delete cfgBox.saveRecordings; fs.rmSync(dir, { recursive: true, force: true });
-  const s3 = run('start'); await new Promise((r) => setTimeout(r, 20)); await run('transcribe', s3.id, { engine: { model: 'small' } });
+  const s3 = await run('start'); await new Promise((r) => setTimeout(r, 20)); await run('transcribe', s3.id, { engine: { model: 'small' } });
   assert.strictEqual(fs.existsSync(dir), false, 'nothing is written once it is off');
 
   // ---- no GPU, no engine

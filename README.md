@@ -347,6 +347,14 @@ when the workspace is a CPU-only container far away.
 If no microphone is connected, the button says so. `Perch Audio: Choose
 Microphone` picks among several.
 
+Bluetooth ear buds and headsets work too. In their music profile (A2DP)
+they have no microphone at all, so Perch Audio lists them from the sound
+server's card list, switches them to the headset profile for the
+recording (mSBC, 16 kHz, when the device offers it) and back to music
+when it ends. Music through them pauses for the length of the dictation.
+A plugged-in microphone is preferred when there is one; pick the headset
+by name to dictate into it regardless.
+
 The model follows the machine: `large-v3-turbo` on an NVIDIA GPU, `small`
 on a CPU (`perch.voice.model` names one instead). On a CPU the turbo
 model's encoder alone takes seconds; `small` returns a sentence in about

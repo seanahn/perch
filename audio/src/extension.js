@@ -10,7 +10,7 @@ const vscode = require('vscode');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { Recorder, pickDevice, probeInputs, isMonitor } = require('./recorder');
+const { Recorder, pickDevice, probeInputs, bluetoothHeadsets, isMonitor } = require('./recorder');
 
 const API = 2;                       // 2: can transcribe here (engine, setup, warm, transcribe, unload)
 let lib = null, libError = null, active = null;
@@ -89,6 +89,9 @@ function available() {
   let devices;
   try { devices = L.getAvailableDevices(); } catch (e) { return Object.assign(fail('Could not list microphones: ' + e.message, 'no-devices'), { api: API }); }
   const states = probeInputs(exec);
+  // a Bluetooth headset whose microphone is not exposed yet (high-fidelity profile) is offered under the name it has once it is
+  const headsets = bluetoothHeadsets(exec);
+  for (const h of headsets) if (!devices.includes(h.name)) { devices = devices.concat(h.name); states[h.name] = 'headset'; }
   const inputs = devices.filter((d) => !isMonitor(d));
   if (!inputs.length) return Object.assign(fail('No microphone was found on this computer.', 'no-microphone'), { api: API, devices, states });
   const wanted = cfg('device'), chosen = wanted && devices.find((d) => d.trim().toLowerCase() === String(wanted).trim().toLowerCase());
@@ -97,17 +100,29 @@ function available() {
     return Object.assign(fail('No microphone is connected to this computer: nothing is plugged into ' + (inputs.length === 1 ? 'its audio input' : 'any of its audio inputs') + '. Plug in a microphone or a headset, or dictate from a computer that has one, connected to this workspace over Remote-SSH with Perch Audio installed there.', 'no-microphone'), { api: API, devices, states });
   }
   const pick = pickDevice(devices, wanted, states);
-  return { ok: true, api: API, devices, states, device: pick.name, busy: !!active };
+  return { ok: true, api: API, devices, states, device: pick.name, busy: !!active, headsets };
 }
 
-function start() {
+/** Put a headset back in the profile it had before the recording; the sound server may have done so already. */
+function restoreProfile(restore) { if (!restore) return; try { exec('pactl', ['set-card-profile', restore.card, restore.profile]); } catch (_) { /* nothing to do about it */ } }
+
+async function start() {
   const a = available();
   if (!a.ok) return a;
   if (active) return fail('A recording is already in progress.', 'busy');
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const rec = new Recorder({ PvRecorder: library(), device: cfg('device'), maxSeconds: cfg('maxSeconds'), states: a.states });
-  try { const s = rec.start(); active = { id, rec }; return Object.assign({ ok: true, id, maxSeconds: rec.maxSeconds }, s); }
-  catch (e) { return fail('Could not open the microphone: ' + ((e && e.message) || e) + '. Your system may be asking for microphone permission, or another program may be holding the device.', 'capture-failed'); }
+  // a Bluetooth headset records in its headset profile: switch to it, wait for the microphone to appear, switch back after
+  const h = (a.headsets || []).find((x) => x.name === a.device);
+  let restore = null;
+  if (h && !h.inHeadsetMode) {
+    try { exec('pactl', ['set-card-profile', h.card, h.headset]); } catch (e) { return fail(`Could not switch ${h.name} to headset mode: ${(e && e.message) || e}`, 'capture-failed'); }
+    restore = { card: h.card, profile: h.active };
+    const L = library(), t0 = Date.now();
+    for (;;) { let list = []; try { list = L.getAvailableDevices(); } catch (_) { /* asked again below */ } if (list.includes(h.name) || Date.now() - t0 > 4000) break; await new Promise((r) => setTimeout(r, 100)); }
+  }
+  const rec = new Recorder({ PvRecorder: library(), device: h ? h.name : cfg('device'), maxSeconds: cfg('maxSeconds'), states: a.states });
+  try { const s = rec.start(); active = { id, rec, restore }; return Object.assign({ ok: true, id, maxSeconds: rec.maxSeconds }, s); }
+  catch (e) { restoreProfile(restore); return fail('Could not open the microphone: ' + ((e && e.message) || e) + '. Your system may be asking for microphone permission, or another program may be holding the device.', 'capture-failed'); }
 }
 
 const mine = (id) => (active && active.id === id ? active : null);
@@ -116,6 +131,7 @@ async function stop(id) {
   const a = mine(id); if (!a) return fail('No such recording.', 'unknown');
   active = null;
   const r = await a.rec.stop();
+  restoreProfile(a.restore);
   saveRecording(r);
   return { ok: true, pcm: r.pcm.toString('base64'), sampleRate: r.sampleRate, seconds: r.seconds, silent: r.peak === 0, device: r.device, ended: r.ended, error: r.error };
 }
@@ -133,16 +149,17 @@ function saveRecording(r) {
     return file;
   } catch (_) { return null; }
 }
-async function cancel(id) { const a = id === undefined ? active : mine(id); if (!a) return { ok: true }; active = null; await a.rec.cancel(); return { ok: true }; }
+async function cancel(id) { const a = id === undefined ? active : mine(id); if (!a) return { ok: true }; active = null; await a.rec.cancel(); restoreProfile(a.restore); return { ok: true }; }
 
 async function chooseDevice() {
   const a = available();
   if (!a.devices) { vscode.window.showErrorMessage('Perch Audio: ' + a.error); return; }
   const now = cfg('device') || '';
   const st = a.states || {};
+  const same = (d) => d.trim().toLowerCase() === String(now).trim().toLowerCase();   // as the setting is matched when recording
   const items = [{ label: 'First microphone found', description: now ? '' : 'current', value: '' },
-    ...a.devices.filter((d) => !isMonitor(d)).map((d) => ({ label: d, description: [st[d] === 'unplugged' ? 'nothing plugged in' : st[d] === 'available' ? 'connected' : '', d === now ? 'current' : ''].filter(Boolean).join(' · '), value: d })),
-    ...a.devices.filter(isMonitor).map((d) => ({ label: d, description: 'records what the speakers play, not the room' + (d === now ? ' · current' : ''), value: d }))];
+    ...a.devices.filter((d) => !isMonitor(d)).map((d) => ({ label: d, description: [st[d] === 'unplugged' ? 'nothing plugged in' : st[d] === 'available' ? 'connected' : st[d] === 'headset' ? 'Bluetooth headset, in headset mode while recording' : '', same(d) ? 'current' : ''].filter(Boolean).join(' · '), value: d })),
+    ...a.devices.filter(isMonitor).map((d) => ({ label: d, description: 'records what the speakers play, not the room' + (same(d) ? ' · current' : ''), value: d }))];
   const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Microphone for Perch dictation' });
   if (pick) await vscode.workspace.getConfiguration('perchAudio').update('device', pick.value, vscode.ConfigurationTarget.Global);
 }
@@ -160,9 +177,9 @@ function activate(context) {
     vscode.commands.registerCommand('_perch.audio.transcribe', (id, o) => transcribe(id, o)),
     vscode.commands.registerCommand('_perch.audio.unload', () => unload()),
     vscode.commands.registerCommand('perchAudio.listDevices', () => chooseDevice()),
-    { dispose: () => { if (active) { const a = active; active = null; a.rec.cancel(); } unload(); } },
+    { dispose: () => { if (active) { const a = active; active = null; a.rec.cancel().then(() => restoreProfile(a.restore), () => restoreProfile(a.restore)); } unload(); } },
   );
 }
-function deactivate() { unload(); if (active) { const a = active; active = null; return a.rec.cancel(); } }
+function deactivate() { unload(); if (active) { const a = active; active = null; return a.rec.cancel().then(() => restoreProfile(a.restore), () => restoreProfile(a.restore)); } }
 
 module.exports = { activate, deactivate, _reset: (o) => { lib = null; libError = null; active = null; engine = null; engineKey = ''; gpu = null; Engine = null; engineError = null; if (o && o.exec) exec = o.exec; if (o && o.engine) Engine = o.engine; } };

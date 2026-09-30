@@ -13,6 +13,8 @@ engine Perch has, set up once into `~/.local/share/perch/voice` here.
 It is installed with Perch. On its own it does nothing.
 
 - `Perch Audio: Choose Microphone…` picks the microphone to record from.
+  Bluetooth headsets are listed even while in their music profile; one is
+  switched to headset mode for a recording and back after.
 - `perchAudio.device` names it; empty uses the system default.
 - `perchAudio.maxSeconds` is how long a recording may run, 180 by default.
 - `perchAudio.saveRecordings`, a diagnostic: a directory on this computer

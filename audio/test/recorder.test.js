@@ -2,7 +2,7 @@
 // The recorder and the extension's commands, with a recorder library that plays back prepared frames. No microphone.
 const assert = require('assert');
 const Module = require('module');
-const { Recorder, pickDevice, probeInputs, isMonitor, FRAME } = require('../src/recorder');
+const { Recorder, pickDevice, probeInputs, bluetoothHeadsets, isMonitor, FRAME } = require('../src/recorder');
 
 // ---- choosing a device
 const LINUX = ['Monitor of Built-in Audio Digital Stereo (IEC958)', 'Built-in Audio Analog Stereo', 'Monitor of GA102 High Definition Audio Controller Digital Stereo (HDMI)', 'USB Microphone'];
@@ -29,6 +29,21 @@ assert.strictEqual(probeInputs(run(JSON.stringify(plugged)), 'linux')['Built-in 
 const usb = JSON.stringify([{ description: 'USB Microphone', ports: [port('analog-input-mic', 'availability unknown')] }, { description: 'Headset', ports: [] }, { description: 'Odd' }, { ports: [] }, null]);
 assert.deepStrictEqual(probeInputs(run(usb), 'linux'), { 'USB Microphone': 'unknown', Headset: 'unknown', Odd: 'unknown' }, 'a device with no jack to sense is not called unplugged');
 assert.deepStrictEqual([probeInputs(run(new Error('pactl: not found')), 'linux'), probeInputs(run('not json'), 'linux'), probeInputs(run('{}'), 'linux'), probeInputs(() => { throw new Error('must not run'); }, 'darwin')], [{}, {}, {}, {}], 'no sound server to ask, or another system: nothing is known, and nothing is ruled out');
+
+// ---- Bluetooth headsets: found from the card list, whichever profile they are in. This is a desktop with Galaxy Buds
+// in their high-fidelity profile, so the sound server lists no microphone for them.
+const BUDS = { name: 'bluez_card.6C_DD_BC_07_03_10', active_profile: 'a2dp-sink', properties: { 'device.description': 'Galaxy Buds Live (0310)', 'device.alias': 'Galaxy Buds Live (0310)' },
+  profiles: { off: { sources: 0, available: true }, 'headset-head-unit': { sources: 1, available: true }, 'a2dp-sink': { sources: 0, available: true }, 'headset-head-unit-cvsd': { sources: 1, available: true }, 'headset-head-unit-msbc': { sources: 1, available: true } } };
+const SPEAKER = { name: 'bluez_card.AA_BB', active_profile: 'a2dp-sink', properties: { 'device.description': 'Kitchen Speaker' }, profiles: { off: { sources: 0, available: true }, 'a2dp-sink': { sources: 0, available: true } } };
+const ONBOARD = { name: 'alsa_card.pci-0000_00_1f.3', active_profile: 'output:iec958-stereo+input:analog-stereo', properties: { 'device.description': 'Built-in Audio' }, profiles: { 'input:analog-stereo': { sources: 1, available: true } } };
+const CARDS = JSON.stringify([ONBOARD, BUDS, SPEAKER]);
+const runCards = (out) => (cmd, args) => { assert.deepStrictEqual([cmd, args], ['pactl', ['-f', 'json', 'list', 'cards']]); if (out instanceof Error) throw out; return out; };
+assert.deepStrictEqual(bluetoothHeadsets(runCards(CARDS), 'linux'), [{ card: 'bluez_card.6C_DD_BC_07_03_10', name: 'Galaxy Buds Live (0310)', active: 'a2dp-sink', headset: 'headset-head-unit-msbc', inHeadsetMode: false }], 'the buds, with the 16 kHz headset profile chosen; a speaker has no microphone and is left out');
+const inHfp = JSON.parse(CARDS); inHfp[1].active_profile = 'headset-head-unit';
+assert.deepStrictEqual(bluetoothHeadsets(runCards(JSON.stringify(inHfp)), 'linux')[0].inHeadsetMode, true);
+const noMsbc = JSON.parse(CARDS); delete noMsbc[1].profiles['headset-head-unit-msbc']; noMsbc[1].profiles['headset-head-unit'].available = false;
+assert.deepStrictEqual(bluetoothHeadsets(runCards(JSON.stringify(noMsbc)), 'linux')[0].headset, 'headset-head-unit-cvsd', 'the next headset profile that is available');
+assert.deepStrictEqual([bluetoothHeadsets(runCards(new Error('pactl: not found')), 'linux'), bluetoothHeadsets(runCards('nope'), 'linux'), bluetoothHeadsets(() => { throw new Error('must not run'); }, 'darwin')], [[], [], []]);
 
 assert.deepStrictEqual(pickDevice(LINUX, '', EMPTY), { index: 3, name: 'USB Microphone', why: 'first-input' }, 'an empty jack is passed over for a device that may be real');
 assert.deepStrictEqual(pickDevice(LINUX, '', { 'Built-in Audio Analog Stereo': 'unknown', 'USB Microphone': 'available' }).name, 'USB Microphone', 'an input known to be connected is preferred to one that is only listed');
@@ -112,8 +127,8 @@ const until = async (f, ms = 2000) => { const t0 = Date.now(); while (!f()) { if
 
   // ---- the commands Perch calls
   const origLoad = Module._load;
-  function load({ library, config = {}, sources }) {
-    const commands = {}; const ui = { errors: [], picks: [], updates: [] };
+  function load({ library, config = {}, sources, cards, onProfile }) {
+    const commands = {}; const ui = { errors: [], picks: [], updates: [], profiles: [] };
     const vscode = {
       workspace: { getConfiguration: () => ({ get: (k) => config[k], update: async (k, v, t) => { ui.updates.push([k, v, t]); config[k] = v; } }) },
       window: { showErrorMessage: (m) => ui.errors.push(m), showQuickPick: async (items) => { ui.items = items; return ui.picks.length ? items.find(ui.picks.shift()) : undefined; } },
@@ -126,17 +141,20 @@ const until = async (f, ms = 2000) => { const t0 = Date.now(); while (!f()) { if
       return origLoad.call(this, req, parent, isMain);
     };
     delete require.cache[require.resolve('../src/extension.js')];
-    const ext = require('../src/extension.js'); ext._reset({ exec: () => { if (sources === undefined) throw new Error('no sound server'); return sources; } });
+    const ext = require('../src/extension.js'); ext._reset({ exec: (cmd, args) => {
+      if (args[0] === 'set-card-profile') { ui.profiles.push(args.slice(1)); if (onProfile) onProfile(args[1], args[2]); return ''; }
+      if (args.includes('cards')) { if (cards === undefined) throw new Error('no sound server'); return cards; }
+      if (sources === undefined) throw new Error('no sound server'); return sources; } });
     const subs = []; ext.activate({ subscriptions: subs });
     return { commands, ui, ext, subs };
   }
   {
     const { Fake, log } = fakeLibrary({ frames: [1200, -1200] });
     const x = load({ library: Fake, config: { device: '', maxSeconds: 30 } });
-    assert.deepStrictEqual(x.commands['_perch.audio.available'](), { ok: true, api: 2, devices: LINUX, states: {}, device: 'Built-in Audio Analog Stereo', busy: false });
-    const s = x.commands['_perch.audio.start']();
+    assert.deepStrictEqual(x.commands['_perch.audio.available'](), { ok: true, api: 2, devices: LINUX, states: {}, device: 'Built-in Audio Analog Stereo', busy: false, headsets: [] });
+    const s = await x.commands['_perch.audio.start']();
     assert.deepStrictEqual([s.ok, s.device, s.sampleRate, s.maxSeconds, s.picked, typeof s.id], [true, 'Built-in Audio Analog Stereo', 16000, 30, 'first-input', 'string']);
-    assert.deepStrictEqual([x.commands['_perch.audio.start']().code, x.commands['_perch.audio.available']().busy], ['busy', true], 'one recording at a time');
+    assert.deepStrictEqual([(await x.commands['_perch.audio.start']()).code, x.commands['_perch.audio.available']().busy], ['busy', true], 'one recording at a time');
     await until(() => x.commands['_perch.audio.level'](s.id).seconds > 0.1);
     assert.deepStrictEqual([x.commands['_perch.audio.level']('other').code, (await x.commands['_perch.audio.stop']('other')).code], ['unknown', 'unknown'], 'a recording is only answered to whoever started it');
     const out = await x.commands['_perch.audio.stop'](s.id);
@@ -145,11 +163,35 @@ const until = async (f, ms = 2000) => { const t0 = Date.now(); while (!f()) { if
     assert.deepStrictEqual([pcm.readInt16LE(0), pcm.readInt16LE(FRAME * 2)], [1200, -1200], 'the audio crosses as base64 and comes back exact');
     assert.strictEqual(JSON.stringify(out).length < pcm.length * 1.4 + 300, true, 'and as plain JSON, which is all a command can carry between machines');
     assert.strictEqual((await x.commands['_perch.audio.stop'](s.id)).code, 'unknown', 'a recording can be collected once');
-    const s2 = x.commands['_perch.audio.start'](); assert.strictEqual(s2.ok, true, 'and then another can start');
+    const s2 = await x.commands['_perch.audio.start'](); assert.strictEqual(s2.ok, true, 'and then another can start');
     assert.deepStrictEqual(await x.commands['_perch.audio.cancel'](s2.id), { ok: true }); assert.deepStrictEqual(await x.commands['_perch.audio.cancel']('whatever'), { ok: true });
-    const s3 = x.commands['_perch.audio.start'](); const opens = log.filter((e) => e[0] === 'release').length;
+    const s3 = await x.commands['_perch.audio.start'](); const opens = log.filter((e) => e[0] === 'release').length;
     for (const d of x.subs) d.dispose(); await new Promise((r) => setTimeout(r, 20));
     assert.strictEqual(log.filter((e) => e[0] === 'release').length, opens + 1, 'closing the window lets go of the microphone'); assert(s3.ok);
+
+    // a Bluetooth headset with no microphone exposed: offered by name, switched to headset mode for the recording, and back after
+    {
+      const devs = ['Monitor of Built-in Audio Digital Stereo (IEC958)', 'Built-in Audio Analog Stereo', 'Monitor of Galaxy Buds Live (0310)'];   // no Snowball, an empty jack, the buds playing music
+      const { Fake: BudsLib, log: blog } = fakeLibrary({ devices: devs, frames: [500] });
+      const y = load({ library: BudsLib, config: { device: '', maxSeconds: 30 }, sources: DESKTOP, cards: CARDS, onProfile: (card, profile) => { if (/^headset/.test(profile) && !devs.includes('Galaxy Buds Live (0310)')) devs.push('Galaxy Buds Live (0310)'); } });
+      const av = y.commands['_perch.audio.available']();
+      assert.deepStrictEqual([av.ok, av.device, av.states['Galaxy Buds Live (0310)'], av.devices.includes('Galaxy Buds Live (0310)'), av.headsets.length], [true, 'Galaxy Buds Live (0310)', 'headset', true, 1], 'the buds are the microphone, though the sound server lists none for them yet');
+      const st = await y.commands['_perch.audio.start']();
+      assert.deepStrictEqual([st.ok, st.device, y.ui.profiles], [true, 'Galaxy Buds Live (0310)', [['bluez_card.6C_DD_BC_07_03_10', 'headset-head-unit-msbc']]], 'switched to the headset profile first, and recording from the microphone that appeared');
+      assert.deepStrictEqual(blog.filter((e) => e[0] === 'open').pop()[2], 3, 'opened by the index it has once listed');
+      await until(() => y.commands['_perch.audio.level'](st.id).seconds > 0.1);
+      const got = await y.commands['_perch.audio.stop'](st.id);
+      assert.deepStrictEqual([got.ok, got.device, y.ui.profiles.pop()], [true, 'Galaxy Buds Live (0310)', ['bluez_card.6C_DD_BC_07_03_10', 'a2dp-sink']], 'and put back to music once the recording is collected');
+      const st2 = await y.commands['_perch.audio.start'](); await y.commands['_perch.audio.cancel'](st2.id);
+      assert.deepStrictEqual(y.ui.profiles.slice(-2), [['bluez_card.6C_DD_BC_07_03_10', 'headset-head-unit-msbc'], ['bluez_card.6C_DD_BC_07_03_10', 'a2dp-sink']], 'a cancelled recording puts it back too');
+      // a plugged-in microphone is still preferred to a headset that would have to switch; the headset can be chosen by name
+      devs.length = 0; devs.push(...LINUX); const yy = load({ library: BudsLib, config: { device: '', maxSeconds: 30 }, sources: JSON.stringify(plugged), cards: CARDS });
+      assert.strictEqual(yy.commands['_perch.audio.available']().device, 'Built-in Audio Analog Stereo');
+      const yz = load({ library: BudsLib, config: { device: 'galaxy buds live (0310)', maxSeconds: 30 }, sources: JSON.stringify(plugged), cards: CARDS });
+      assert.strictEqual(yz.commands['_perch.audio.available']().device, 'Galaxy Buds Live (0310)');
+      yz.ui.picks.push((i) => i.value === 'Galaxy Buds Live (0310)'); await yz.commands['perchAudio.listDevices']();
+      assert.deepStrictEqual(yz.ui.items.find((i) => i.value === 'Galaxy Buds Live (0310)').description, 'Bluetooth headset, in headset mode while recording · current');
+    }
 
     // choosing a microphone: real inputs first, monitors last and labelled
     x.ui.picks.push((i) => i.value === 'USB Microphone'); await x.commands['perchAudio.listDevices']();
@@ -166,30 +208,30 @@ const until = async (f, ms = 2000) => { const t0 = Date.now(); while (!f()) { if
     const av = desk.commands['_perch.audio.available']();
     assert.deepStrictEqual([av.ok, av.code, av.states['Built-in Audio Analog Stereo']], [false, 'no-microphone', 'unplugged']);
     assert(/^No microphone is connected to this computer: nothing is plugged into its audio input\. Plug in a microphone or a headset, or dictate from a computer that has one, connected to this workspace over Remote-SSH/.test(av.error), av.error);
-    assert.strictEqual(desk.commands['_perch.audio.start']().code, 'no-microphone', 'so nothing is recorded');
+    assert.strictEqual((await desk.commands['_perch.audio.start']()).code, 'no-microphone', 'so nothing is recorded');
     desk.ui.picks.push((i) => i.value === ''); await desk.commands['perchAudio.listDevices']();
     assert.strictEqual(desk.ui.items[1].description, 'nothing plugged in', 'the chooser says why');
     // a headset is plugged in
     const lib2 = fakeLibrary({ devices: LINUX.slice(0, 3), frames: [400] });
     const live = load({ library: lib2.Fake, sources: JSON.stringify(plugged), config: {} });
     assert.deepStrictEqual([live.commands['_perch.audio.available']().ok, live.commands['_perch.audio.available']().device], [true, 'Built-in Audio Analog Stereo']);
-    const ls = live.commands['_perch.audio.start'](); assert(ls.ok); await live.commands['_perch.audio.cancel'](ls.id);
+    const ls = await live.commands['_perch.audio.start'](); assert(ls.ok); await live.commands['_perch.audio.cancel'](ls.id);
     live.ui.picks.push(() => false); await live.commands['perchAudio.listDevices'](); assert.strictEqual(live.ui.items[1].description, 'connected');
     // a USB microphone beside the empty jacks
     const mix = load({ library: fakeLibrary({ devices: LINUX, frames: [400] }).Fake, sources: DESKTOP, config: {} });
     assert.deepStrictEqual([mix.commands['_perch.audio.available']().ok, mix.commands['_perch.audio.available']().device], [true, 'USB Microphone'], 'the empty jack is passed over');
-    const ms = mix.commands['_perch.audio.start'](); assert.strictEqual(ms.device, 'USB Microphone'); await mix.commands['_perch.audio.cancel'](ms.id);
+    const ms = await mix.commands['_perch.audio.start'](); assert.strictEqual(ms.device, 'USB Microphone'); await mix.commands['_perch.audio.cancel'](ms.id);
     // the user insists on the jack: it is their call
     const forced = load({ library: fakeLibrary({ devices: LINUX.slice(0, 3), frames: [400] }).Fake, sources: DESKTOP, config: { device: 'Built-in Audio Analog Stereo' } });
-    assert.strictEqual(forced.commands['_perch.audio.available']().ok, true); const fs2 = forced.commands['_perch.audio.start'](); assert.strictEqual(fs2.picked, 'chosen'); await forced.commands['_perch.audio.cancel'](fs2.id);
+    assert.strictEqual(forced.commands['_perch.audio.available']().ok, true); const fs2 = await forced.commands['_perch.audio.start'](); assert.strictEqual(fs2.picked, 'chosen'); await forced.commands['_perch.audio.cancel'](fs2.id);
 
     const broken = load({ library: new Error('pv_recorder.node: invalid ELF header') });
-    assert.deepStrictEqual([broken.commands['_perch.audio.available']().code, broken.commands['_perch.audio.start']().code], ['no-library', 'no-library']);
+    assert.deepStrictEqual([broken.commands['_perch.audio.available']().code, (await broken.commands['_perch.audio.start']()).code], ['no-library', 'no-library']);
     assert(/could not be loaded on this machine: pv_recorder.node: invalid ELF header/.test(broken.commands['_perch.audio.available']().error));
     const none = load({ library: fakeLibrary({ devices: [LINUX[0], LINUX[2]] }).Fake });
-    assert.deepStrictEqual([none.commands['_perch.audio.available']().code, none.commands['_perch.audio.start']().code], ['no-microphone', 'no-microphone'], 'only monitors: there is no microphone');
+    assert.deepStrictEqual([none.commands['_perch.audio.available']().code, (await none.commands['_perch.audio.start']()).code], ['no-microphone', 'no-microphone'], 'only monitors: there is no microphone');
     const denied = load({ library: fakeLibrary({ failOpen: 'Failed to open device' }).Fake, config: {} });
-    const d = denied.commands['_perch.audio.start'](); assert.strictEqual(d.code, 'capture-failed'); assert(/Could not open the microphone: Failed to open device\. Your system may be asking for microphone permission/.test(d.error));
+    const d = await denied.commands['_perch.audio.start'](); assert.strictEqual(d.code, 'capture-failed'); assert(/Could not open the microphone: Failed to open device\. Your system may be asking for microphone permission/.test(d.error));
     assert.strictEqual(denied.commands['_perch.audio.available']().busy, false, 'a failed start leaves nothing held');
   }
   Module._load = origLoad;

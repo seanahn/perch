@@ -815,6 +815,18 @@ USB and Bluetooth inputs have no jack to sense and report unknown, so
 they are never ruled out. A device the user has chosen by name is used
 whatever the system reports.
 
+**Bluetooth headsets.** In the A2DP profile a headset has no source at
+all, and PipeWire's own switch to the headset profile happens only for a
+stream on the default source, not for a recorder that opens a device by
+name. So perch-audio reads `pactl -f json list cards`, offers each
+`bluez_card` that has a headset profile with a source under its
+description (which is also the source's name once it exists), and
+around a recording from it runs `set-card-profile` to the headset
+profile (mSBC first, 16 kHz) and back to the previous one. It waits up
+to four seconds for the microphone to be listed. Verified with Galaxy
+Buds Live on 2026-09-30: the profile switch takes about a second and the
+source appears as "Galaxy Buds Live (0310)".
+
 ### The engine
 
 Everything lives under `~/.local/share/perch/voice`, never in the system
@@ -1044,6 +1056,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | A backend switch resumes open Claude tabs on the new backend | Tabs keep their backend until closed | The user switches sub and API mid-conversation and wants the same tab; a process cannot change its auth, but the session is a file, and resuming it is what a reload does anyway |
 | Codex login looked for before the first message; the browser sign-in run by perch, its port forwarded when remote; device code as the other way | Let the turn fail; the ChatGPT panel's sign-in; device code only | Without a login the SDK reconnects five times on 401 and shows nothing useful. `codex login` returns to `localhost:1455`, which `asExternalUri` carries from the user's machine to the remote, so any user with a browser can sign in. Device code needs a ChatGPT setting that some accounts cannot turn on (seen 2026-09-30). Both land in the same `auth.json` the ChatGPT extension uses |
 | Voice setup brings pip in itself when `venv` cannot | Tell the user to install `python3-venv` | Containers often have no `sudo`; pip's installer is one fetch from `bootstrap.pypa.io` |
+| Bluetooth headsets switched to their headset profile around a recording | Tell the user to switch profiles; record from the default source and let PipeWire switch | The default source is often a monitor; and the user dictates into ear buds |
 | Voice model `auto`, chosen by device | `large-v3-turbo` always, with a setting | A remote workspace is usually CPU-only; "hello" took 10 s there, and nobody reads a setting's description to learn why |
 | Ask the CLI for its idle/running word (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) | Count results against messages sent | A message sent mid-turn can be folded into that turn and answered by its one result, which left the tab working for good; the count cannot tell, the CLI can |
 | Transcribe in perch-audio when the user's machine has the GPU | Always with the workspace; Whisper in the webview | The user's desktop has an RTX 3090 and the remote is a CPU-only container. Same engine, copied at build; the webview route would be a second engine, and slower |
