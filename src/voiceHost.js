@@ -9,7 +9,7 @@ const { VoiceEngine } = require('./voice');
 
 const TICK_MS = 120;
 const AUDIO_API = 1;
-const NO_COMPANION = 'Perch Audio is not installed on this computer. It records from your microphone, so it has to be installed where you are sitting, even when the workspace is remote. From a checkout of perch: make install-audio, then reload the window. On another computer: make package-audio, and install the .vsix it produces.';
+const NO_COMPANION = 'Perch Audio is not installed on this computer. It records from your microphone, so it has to be installed where you are sitting, even when the workspace is remote. It comes with Perch from the marketplace; if it was removed, install Perch Audio (seanahn.perch-audio) from the Extensions view on this computer. From a checkout of perch: make install-audio, then reload the window.';
 
 class VoiceHost {
   /**

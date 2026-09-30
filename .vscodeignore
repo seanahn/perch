@@ -1,6 +1,20 @@
 .git/**
+.gitignore
+.env
 test/**
 *.vsix
 Makefile
+design.md
+package-lock.json
 audio/**
 voice/__pycache__/**
+# The agents' programs are not packaged: hundreds of megabytes, and one platform's only. Perch runs the ones inside
+# the vendors' own extensions (src/binaries.js).
+node_modules/@anthropic-ai/claude-agent-sdk-*/**
+node_modules/@openai/codex-linux-*/**
+node_modules/@openai/codex-darwin-*/**
+node_modules/@openai/codex-win32-*/**
+node_modules/**/*.map
+node_modules/**/*.md
+node_modules/**/test/**
+node_modules/**/.github/**

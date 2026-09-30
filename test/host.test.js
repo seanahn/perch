@@ -24,7 +24,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   assert(/\.k\.glyph\.claude \{[^}]*background-color: #D97757;/.test(html), 'claude glyph in its orange, not inverted on a tile');
   assert(/\.k\.glyph\.codex \{[^}]*blossom-white\.svg[^}]*background-color: currentColor;/.test(html), 'chatgpt glyph follows the theme text colour');
   assert(html.includes('<span class="k glyph claude"></span>') && !/<img/.test(html), 'glyphs replace the marketplace images');
-  assert(/img-src x;/.test(html), 'CSP allows images from the webview origin only');
+  assert(/img-src x data:;/.test(html), 'CSP allows images from the webview origin, and those the user pastes, which the page holds as data');
   assert.deepStrictEqual(v1.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code', '/ext/openai.chatgpt']);
   let t = v1.lastTabs();
   assert.deepStrictEqual(t.tabs, [], 'starts with no tabs');
@@ -105,8 +105,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   assert.strictEqual(v1.lastTabs().tabs[0].effort, 'max', 'a codex-only level is rejected on a claude tab');
   assert(!v1.events(c1).some((e) => e.kind === 'status' && /effort|mode/.test(e.text)), 'a successful change is silent: the selector already shows it');
   v1.fire({ type: 'setEffort', sid: x1, value: 'low' });
-  assert.deepStrictEqual(created[3].efforts, [], 'a started codex thread is not changed');
-  assert(v1.events(x1).some((e) => e.kind === 'note' && /effort low applies to a new Codex tab/.test(e.text)), 'and says so');
+  assert.deepStrictEqual(created[3].efforts, ['low'], 'a started codex thread changes too, from its next turn');
+  assert(!v1.events(x1).some((e) => e.kind === 'note' && /applies to a new Codex tab/.test(e.text)), 'and nothing need be said');
 
   // model on claude: live, and the effort list follows the model
   v1.fire({ type: 'setModel', sid: c1, value: 'claude-opus-4-6' });
@@ -139,8 +139,9 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   assert.strictEqual(created[created.length - 1].o.model, 'gpt-5.5', 'model chosen before start is used');
   assert.strictEqual(created[created.length - 1].o.reasoningEffort, 'xhigh', 'effort chosen before start is used');
   v1.fire({ type: 'setModel', sid: x3, value: 'gpt-6-sol' });
-  assert.deepStrictEqual(created[created.length - 1].models, [], 'a started codex thread keeps its model');
-  assert(v1.events(x3).some((e) => e.kind === 'note' && /model gpt-6-sol applies to a new Codex tab/.test(e.text)), 'and says so');
+  assert.deepStrictEqual(created[created.length - 1].models, ['gpt-6-sol'], 'a started codex thread takes a new model');
+  v1.fire({ type: 'setMode', sid: x3, value: 'read-only' }); v1.fire({ type: 'setMode', sid: x3, value: 'default' });
+  assert.deepStrictEqual(created[created.length - 1].modes, ['read-only'], 'and a new sandbox; a Claude mode is not one');
   assert.strictEqual(v1.lastTabs().tabs.find((x) => x.id === x3).started, true, 'the page is told the thread has started');
   v1.fire({ type: 'close', sid: x3 });
 
@@ -263,14 +264,12 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   {
     const m = install();                                                      // subscription, logged in, AI Meter not installed
     await flush();
-    assert.deepStrictEqual(m.ui.bars.map((x) => [x.id, x.shown]), [['perch.meter.usage', true], ['perch.meter.backend', true]], 'perch owns the status bar when the standalone extension is absent');
-    assert(/^\$\(dashboard\) 1\.0h 91% 6\.\dd 95%$/.test(m.ui.bars[0].text), m.ui.bars[0].text);
-    assert.strictEqual(m.ui.bars[1].text, '$(account) sub');
-    assert(/5h session/.test(m.ui.bars[0].tooltip.value) && /Weekly/.test(m.ui.bars[0].tooltip.value));
+    assert.deepStrictEqual(m.ui.bars, [], 'perch puts nothing in the status bar: the gauge is the footer of each tab');
     assert.strictEqual(m.globalState._dump()['perch.meter.limits'].length, 2, 'the reading is cached for the next reload');
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     let st = v.lastMeter();
     assert.deepStrictEqual([st.backend, st.backendLabel, st.mode, st.level, st.action, st.segments.length], ['subscription', 'sub', 'subscription', 'ok', 'refresh', 2], 'the page is given the gauge as soon as it is ready');
+    assert(/^1\.0h 91% 6\.\dd 95%$/.test(st.text), st.text);
 
     // refresh from the page and from the command
     const f0 = m.box.fetches;
@@ -278,7 +277,6 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'meterRefresh' }); await flush();
     assert.strictEqual(m.box.fetches, f0 + 1);
     st = v.lastMeter(); assert.deepStrictEqual([st.text, st.level], ['1.0h 7%', 'error'], 'a limit running low turns red');
-    assert.strictEqual(m.ui.bars[0].backgroundColor.id, 'statusBarItem.errorBackground');
     await m.commands['perch.meter.refresh'](); assert.strictEqual(m.box.fetches, f0 + 2);
     m.box.usage = { limits: null, error: 'network' }; v.fire({ type: 'meterRefresh' }); await flush();
     assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().error], ['1.0h 7%', 'network'], 'a failed poll keeps the last good reading');
@@ -295,7 +293,6 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(m.globalState._dump()['perch.meter.stash.model'], undefined, 'model pins go through the stash');
     st = v.lastMeter();
     assert.deepStrictEqual([st.backend, st.backendLabel, st.mode, st.text], ['api', 'API', 'cost', 'opus-5 5.2M $18.9'], 'auto mode follows the backend into cost mode');
-    assert.deepStrictEqual([m.ui.bars[1].text, m.ui.bars[0].text], ['$(cloud) API', '$(dashboard) opus-5 5.2M $18.9']);
     assert(/new tabs and new sessions\. Running ones keep/.test(m.ui.infos.pop()));
     assert.strictEqual(m.loads.claude, loads0 + 1, 'the model list is re-read, because models differ by backend');
     assert(v.events(run).some((e) => e.kind === 'note' && /backend is now API \/ Bedrock\. This tab keeps subscription/.test(e.text)), 'a running tab is told it keeps its backend');
@@ -320,7 +317,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(/No Bedrock or API credentials found/.test(m.ui.warnings.pop())); assert.deepStrictEqual(m.box.writes, [true, false], 'cancelled: nothing written');
     m.ui.answers.push('Switch Anyway'); v.fire({ type: 'meterToggle' }); await flush(); await flush();
     assert.deepStrictEqual(m.box.writes, [true, false, true]);
-    assert.deepStrictEqual([v.lastMeter().backendWarn, m.ui.bars[1].text, m.ui.bars[1].backgroundColor.id], [true, '$(cloud) API $(warning)', 'statusBarItem.warningBackground'], 'the switch stays highlighted until credentials exist');
+    assert.strictEqual(v.lastMeter().backendWarn, true, 'the switch stays highlighted until credentials exist');
 
     // a settings file that cannot be written: say so, change nothing
     m.box.failWrite = 'EACCES'; m.box.apiCreds = true;
@@ -335,44 +332,30 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.changeConfig({ 'meter.warnBelow': 80 }); await flush();
     assert.strictEqual(v.lastMeter().level, 'warn');
 
-    // status bar placement
-    m.changeConfig({ 'meter.statusBar': 'off' }); await flush();
-    assert.deepStrictEqual(m.ui.bars.map((x) => x.disposed), [true, true], 'off removes the items');
-    assert.strictEqual(v.lastMeter().text, '1.0h 30%', 'the panel footer still works');
-    m.changeConfig({ 'meter.statusBar': 'auto' }); await flush();
-    assert.deepStrictEqual(m.ui.bars.slice(2).map((x) => [x.id, x.shown]), [['perch.meter.usage', true], ['perch.meter.backend', true]]);
-    m.changeExtensions({ 'seanahn.ai-meter': { icon: 'x.png' } });
-    assert.deepStrictEqual(m.ui.bars.slice(2).map((x) => x.disposed), [true, true], 'installing the standalone extension makes perch stand down');
-    m.changeExtensions({ 'seanahn.ai-meter': null });
-    assert.strictEqual(m.ui.bars.length, 6, 'and removing it brings perch back');
-    m.perch.dispose(); assert.deepStrictEqual(m.ui.bars.slice(4).map((x) => x.disposed), [true, true]);
+    m.perch.dispose();
   }
   {
-    // the standalone extension is installed: no duplicate gauge in the status bar, but the panel has it
+    // the standalone AI Meter extension may be installed as well: perch's gauge is in its tabs, and the status bar is AI Meter's alone
     const m = install(undefined, { extensions: { 'seanahn.ai-meter': { icon: 'x.png' } } }); await flush();
-    assert.deepStrictEqual(m.ui.bars, [], 'perch stands down');
+    assert.deepStrictEqual(m.ui.bars, []);
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     assert.strictEqual(v.lastMeter().segments.length, 2);
-    m.changeConfig({ 'meter.statusBar': 'on' }); await flush();
-    assert.strictEqual(m.ui.bars.length, 2, 'unless asked');
   }
   {
     // never logged in
     const m = install(undefined, { meter: { usage: { limits: null, error: 'no-credentials' } }, extensions: {} }); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().action, v.lastMeter().level], ['—', 'login', 'none']);
-    assert(/command:perch\.meter\.login/.test(m.ui.bars[0].tooltip.value));
     v.fire({ type: 'meterLogin' }); await flush();
     assert.strictEqual(m.ui.terminals.length <= 1, true);                     // a terminal only if a claude CLI exists on this machine
-    m.changeConfig({ 'meter.hideWhenUnavailable': true }); await flush();
-    assert.deepStrictEqual(m.ui.bars.map((x) => x.shown), [false, false], 'hidden on request when there is nothing to show');
   }
   {
     // the cached reading is shown before the first poll returns
     const cached = LIM(40);
     const m = install(undefined, { globals: { 'perch.meter.limits': cached, 'perch.meter.limits.at': 123 }, meter: { usage: { limits: null, error: 'network' } } });
-    assert(/1\.0h 60%/.test(m.ui.bars[0].text), 'shown at once, from the cache');
-    await flush(); assert(/1\.0h 60%/.test(m.ui.bars[0].text), 'and kept when the poll fails');
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' });
+    assert(/1\.0h 60%/.test(v.lastMeter().text), 'shown at once, from the cache');
+    await flush(); assert(/1\.0h 60%/.test(v.lastMeter().text), 'and kept when the poll fails');
   }
 
   {
@@ -412,7 +395,6 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   // ======================================================================== Codex plan usage, for the footer of a Codex tab
   {
     const m = install(); await flush();
-    assert.deepStrictEqual(m.ui.bars.map((x) => x.id), ['perch.meter.usage', 'perch.meter.backend'], 'the status bar stays Claude only');
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     let cx = v.lastCodex();
     assert.deepStrictEqual([cx.vendor, cx.plan, cx.asOf, cx.level, cx.action], ['Codex', 'plus', true, 'ok', 'refresh'], 'the page gets both readings when it is ready');
@@ -427,7 +409,6 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([m.box.fetches, m.box.codexReads > r0], [f0, true]);
     cx = v.lastCodex();
     assert.deepStrictEqual([cx.segments.map((x) => x.level), cx.level, cx.plan], [['warn', 'error'], 'error', 'pro'], 'the same thresholds as Claude');
-    assert.strictEqual(m.ui.bars[0].backgroundColor, undefined, 'a Codex limit running low does not colour the Claude status bar item');
     v.fire({ type: 'meterRefresh', vendor: 'claude' }); await flush(); assert.strictEqual(m.box.fetches, f0 + 1);
     v.fire({ type: 'meterRefresh' }); await flush(); assert.strictEqual(m.box.fetches, f0 + 2, 'with no vendor named, Claude, as before');
 
@@ -528,15 +509,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: x, text: 'fresh' }); await flush();
     assert.deepStrictEqual([cx.sent.pop(), v2.tab(x).busy], ['fresh', false], 'the tab works normally afterwards');
 
-    // ---- IDE context: a Codex tab can attach the active file and selection to each message
+    // ---- IDE context: a tab can attach the active file and selection to each message
     const sel = (a, ac, b, bc) => ({ isEmpty: a === b && ac === bc, start: { line: a, character: ac }, end: { line: b, character: bc }, active: { line: b, character: bc } });
     const editor = (file, lang, text, s) => ({ selection: s, document: { uri: { scheme: 'file', fsPath: file }, languageId: lang, getText: () => text } });
-    assert.deepStrictEqual([v2.tab(x).ide, v2.tab(c).ide], [false, null], 'off by default; not a Claude feature');
+    assert.deepStrictEqual([v2.tab(x).ide, v2.tab(c).ide], [false, false], 'off in the tests\' configuration; on by default');
     m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', 'const a = 1;\nconst b = 2;\n', sel(2, 0, 4, 0));
     v2.fire({ type: 'send', sid: x, text: 'plain' }); await flush();
     assert.strictEqual(cx.sent.pop(), 'plain', 'nothing is attached while it is off');
     v2.fire({ type: 'setIde', sid: x, value: true }); assert.strictEqual(v2.tab(x).ide, true);
-    v2.fire({ type: 'setIde', sid: c, value: true }); assert.strictEqual(v2.tab(c).ide, null, 'ignored on a Claude tab');
+    v2.fire({ type: 'setIde', sid: c, value: true }); assert.strictEqual(v2.tab(c).ide, true, 'on a Claude tab too');
     v2.fire({ type: 'send', sid: x, text: 'why is b 2?' }); await flush();
     const F = path.join('src', 'a.js');
     assert.strictEqual(cx.sent.pop(), 'why is b 2?\n\n<ide_context>\nActive file: ' + F + ' (javascript)\nSelection: lines 3-4\n```javascript\nconst a = 1;\nconst b = 2;\n```\n</ide_context>', 'the agent gets the file, the lines, and the text');
@@ -571,7 +552,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
     // the choice is saved with the tab
     const saved2 = install(m.memento._dump()); const v3 = fakeView(); saved2.registered['perch.main'].resolveWebviewView(v3.view); v3.fire({ type: 'ready' }); await flush();
-    assert.deepStrictEqual(v3.lastTabs().tabs.map((t) => t.ide), [null, null, true], 'IDE context survives a reload');
+    assert.deepStrictEqual(v3.lastTabs().tabs.map((t) => t.ide), [true, false, true], 'IDE context survives a reload');
+    // a Claude tab attaches the same, and its transcript shows the message and the tag
+    m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', 'const a = 1;\n', sel(0, 0, 1, 0));
+    v2.fire({ type: 'send', sid: c, text: 'what is a?' }); await flush();
+    const cl = created.filter((a) => a.claude).pop();
+    assert(/^what is a\?\n\n<ide_context>\nActive file: src\/a\.js \(javascript\)\nSelection: lines 1-1\n/.test(cl.sent.pop()), 'Claude gets the file and the selection');
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'what is a?', queued: false, tag: 'IDE context · src/a.js:1' });
+    // new tabs follow the setting
+    const on = install(undefined, { config: { ideContext: true } }); await flush();
+    const von = fakeView(); on.registered['perch.main'].resolveWebviewView(von.view); von.fire({ type: 'ready' }); await flush();
+    von.fire({ type: 'new', kind: 'claude' }); von.fire({ type: 'new', kind: 'codex' });
+    assert.deepStrictEqual(von.lastTabs().tabs.map((t) => t.ide), [true, true], 'on by default, for both');
+    on.perch.dispose();
     m.ui.editor = undefined;
 
     // closing a tab with a queue disposes it cleanly
@@ -829,7 +822,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.abox.missing = true; v.fire({ type: 'voiceStart', sid: c }); await flush(); await flush();
     const e = v.events(c).filter((x) => x.kind === 'error').pop().text;
     assert(/^Voice input: Perch Audio is not installed on this computer\. It records from your microphone, so it has to be installed where you are sitting, even when the workspace is remote\./.test(e), e);
-    assert(/make install-audio/.test(e) && /make package-audio/.test(e), 'and says how to get it');
+    assert(/make install-audio/.test(e) && /seanahn\.perch-audio/.test(e), 'and says how to get it');
     assert.strictEqual(v.events(c).filter((x) => x.kind === 'voice').pop().phase, 'idle');
     m.perch.dispose();
   }
@@ -866,6 +859,391 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(r.ui.infos.pop(), `Set up voice input on ${require('os').hostname()}, the remote machine?`);
     assert(/nothing you say leaves your machines\./.test(r.ui.details.pop()), 'audio crosses from the laptop to the workspace machine, and no further');
     r.perch.dispose();
+  }
+
+  // ---- names, and the sessions of the past
+  {
+    const NOW = Date.now(), MIN = 60000;
+    const past = { sessions: [
+      { kind: 'claude', id: 'c-old', title: 'Perch session name and loading', named: true, updatedAt: NOW - 2 * MIN },
+      { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
+      { kind: 'claude', id: 'c-older', title: 'supertrend', named: true, updatedAt: NOW - 40 * 24 * 60 * MIN },
+    ] };
+    const m = install(undefined, { past }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const state = () => m.memento._dump()['perch.sessions.v1'];
+    const made = created.length;
+
+    // nothing open: renaming the active tab has nothing to act on
+    await m.commands['perch.renameTab'](); v.fire({ type: 'rename', sid: 'nope' }); await flush();
+    assert.deepStrictEqual([m.ui.asked.length, m.store.renamed], [0, []]);
+
+    // the list: both agents' sessions of this folder, newest first, each with a button to rename it
+    let list = await m.commands['perch.sessions']();
+    assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
+    assert.deepStrictEqual([list.shown, list.busy, list.placeholder, list.title], [true, false, 'Search sessions…', 'Perch sessions']);
+    assert.deepStrictEqual(list.rows(), [['Perch session name and loading', 'Claude · 2m'], ['hello', 'Codex · 26m'], ['supertrend', 'Claude · 1mo']]);
+    assert.deepStrictEqual(list.items.map((i) => i.buttons.map((b) => [b.iconPath.id, b.tooltip])), Array(3).fill([['edit', 'Rename session']]));
+    assert.deepStrictEqual(list.items.map((i) => i.iconPath.path || i.iconPath.dark.path), ['/ext/anthropic.claude-code/resources/claude-logo.svg', '/ext/openai.chatgpt/resources/blossom.dark.png', '/ext/anthropic.claude-code/resources/claude-logo.svg'], 'each under its vendor\'s icon, the one its editor tab carries');
+
+    // renaming one that is not open writes to the agent's record, and the list comes back with the new name
+    m.ui.inputs.push('  Codex   greeting ');
+    await list.press((i) => i.past.id === 'x-old');
+    assert.deepStrictEqual([m.ui.asked.pop().value, list.shown, list.disposed], ['hello', false, true], 'the box opens on the present name, in the list\'s place');
+    assert.deepStrictEqual(m.store.renamed, [['codex', 'x-old', 'Codex greeting', { dir: process.cwd() }]]);
+    assert.strictEqual(m.ui.lists.length, 2); list = m.ui.lists[1];
+    assert.deepStrictEqual([list.shown, list.rows()[1]], [true, ['Codex greeting', 'Codex · 26m']]);
+    assert.strictEqual(v.lastTabs().tabs.length, 0, 'renaming opens nothing');
+
+    // dismissed, or left empty: nothing is written
+    m.ui.inputs.push(undefined); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[2];
+    m.ui.inputs.push('   '); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[3];
+    assert.deepStrictEqual([m.store.renamed.length, m.ui.errors.length], [1, 0]);
+    assert.deepStrictEqual([m.ui.asked[0].validateInput(' \n'), m.ui.asked[0].validateInput(' a ')], ['A name cannot be empty.', null]);
+
+    // a record that cannot be written is said so
+    m.store.failRename = 'EACCES: permission denied'; m.ui.inputs.push('nope'); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[4];
+    assert.strictEqual(m.ui.errors.pop(), 'Perch: the session could not be renamed. EACCES: permission denied');
+    assert.strictEqual(list.rows()[0][0], 'Perch session name and loading'); m.store.failRename = null;
+
+    // choosing one opens a tab on it, under its name; the agent starts on the first message, resuming that session
+    list.choose((i) => i.past.id === 'c-old');
+    assert.deepStrictEqual([list.shown, list.disposed], [false, true]);
+    let t = v.lastTabs();
+    assert.deepStrictEqual(t.tabs.map((x) => [x.kind, x.title, x.started]), [['claude', 'Perch session name and loading', false]]);
+    const c = t.active;
+    assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'note').map((e) => e.text), ['resumed claude session c-old · earlier transcript is not shown, the agent still has it']);
+    assert.deepStrictEqual([state().sessions[0].resume, state().sessions[0].titled, state().counters], ['c-old', true, { claude: 0, codex: 0 }], 'saved like any tab; a resumed tab takes no number');
+    assert.strictEqual(created.length, made, 'and costs nothing until it is used');
+    v.fire({ type: 'send', sid: c, text: 'where were we' }); await flush();
+    assert.deepStrictEqual([created.length - made, created[made].o.resume, v.tab(c).title], [1, 'c-old', 'Perch session name and loading'], 'the first message does not rename it');
+    assert.deepStrictEqual(m.store.renamed.length, 1, 'a name that came from the record is not written back to it');
+
+    // the list marks what is open, and choosing it goes to its tab instead of opening a second one
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    list = await m.commands['perch.sessions']();
+    assert.deepStrictEqual(list.rows().map((r) => r[1]), ['Claude · 2m · open', 'Codex · 26m', 'Claude · 1mo']);
+    list.choose((i) => i.past.id === 'c-old');
+    assert.deepStrictEqual([v.lastTabs().tabs.length, v.lastTabs().active], [2, c]);
+
+    // renaming an open session from the list renames its tab too
+    list = await m.commands['perch.sessions'](); m.ui.inputs.push('Naming and loading');
+    await list.press((i) => i.past.id === 'c-old');
+    assert.deepStrictEqual([v.tab(c).title, m.store.renamed.pop(), state().sessions[0].title, state().sessions[0].unsaved], ['Naming and loading', ['claude', 'c-old', 'Naming and loading', { dir: process.cwd() }], 'Naming and loading', false]);
+    assert.strictEqual(m.ui.lists.pop().rows()[0][0], 'Naming and loading');
+
+    // the active tab by command, and any sidebar tab by a double-click on it
+    m.ui.inputs.push('Again'); await m.commands['perch.renameTab']();
+    assert.deepStrictEqual([m.ui.asked.pop().value, v.tab(c).title, m.store.renamed.pop().slice(0, 3)], ['Naming and loading', 'Again', ['claude', 'c-old', 'Again']]);
+
+    // a tab named before its first message: the agent has no record yet, so the name waits for the end of the first turn
+    m.ui.inputs.push('Codex scratch'); v.fire({ type: 'rename', sid: x }); await flush();
+    assert.deepStrictEqual([v.tab(x).title, m.store.renamed.length, state().sessions[1].unsaved], ['Codex scratch', 1, true]);
+    v.fire({ type: 'send', sid: x, text: 'hold on' }); await flush();
+    assert.deepStrictEqual([v.tab(x).title, m.store.renamed.length], ['Codex scratch', 1], 'the first message does not take the name back, and nothing is written mid-turn');
+    list = await m.commands['perch.sessions'](); list.hide();
+    const xAgent = created[created.length - 1]; xAgent.finish(); await flush();
+    const xid = state().sessions[1].resume;
+    assert.deepStrictEqual([m.store.renamed.pop(), state().sessions[1].unsaved], [['codex', xid, 'Codex scratch', { dir: process.cwd() }], false]);
+    v.fire({ type: 'send', sid: x, text: 'more' }); await flush();
+    assert.strictEqual(m.store.renamed.length, 1, 'written once');
+
+    // a name that cannot reach the record stays on the tab, and is not tried again after every turn
+    m.store.failRename = 'Session not found'; m.ui.inputs.push('Kept here'); v.fire({ type: 'rename', sid: x }); await flush();
+    assert.deepStrictEqual([v.tab(x).title, m.ui.warnings.pop()], ['Kept here', 'Perch: this tab keeps its name, but Codex\'s record of the session could not be given it. Session not found']);
+    v.fire({ type: 'send', sid: x, text: 'and more' }); await flush();
+    assert.deepStrictEqual([m.ui.warnings.length, state().sessions[1].title], [0, 'Kept here']); m.store.failRename = null;
+
+    // names survive a reload, waiting ones included
+    v.fire({ type: 'new', kind: 'claude' }); const w = v.lastTabs().active;
+    m.ui.inputs.push('Not started'); v.fire({ type: 'rename', sid: w }); await flush();
+    m.perch.dispose();
+    const m2 = install(m.memento._dump(), { past }); await flush();
+    const v2 = fakeView(); m2.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v2.lastTabs().tabs.map((q) => q.title), ['Again', 'Kept here', 'Not started']);
+    const before = created.length;
+    v2.fire({ type: 'send', sid: w, text: 'first words' }); await flush();
+    assert.deepStrictEqual([v2.tab(w).title, m2.store.renamed], ['Not started', [['claude', 'sess-' + before, 'Not started', { dir: process.cwd() }]]], 'written once the session exists');
+    m2.perch.dispose();
+
+    // an editor tab: the name is the tab's title
+    const e = install(undefined, { past, config: { newTabs: 'editor' } }); await flush();
+    list = await e.commands['perch.sessions'](); list.choose((i) => i.past.id === 'x-old');
+    const panel = e.ui.panels[0];
+    assert.deepStrictEqual([e.ui.panels.length, panel.title], [1, 'hello']);
+    panel.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(panel.lastTabs().tabs.map((q) => [q.kind, q.title]), [['codex', 'hello']]);
+    e.ui.inputs.push('Greeting'); await e.commands['perch.renameTab']();
+    assert.deepStrictEqual([panel.title, panel.lastTabs().tabs[0].title, e.store.renamed], ['Greeting', 'Greeting', [['codex', 'x-old', 'Greeting', { dir: process.cwd() }]]]);
+    list = await e.commands['perch.sessions'](); list.choose((i) => i.past.id === 'x-old');
+    assert.deepStrictEqual([e.ui.panels.length, panel.reveals], [1, 1], 'the open tab is brought forward');
+    e.perch.dispose();
+
+    // nothing to list, and records that cannot be read
+    const n = install(undefined, { past: { sessions: [] } }); await flush();
+    assert.strictEqual((await n.commands['perch.sessions']()).placeholder, 'No past sessions in this folder');
+    n.store.failed = ['claude', 'codex'];
+    assert.strictEqual((await n.commands['perch.sessions']()).placeholder, 'The sessions of Claude Code and Codex could not be read');
+    n.store.failed = ['codex']; n.store.sessions = past.sessions.slice(0, 1);
+    list = await n.commands['perch.sessions']();
+    assert.deepStrictEqual([list.title, list.rows().length], ['Perch sessions · those of Codex could not be read', 1]);
+    n.perch.dispose();
+  }
+
+  // ---- a resumed session shows what was said in it before
+  {
+    const said = [{ kind: 'user', text: 'how do i rename', queued: false }, { kind: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }, { kind: 'tool_result', id: 't1', isError: false, text: 'src', truncated: false }, { kind: 'text', text: 'Like this.' }];
+    const past = { sessions: [{ kind: 'claude', id: 'c-old', title: 'Renaming', named: true, updatedAt: Date.now() }, { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: Date.now() - 1 }, { kind: 'codex', id: 'x-bad', title: 'broken', named: false, updatedAt: Date.now() - 2 }],
+      transcripts: { 'c-old': { events: said, earlier: 0 }, 'x-old': { events: said.slice(3), earlier: 412 }, 'x-bad': new Error('unreadable') } };
+    const m = install(undefined, { past }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const shown = (sid) => { const e = v.events(sid); return e.slice(e.map((x) => x.kind).lastIndexOf('clear') + 1).filter((x) => x.kind !== 'busy' && x.kind !== 'status'); };
+
+    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'c-old'); const c = v.lastTabs().active;
+    assert.deepStrictEqual(shown(c), [{ kind: 'note', text: 'resumed claude session c-old · earlier transcript is not shown, the agent still has it' }], 'until it has been read');
+    await flush();
+    assert.deepStrictEqual(m.store.loads, [['claude', 'c-old', { dir: process.cwd() }]]);
+    assert.deepStrictEqual(shown(c), said, 'the transcript, and nothing about it');
+
+    // what is said now follows it, and a page made again is given all of it
+    v.fire({ type: 'send', sid: c, text: 'and again' }); await flush();
+    const v2 = fakeView(); m.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v2.events(c).filter((x) => ['user', 'text', 'note', 'tool_use', 'tool_result'].includes(x.kind)).map((x) => x.text || x.name), ['how do i rename', 'Bash', 'src', 'Like this.', 'and again', 'answer to and again']);
+
+    // a long one shows its end, and says so; one that cannot be read leaves the note as it was
+    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'x-old'); const x = v2.lastTabs().active; await flush();
+    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'text' || e.kind === 'note').slice(-2), [{ kind: 'note', text: '412 earlier entries are not shown, the agent still has them' }, { kind: 'text', text: 'Like this.' }], 'said before them, where they would have been');
+    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'x-bad'); const b = v2.lastTabs().active; await flush();
+    assert.deepStrictEqual(v2.events(b).filter((e) => e.kind === 'note'), [{ kind: 'note', text: 'resumed codex session x-bad · earlier transcript is not shown, the agent still has it' }]);
+
+    // a message sent before the transcript has been read stays after it
+    const m3 = install(undefined, { past }); await flush();
+    const v3 = fakeView(); m3.registered['perch.main'].resolveWebviewView(v3.view); v3.fire({ type: 'ready' }); await flush();
+    (await m3.commands['perch.sessions']()).choose((i) => i.past.id === 'c-old'); const c3 = v3.lastTabs().active;
+    v3.fire({ type: 'send', sid: c3, text: 'too quick' }); await flush(); await flush();
+    assert.deepStrictEqual(shown.call(null, c3).length >= 0 && v3.events(c3).slice(v3.events(c3).map((e) => e.kind).lastIndexOf('clear') + 1).filter((e) => ['user', 'text', 'note'].includes(e.kind)).map((e) => e.text), ['how do i rename', 'Like this.', 'too quick', 'answer to too quick']);
+
+    // after a window reload the tabs come back with their transcripts, from the record
+    m.perch.dispose(); m3.perch.dispose();
+    const r = install(m.memento._dump(), { past }); await flush();
+    const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(r.store.loads.map((l) => l.slice(0, 2)), [['claude', 'c-old'], ['codex', 'x-old'], ['codex', 'x-bad']]);
+    assert.deepStrictEqual(vr.events(c).filter((e) => e.kind === 'text' || e.kind === 'note').map((e) => e.text).slice(-1), ['Like this.']);
+    r.perch.dispose();
+  }
+
+  // ---- after a reload, a tab behind another has no page until it is shown: its session is not given a second tab
+  {
+    const saved = { 'perch.sessions.v1': { active: null, counters: { claude: 2, codex: 1 }, sessions: [
+      { id: 's1', kind: 'claude', title: 'Naming', titled: true, resume: 'c-1', location: 'editor', paneled: true },
+      { id: 's2', kind: 'codex', title: 'Review', titled: true, resume: 'x-1', location: 'editor', paneled: true },
+      { id: 's3', kind: 'claude', title: 'Naming', titled: true, resume: 'c-2', location: 'editor', paneled: true },
+      { id: 's4', kind: 'claude', title: 'Lost', titled: true, resume: 'c-3', location: 'editor', paneled: true }] } };
+    const m = install(saved, { config: { newTabs: 'editor' } });
+    // VS Code kept four tabs. One is shown, and is given its page; of the rest, one was left working when the window closed
+    m.waitingTab('Naming'); m.waitingTab('Review \u2026'); m.waitingTab('\u25cf Naming');
+    const shown = m.ui.waiting.pop(); const p3 = m.restorePanel('s3', shown.label);
+    await wait(120);
+    assert.deepStrictEqual(m.ui.panels.filter((p) => !p.disposed).map((p) => p.title), ['Naming', 'Lost'], 'only the session with no tab at all is given one');
+    assert.deepStrictEqual(m.ui.closedTabs, []);
+
+    // clicked, a waiting tab is given its page, and is the session's one tab
+    const w1 = m.ui.waiting.shift(); const p1 = m.restorePanel('s1', w1.label);
+    assert.deepStrictEqual([p1.disposed, m.perch.panels.get('s1').panel === p1, m.ui.panels.filter((p) => !p.disposed).length], [false, true, 3]);
+
+    // gone to from elsewhere while its tab still waits: the new tab takes the place of the waiting one
+    m.perch.activate('s2'); await flush();
+    assert.deepStrictEqual([m.ui.closedTabs, m.ui.waiting.length, m.ui.panels.filter((p) => !p.disposed).map((p) => p.title)], [['Review \u2026'], 0, ['Naming', 'Lost', 'Naming', 'Review']]);
+    m.perch.activate('s2'); m.perch.activate('s1'); await flush();
+    assert.deepStrictEqual([m.ui.closedTabs.length, m.ui.panels.filter((p) => !p.disposed).length], [1, 4], 'a tab with a page is only brought forward');
+    assert(p3 && !p3.disposed);
+    m.perch.dispose();
+  }
+
+  // ---- what an agent reports beyond working and ready is part of the transcript
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hold' }); await flush();
+    const a = created[created.length - 1], since = v.tab(c).busySince;
+    assert(v.tab(c).busy && since > Date.now() - 5000 && since <= Date.now(), 'a working tab says since when');
+    for (const text of ['context compacted', 'rate limit: rejected', 'ready', 'working', 'ready · fake', 'idle']) a.emit({ kind: 'status', text });
+    assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'note').map((e) => e.text), ['context compacted', 'rate limit: rejected']);
+    a.finish(); await flush();
+    assert.deepStrictEqual([v.tab(c).busy, v.tab(c).busySince], [false, 0]);
+    const v2 = fakeView(); m.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'note').map((e) => e.text), ['context compacted', 'rate limit: rejected'], 'and is there when the page is made again');
+    m.perch.dispose();
+  }
+
+  // ---- a group of sessions only is locked, so a file opened from the Explorer goes to the group beside it
+  {
+    const perchTab = (label) => ({ label, input: { viewType: 'mainThreadWebview-perch.session' } }), file = { label: 'a.js', input: { uri: {} } };
+    const locks = (m) => m.ui.executed.filter((c) => c === 'workbench.action.lockEditorGroup').length;
+    const m = install(undefined, { config: { newTabs: 'editor' } }); await flush();
+    m.ui.group = () => ({ viewColumn: 2, tabs: [perchTab('Claude 1')] });
+    await m.commands['perch.newClaude'](); await flush();
+    assert.strictEqual(locks(m), 1, 'locked when its first session opens');
+    m.ui.group = () => ({ viewColumn: 2, tabs: [perchTab('Claude 1'), file] });
+    m.ui.panels[0].show(true, true); await flush();
+    assert.strictEqual(locks(m), 1, 'a group the user keeps files in as well is left as it is');
+    m.ui.group = () => ({ viewColumn: 2, tabs: [perchTab('Claude 1'), perchTab('Codex 1')] });
+    m.ui.panels[0].show(true, false); await flush(); assert.strictEqual(locks(m), 1, 'shown but not focused: the active group is another');
+    m.ui.panels[0].show(true, true); await flush(); assert.strictEqual(locks(m), 2, 'and a group brought back after a reload is locked when it is next used');
+    m.changeConfig({ lockGroup: false }); m.ui.panels[0].show(true, true); await flush();
+    assert.strictEqual(locks(m), 2, 'not if the user would rather not');
+
+    // a file opened from an answer goes beside the sessions too
+    m.ui.group = null; m.perch.openTarget('src/extension.js'); await flush(); await flush();
+    assert.deepStrictEqual(m.ui.columns, [-2], 'with no other group, a new one beside');
+    m.perch.dispose();
+  }
+
+  // ---- the program an agent runs: the user's choice, else the SDK's own, which this checkout has
+  {
+    const m = install(undefined, { config: { 'codex.executable': '/opt/codex' } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const from = created.length;
+    v.fire({ type: 'new', kind: 'codex' }); v.fire({ type: 'send', sid: v.lastTabs().active, text: 'hi' });
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; v.fire({ type: 'send', sid: c, text: 'hi' }); await flush();
+    assert.deepStrictEqual([created[from].o.executable, created[from + 1].o.executable], ['/opt/codex', undefined]);
+    assert(!v.events(c).some((e) => e.kind === 'error'));
+    m.perch.dispose();
+  }
+
+  // ---- a question from Claude: the answers go back to the agent, and the transcript keeps what was answered
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+    const Q = [{ question: 'Which store?', header: 'Store', options: [{ label: 'Redis', description: '' }, { label: 'S3', description: '' }] }];
+    v.fire({ type: 'new', kind: 'claude' });   // another tab is active: the question raises attention
+    const asked = new Promise((res) => s.pending.set('q1', res)); s.post({ kind: 'question', id: 'q1', questions: Q });
+    assert.strictEqual(v.tab(c).attention, true);
+    v.fire({ type: 'permission', sid: c, id: 'q1', decision: 'answer', answers: { 'Which store?': ' S3 ', extra: 42, '': 'x', blank: '  ' } });
+    assert.deepStrictEqual(await asked, { decision: 'answer', answers: { 'Which store?': 'S3' } }, 'answers are text, by question, and nothing else');
+    assert.strictEqual(v.tab(c).attention, false);
+    const v2 = fakeView(); m.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v2.events(c).filter((e) => e.kind === 'answered' || e.kind === 'question'), [{ kind: 'answered', questions: Q, answers: { 'Which store?': 'S3' } }], 'a page made again sees the question settled');
+    // no answers at all is a refusal, and a skipped question is one too
+    const q2 = new Promise((res) => s.pending.set('q2', res)); s.post({ kind: 'question', id: 'q2', questions: Q });
+    v.fire({ type: 'permission', sid: c, id: 'q2', decision: 'answer', answers: { 'Which store?': '' } });
+    assert.deepStrictEqual(await q2, { decision: 'deny', answers: {} });
+    const q3 = new Promise((res) => s.pending.set('q3', res)); s.post({ kind: 'question', id: 'q3', questions: Q });
+    v.fire({ type: 'permission', sid: c, id: 'q3', decision: 'deny' });
+    assert.deepStrictEqual(await q3, { decision: 'deny' });
+    assert.deepStrictEqual(s.history.filter((h) => h.kind === 'answered').map((h) => h.answers), [{ 'Which store?': 'S3' }, {}, {}]);
+    m.perch.dispose();
+  }
+
+  // ---- a link in an answer that names a file opens it
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const here = require('path').join(process.cwd(), 'src/extension.js');
+    for (const target of ['src/extension.js', 'src/extension.js#L42', 'src/extension.js#L42-L51', 'src/extension.js:7', 'src/extension.js:7:3', here + '#L2', 'file://' + here, 'src/extension%2Ejs']) { v.fire({ type: 'open', target }); await flush(); }
+    assert.deepStrictEqual(m.ui.opened, [[here, null], [here, [41, 41]], [here, [41, 50]], [here, [6, 6]], [here, [6, 6]], [here, [1, 1]], [here, null], [here, null]]);
+    for (const target of ['src/nowhere.js', 'src', 'javascript:alert(1)', '../../../../../../nonexistent/x', '', undefined]) { v.fire({ type: 'open', target }); await flush(); }
+    assert.strictEqual(m.ui.opened.length, 8, 'only a file that is there is opened');
+    assert.deepStrictEqual(m.ui.warnings.slice(0, 2), ['Perch: src/nowhere.js is not a file in this workspace.', 'Perch: src is not a file in this workspace.']);
+    m.perch.dispose();
+  }
+
+  // ---- the session's cost so far is kept with the tab, so after a reload the agent can still tell each turn's own cost
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.costBefore, undefined, 'a new session has no cost yet');
+    s.post({ kind: 'result', ok: true, cost: 1.25, costTurn: 1.25 }); s.post({ kind: 'result', ok: true, cost: 1.5, costTurn: 0.25 }); s.post({ kind: 'result', ok: true });
+    assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions[0].costSoFar, 1.5, 'the last figure reported is saved; a result without one changes nothing');
+    m.perch.dispose();
+    const r = install(m.memento._dump()); await flush();
+    const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush();
+    vr.fire({ type: 'send', sid: c, text: 'again' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.costBefore, 1.5, 'and handed to the agent when the tab resumes');
+    r.perch.dispose();
+  }
+
+  // ---- the real Claude agent takes Claude Code's word on whether a turn runs: a lost result must not leave a tab working
+  {
+    const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
+    const out = [], a = { running: true, pending: 2, emit: (e) => out.push(e), _context() {}, _state: ClaudeAgent.prototype._state };
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'requires_action' });
+    assert.deepStrictEqual([a.running, a.pending, out], [true, 2, []], 'waiting on the user is still a running turn');
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'idle' });
+    assert.deepStrictEqual([a.running, a.pending, out], [false, 0, [{ kind: 'busy', busy: false }]], 'idle ends the turn whatever the count says');
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'idle' });
+    assert.strictEqual(out.length, 1, 'said once');
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'running' });
+    assert.deepStrictEqual([a.running, a.pending, out[1]], [true, 1, { kind: 'busy', busy: true }], 'a turn Claude Code starts on its own is shown too');
+  }
+
+  // ---- pasted images go with the message, to either agent
+  {
+    const PNG = { mime: 'image/png', data: 'iVBORw0KGgo=' }, JPG = { mime: 'image/jpeg', data: '/9j/4AAQ' };
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const from = created.length;
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'what is wrong here', images: [PNG, JPG] }); await flush();
+    const ca = created[from];
+    assert.deepStrictEqual([ca.sent, ca.images], [['what is wrong here'], [[PNG, JPG]]]);
+    assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'user'), [{ kind: 'user', text: 'what is wrong here', queued: false, images: 2 }], 'the transcript says how many, and does not hold them');
+    // a thumbnail the page made travels with the message into the transcript; a bad one is dropped, the image itself never kept
+    const T = 'data:image/jpeg;base64,/9j/4AAQ';
+    v.fire({ type: 'send', sid: c, text: 'thumbs', images: [Object.assign({ thumb: T }, PNG), Object.assign({ thumb: 'javascript:x' }, JPG), Object.assign({ thumb: 'data:image/jpeg;base64,' + 'A'.repeat(90000) }, PNG)] }); await flush();
+    const ut = v.events(c).filter((e) => e.kind === 'user').pop();
+    assert.deepStrictEqual([ut.images, ut.thumbs, ca.images[1]], [3, [T, '', ''], [PNG, JPG, PNG]]);
+    assert.deepStrictEqual(m.perch.get(c).history.filter((h) => h.kind === 'user').pop().thumbs, [T, '', ''], 'kept for a page made again');
+    assert(!JSON.stringify(m.memento._dump()).includes(PNG.data), 'nor does what is saved');
+
+    // an image with no words is a message; it does not name the tab
+    v.fire({ type: 'new', kind: 'claude' }); const c2 = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c2, text: '', images: [PNG] }); await flush();
+    assert.deepStrictEqual([created[from + 1].sent, created[from + 1].images, v.tab(c2).title], [[''], [[PNG]], 'Claude 2']);
+    v.fire({ type: 'send', sid: c2, text: 'and now in words' }); await flush();
+    assert.deepStrictEqual([v.tab(c2).title, created[from + 1].images[1]], ['and now in words', []], 'the first words do');
+    v.fire({ type: 'send', sid: c2, text: '  ', images: [] }); v.fire({ type: 'send', sid: c2, text: '' }); await flush();
+    assert.strictEqual(created[from + 1].sent.length, 2, 'nothing at all is still not a message');
+
+    // what cannot be sent is left out, and said
+    const big = { mime: 'image/png', data: 'A'.repeat(5000001) };
+    v.fire({ type: 'send', sid: c, text: 'mixed', images: [PNG, { mime: 'image/svg+xml', data: 'PHN2Zz4=' }, big, { mime: 'image/png', data: 'not base64!' }, { mime: 'image/png' }, null, 'x', JPG] }); await flush();
+    assert.deepStrictEqual(ca.images[2], [PNG, JPG]);
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'note').pop().text, '6 images left out: a message takes 8 images, each a PNG, JPEG, GIF, or WebP of up to 5 MB');
+    v.fire({ type: 'send', sid: c, text: 'many', images: Array(10).fill(PNG) }); await flush();
+    assert.deepStrictEqual([ca.images[3].length, v.events(c).filter((e) => e.kind === 'note').pop().text.slice(0, 18)], [8, '2 images left out:']);
+    v.fire({ type: 'send', sid: c, text: '', images: [big] }); await flush();
+    assert.strictEqual(ca.sent.length, 4, 'a message whose only image cannot be sent is not sent empty');
+    v.fire({ type: 'send', sid: c, text: 'odd', images: 'nonsense' }); await flush();
+    assert.deepStrictEqual(ca.images[4], []);
+
+    // Codex: with the IDE context, and through the queue
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hold this', images: [PNG] }); await flush();
+    const xa = created[created.length - 1];
+    assert.deepStrictEqual([xa.sent, xa.images, xa.shownAs], [['hold this'], [[PNG]], [{ text: 'hold this', tag: undefined }]]);
+    v.fire({ type: 'send', sid: x, text: 'next', images: [JPG, PNG] }); await flush();
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'next', queued: true, images: 2 });
+    v.fire({ type: 'send', sid: x, text: 'with thumb', images: [Object.assign({ thumb: T }, PNG)] }); await flush();
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'with thumb', queued: true, images: 1, thumbs: [T] }, 'a queued Codex message shows its thumbnail at once');
+    assert.strictEqual(xa.sent.length, 1, 'waiting behind the turn');
+    xa.finish(); await flush(); await flush();
+    assert.deepStrictEqual([xa.sent, xa.images[1]], [['hold this', 'next', 'with thumb'], [JPG, PNG]], 'a queued message keeps its images');
+    m.perch.dispose();
+
+    // the real Codex agent hands images over as files, and takes them away with it
+    const fs = require('fs'), { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const a = { imageDir: null, imageCount: 0, turnAbort: null };
+    const input = CodexAgent.prototype._input.call(a, 'look', [PNG, JPG]);
+    assert.deepStrictEqual(input.map((i) => [i.type, i.text || require('path').basename(i.path)]), [['text', 'look'], ['local_image', '1.png'], ['local_image', '2.jpg']]);
+    assert.deepStrictEqual(fs.readFileSync(input[1].path), Buffer.from(PNG.data, 'base64'));
+    assert.deepStrictEqual(CodexAgent.prototype._input.call(a, '  ', [PNG]).map((i) => [i.type, require('path').basename(i.path)]), [['local_image', '3.png']], 'no words, no text part; files are never reused');
+    const dir = a.imageDir; CodexAgent.prototype.dispose.call(a);
+    assert.deepStrictEqual([fs.existsSync(dir), a.imageDir], [false, null]);
   }
 
   console.log('HOST OK');

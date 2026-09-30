@@ -1,6 +1,24 @@
-EXT_ID = fennets.perch-0.6.0
-OLD_IDS = fennets.perch-0.1.0 fennets.perch-0.2.0 fennets.perch-0.3.0 fennets.perch-0.4.0 fennets.perch-0.5.0
-AUDIO_ID = fennets.perch-audio-0.1.0
+# Perch — development install, packaging, and marketplace publish
+#
+# Publishing needs a one-time setup, the same as AI Meter's:
+#   1. A publisher at https://marketplace.visualstudio.com/manage
+#      (it must match "publisher" in package.json)
+#   2. An Azure DevOps PAT (org: All accessible, scope: Marketplace > Manage)
+#   3. Either 'make login' once, or VSCE_PAT=<token> in .env
+#
+-include .env
+export VSCE_PAT
+
+VSCE = npx --yes @vscode/vsce
+VERSION = $(shell node -p "require('./package.json').version")
+PUBLISHER = $(shell node -p "require('./package.json').publisher")
+VSIX = perch-$(VERSION).vsix
+
+EXT_ID = seanahn.perch-$(VERSION)
+# links made under earlier versions, and under the publisher id perch had before it was published
+OLD_IDS = fennets.perch-0.1.0 fennets.perch-0.2.0 fennets.perch-0.3.0 fennets.perch-0.4.0 fennets.perch-0.5.0 fennets.perch-0.6.0 seanahn.perch-0.6.0
+AUDIO_ID = seanahn.perch-audio-$(shell node -p "require('./audio/package.json').version")
+OLD_AUDIO_IDS = fennets.perch-audio-0.1.0
 # Perch Audio records from the microphone, so it belongs where the user sits: the desktop's extensions, not a server's
 AUDIO_DIRS = /home/sahn/.vscode/extensions /home/sahn/.local/share/code-server/extensions
 EXT_DIRS = /home/sahn/.vscode/extensions /home/sahn/.local/share/code-server/extensions /home/sahn/.vscode-server/extensions
@@ -30,19 +48,48 @@ install: deps check install-audio
 ## Symlink Perch Audio, the microphone companion, into this machine's own VS Code
 install-audio:
 	@cd audio && npm install --silent && node test/recorder.test.js
-	@for d in $(AUDIO_DIRS); do [ -d $$d ] && ln -sfn /git/perch/audio $$d/$(AUDIO_ID) && echo "linked $$d/$(AUDIO_ID)"; done; true
+	@for d in $(AUDIO_DIRS); do for o in $(OLD_AUDIO_IDS); do rm -f $$d/$$o; done; [ -d $$d ] && ln -sfn /git/perch/audio $$d/$(AUDIO_ID) && echo "linked $$d/$(AUDIO_ID)"; done; true
 	@echo "perch-audio installed. Reload the window to activate."
 
 ## Build perch-audio as a .vsix, to install on the computer you connect from (code --install-extension perch-audio-*.vsix)
 package-audio:
-	cd audio && npm install --silent && npx --yes @vscode/vsce package --allow-missing-repository
+	cd audio && npm install --silent && $(VSCE) package
+
+## Publish Perch Audio. Perch installs it, so it is published first: 'make publish' does both, in that order
+publish-audio:
+	cd audio && npm install --silent && node test/recorder.test.js && $(VSCE) publish
 
 ## Remove the symlinks
 uninstall:
-	@for d in $(EXT_DIRS); do rm -f $$d/$(EXT_ID); for o in $(OLD_IDS); do rm -f $$d/$$o; done; done; for d in $(AUDIO_DIRS); do rm -f $$d/$(AUDIO_ID); done; echo "perch unlinked"
+	@for d in $(EXT_DIRS); do rm -f $$d/$(EXT_ID); for o in $(OLD_IDS); do rm -f $$d/$$o; done; done; for d in $(AUDIO_DIRS); do rm -f $$d/$(AUDIO_ID); for o in $(OLD_AUDIO_IDS); do rm -f $$d/$$o; done; done; echo "perch unlinked"
 
-## Build a .vsix (production dependencies are bundled; tests and dev dependencies are not)
+## Build a .vsix. The SDKs are inside; the agents' programs are not: Perch runs those of the vendors' extensions
 package: deps check
-	npx vsce package
+	$(VSCE) package
 
-.PHONY: deps check test test-offline install install-audio package-audio uninstall package
+## Install the packaged .vsix into this machine's VS Code, in place of the development symlink
+install-vsix: package uninstall
+	@command -v code-server >/dev/null 2>&1 && code-server --install-extension $(VSIX) --force \
+		|| code --install-extension $(VSIX) --force
+
+## One-time: store the marketplace PAT for the publisher in package.json
+login:
+	$(VSCE) login $(PUBLISHER)
+
+## Publish the version in package.json to the marketplace, after Perch Audio, which it brings with it.
+## Perch Audio is published only when its version is not the one already there
+publish: deps check
+	@cd audio && ($(VSCE) show $(PUBLISHER).perch-audio --json 2>/dev/null | grep -q '"version": "'$$(node -p "require('./package.json').version")'"' && echo "perch-audio is already published at this version") || $(MAKE) -C .. publish-audio
+	$(VSCE) publish
+
+## Bump the version (this also makes the git commit and tag), then publish
+publish-patch: deps check
+	$(VSCE) publish patch
+
+publish-minor: deps check
+	$(VSCE) publish minor
+
+clean:
+	rm -f *.vsix
+
+.PHONY: deps check test test-offline install install-audio package-audio uninstall package install-vsix login publish publish-audio publish-patch publish-minor clean

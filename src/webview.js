@@ -2,6 +2,8 @@
 // The Perch page: a tab bar, one pane per session, a composer modelled on Claude Code's, and the Claude usage footer.
 // The host owns all state; this page renders what it is sent and can be rebuilt from a replay at any time.
 
+const { renderMarkdown } = require('./markdown');
+
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
@@ -24,7 +26,7 @@ function getHtml({ nonce, cspSource, icons = {} }) {
   const iconsJson = JSON.stringify(forPage).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style nonce="${nonce}">
   :root { color-scheme: light dark; }
@@ -58,16 +60,41 @@ ${glyphCss}
   /* panes */
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  .bar { display: flex; gap: 6px; align-items: center; padding: 3px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
-  .dot.busy { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
-  .log { flex: 1; overflow-y: auto; padding: 4px 10px 8px; }
+  .log { flex: 1; overflow-y: auto; padding: 8px 10px 8px; }
+  /* what the agent is doing, said where the eye is: under the last thing in the transcript, above the message */
+  .work { flex: none; display: flex; align-items: center; gap: 7px; padding: 2px 12px 6px; font-size: 12px; color: var(--vscode-descriptionForeground); }
+  .work .sp { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--vscode-charts-orange); border-right-color: transparent; animation: spin .8s linear infinite; }
+  .work .what { color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .work .for { flex: none; font-variant-numeric: tabular-nums; }
+  .work.ask .sp { border-color: var(--vscode-charts-red); animation: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
   .user { background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 8px; }
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
+  .user .pics { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+  .user .pics img { max-height: 120px; max-width: 200px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); display: block; }
   .assistant { padding-left: 2px; padding-right: 2px; }
   .live { opacity: .85; }
+
+  /* an answer is Markdown, drawn */
+  .md { white-space: normal; }
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p, .md ul, .md ol, .md pre, .md blockquote, .md .tbl, .md hr { margin: 0 0 8px; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 14px 0 6px; line-height: 1.3; font-weight: 600; }
+  .md h1 { font-size: 1.35em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.08em; } .md h4, .md h5, .md h6 { font-size: 1em; }
+  .md ul, .md ol { padding-left: 22px; } .md li { margin: 2px 0; } .md li > ul, .md li > ol { margin: 2px 0; } .md li > p { margin: 4px 0; }
+  .md li.task { list-style: none; margin-left: -18px; }
+  .md code { font-family: var(--vscode-editor-font-family); font-size: .92em; background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; }
+  .md pre { background: var(--vscode-textCodeBlock-background); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  .md pre code { background: none; padding: 0; font-size: 12px; }
+  .md a { color: var(--vscode-textLink-foreground); text-decoration: none; } .md a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+  .md blockquote { padding: 0 0 0 10px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border)); color: var(--vscode-descriptionForeground); }
+  .md hr { border: none; border-top: 1px solid var(--vscode-panel-border); }
+  .md .tbl { overflow-x: auto; }
+  .md table { border-collapse: collapse; }
+  .md th, .md td { border: 1px solid var(--vscode-panel-border); padding: 3px 8px; text-align: left; vertical-align: top; }
+  .md th { font-weight: 600; background: var(--vscode-textCodeBlock-background); }
   .thinking { color: var(--vscode-descriptionForeground); font-style: italic; font-size: 12px; }
   .tool { font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-textCodeBlock-background); border-left: 3px solid var(--vscode-charts-blue); }
   .tool .name { font-weight: 600; }
@@ -81,6 +108,25 @@ ${glyphCss}
   .perm .btns { display: flex; gap: 6px; margin-top: 6px; }
   .perm button, .empty button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   .perm button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  /* a question from the agent: its choices as buttons, a line for an answer of your own, and the answers once given */
+  .ask { border: 1px solid var(--accent, var(--vscode-focusBorder)); border-radius: 8px; padding: 8px 10px 10px; white-space: normal; }
+  .ask .q { margin: 2px 0 8px; }
+  .ask .chip { display: inline-block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
+  .ask .t { display: block; font-weight: 600; margin-bottom: 4px; }
+  .ask .opt { display: block; width: 100%; box-sizing: border-box; text-align: left; margin: 3px 0; padding: 5px 9px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-input-background); color: var(--vscode-foreground); font-size: 12px; line-height: 1.4; }
+  .ask .opt:hover { border-color: var(--vscode-focusBorder); }
+  .ask .opt.on { border-color: var(--accent, var(--vscode-focusBorder)); background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)); }
+  .ask .opt .d { display: block; font-size: 11px; opacity: .8; }
+  .ask .other { width: 100%; box-sizing: border-box; margin: 3px 0; padding: 5px 9px; font: inherit; font-size: 12px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 6px; outline: none; }
+  .ask .other:focus { border-color: var(--vscode-focusBorder); }
+  .ask .btns { display: flex; gap: 6px; margin-top: 4px; }
+  .ask .btns button { font-size: 11px; padding: 3px 12px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .ask .btns button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .ask .btns button:disabled { opacity: .45; cursor: default; }
+  .ask.done { border-color: var(--vscode-panel-border); padding: 6px 10px; }
+  .ask.done .q { margin: 2px 0; } .ask.done .t { display: inline; font-weight: 500; margin: 0 6px 0 0; }
+  .ask.done .a { color: var(--accent, var(--vscode-textLink-foreground)); font-weight: 600; }
+  .ask.done .a.none { color: var(--vscode-descriptionForeground); font-weight: 400; }
   .empty { padding: 32px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
   .empty .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
   .empty button { font-size: 12px; padding: 4px 12px; display: inline-flex; gap: 6px; align-items: center; }
@@ -91,6 +137,12 @@ ${glyphCss}
   #composer.off { opacity: .6; }
   #input { resize: none; min-height: 22px; max-height: 180px; font-family: inherit; font-size: inherit; line-height: 1.45; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 9px 12px 7px; }
   #input::placeholder { color: var(--vscode-input-placeholderForeground); }
+  /* pasted images wait above the message */
+  #shots { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+  .shot { position: relative; flex: none; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editor-background); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot .x { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; padding: 0; border: none; border-radius: 50%; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
+  .shot .x:hover { background: #000; }
   #tools { display: flex; align-items: center; gap: 2px; padding: 3px 5px 5px 6px; border-top: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 12px; min-width: 0; }
   #tools .sp { flex: 1; min-width: 4px; }
   #tools .sep { flex: none; width: 1px; height: 16px; margin: 0 5px; background: var(--vscode-panel-border); }
@@ -180,6 +232,7 @@ ${glyphCss}
   <div id="tabs"><div id="add" title="New tab">+</div></div>
   <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div></div></div>
   <div id="composer" class="off">
+    <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
     <div id="tools">
       <button class="tb" id="t-add" title="Mention files" disabled></button>
@@ -235,8 +288,13 @@ ${glyphCss}
   function el0(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
   const RING = 2 * Math.PI * 6;
 
+  ${renderMarkdown.toString()}
+  const openTarget = (target) => vscode.postMessage({ type: 'open', target });
+  const drawn = (text) => renderMarkdown(text, document, openTarget);
+
   function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
   function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
+  const usd = (n) => (Number(n) >= 1 ? Number(n).toFixed(2) : Number(n).toFixed(3));   // a turn is often cents
   function fmtTok(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
   const cur = () => tabs.find((t) => t.id === active) || null;
 
@@ -255,27 +313,49 @@ ${glyphCss}
   // ---- panes
   function makePane(tab) {
     const root = el('div', 'pane'); root.hidden = true;
-    const bar = el('div', 'bar'), dot = el('span', 'dot'), status = el('span', 'state', 'idle');
-    bar.append(dot, status);
     const log = el('div', 'log');
-    root.append(bar, log); $panes.append(root);
-    const p = { root, log, dot, status, live: null, tools: {}, draft: '', kind: tab.kind };
+    const work = el('div', 'work'), what = el('span', 'what'), took = el('span', 'for'); work.hidden = true; work.setAttribute('role', 'status');
+    work.append(el('span', 'sp'), what, took);
+    root.append(log, work); $panes.append(root);
+    const p = { root, log, work, what, took, doing: '', asking: 0, live: null, liveText: '', tools: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
+    // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
+    log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => pin(p)).observe(log);
     panes.set(tab.id, p); return p;
   }
-  function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); const stick = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 40; p.log.append(d); if (stick) p.log.scrollTop = p.log.scrollHeight; return d; }
-  function endLive(p) { if (p.live) { p.live.remove(); p.live = null; } }
+  // While a session works, its pane says so at the foot of the transcript: what it is doing, and for how long.
+  const span = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's'; };
+  function syncWork(sid) {
+    const p = panes.get(sid), t = tabs.find((x) => x.id === sid); if (!p) return;
+    const busy = !!(t && t.busy), was = p.work.hidden;
+    p.work.hidden = !busy;
+    if (busy) {
+      p.work.className = 'work' + (p.asking ? ' ask' : '');
+      p.what.textContent = p.asking ? 'Waiting for your answer' : (p.doing || 'Working') + '…';
+      p.took.textContent = t.busySince ? span(Date.now() - t.busySince) : '';
+      if (t.queued) p.took.textContent += (p.took.textContent ? ' · ' : '') + t.queued + ' queued';
+    } else { p.doing = ''; p.asking = 0; }
+    if (was !== p.work.hidden) pin(p);
+  }
+  setInterval(() => { if (active) syncWork(active); }, 1000);
+
+  function pin(p) { if (p.stick) p.log.scrollTop = p.log.scrollHeight; }
+  function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); p.log.append(d); pin(p); return d; }
+  function endLive(p) { if (p.live) { p.live.remove(); p.live = null; } p.liveText = ''; }
 
   // ---- tabs
   function renderTabs() {
     $tabs.querySelectorAll('.tab').forEach((n) => n.remove());
     for (const t of tabs) {
       const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (t.attention ? ' attn' : ''));
-      d.title = t.title + ' · ' + t.kind;
+      d.title = t.title + ' · ' + t.kind + ' · double-click to rename';
       const k = badge(t.kind), tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
       x.title = 'Close tab';
       x.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'close', sid: t.id }); });
       d.addEventListener('click', () => { if (t.id !== active) vscode.postMessage({ type: 'activate', sid: t.id }); });
       d.addEventListener('auxclick', (e) => { if (e.button === 1) vscode.postMessage({ type: 'close', sid: t.id }); });
+      tt.addEventListener('dblclick', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'rename', sid: t.id }); });
       d.append(k, tt, b, x); $tabs.insertBefore(d, $add);
       if (t.id === active) d.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
@@ -291,11 +371,12 @@ ${glyphCss}
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); voice.delete(id); }
-    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; }
+    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; syncWork(t.id); }
     $empty.hidden = tabs.length > 0 || single;
     renderTabs();
     const p = panes.get(active);
-    if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) p.log.scrollTop = p.log.scrollHeight; }
+    if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) { p.stick = true; pin(p); } }
+    renderShots();
     syncComposer();
     applyMeter();
   }
@@ -304,14 +385,14 @@ ${glyphCss}
   // what a choice resolves to: "default · Opus 5.5" reads as "Opus 5.5", and a bare "default" as nothing
   function resolved(list, value) { const o = (list || []).map((x) => (typeof x === 'string' ? { value: x, label: x } : x)).find((x) => x.value === (value || '')); return o ? o.label.replace(/^default( · )?/, '') : String(value || ''); }
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-  const fixed = (t) => !!t && t.kind === 'codex' && t.started;     // a Codex thread keeps what it started with
 
   function syncComposer() {
     const t = cur(), claude = !!t && t.kind === 'claude';
     $composer.className = (t ? t.kind : 'off');
     $input.disabled = !t; $tAdd.disabled = !t; $tModel.disabled = !t; $tMode.disabled = !t; $tMic.disabled = !t;
     $input.placeholder = !t ? 'Open a tab with +' : t.busy ? 'Queue another message…' : claude ? 'Message Claude…' : 'Do anything';
-    $tIde.hidden = !t || claude; $sep.hidden = $tIde.hidden;
+    $input.title = t ? 'Paste an image to attach it' : '';
+    $tIde.hidden = !t; $sep.hidden = !t || claude;   // the rule before it is Codex's look
     $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
     $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
     $tSlash.hidden = !claude || !commands.claude.length;
@@ -323,12 +404,12 @@ ${glyphCss}
     $tModel.querySelector('.m').textContent = model;
     $tModel.querySelector('.e').textContent = effort;
     $tModel.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : 'subscription') + '. ' : '')
-      + (fixed(t) ? 'A Codex thread keeps the model and effort it started with.' : 'Model and effort' + (claude ? '. Changes apply from the next message.' : '. Choose before the first message.'));
+      + 'Model and effort. Changes apply from the next message.';
 
     const mode = MODES[t.mode] || [t.mode, ''];
     $tMode.innerHTML = claude ? SVG.bolt : SVG.shield; $tMode.append(el('span', null, mode[0]));
     $tMode.className = 'tb' + (t.mode === 'danger-full-access' || t.mode === 'bypassPermissions' ? ' risk' : '');
-    $tMode.title = (claude ? 'Permission mode: ' : 'Sandbox: ') + mode[1] + (claude ? '' : '. Approvals: ' + (t.approvals || 'default') + (fixed(t) ? '. A Codex thread keeps the sandbox it started with.' : ''));
+    $tMode.title = (claude ? 'Permission mode: ' : 'Sandbox: ') + mode[1] + (claude ? '' : '. Approvals: ' + (t.approvals || 'default'));
 
     const c = t.context;
     $tCtx.className = 'tb' + (c && c.percent >= 95 ? ' error' : c && c.percent >= 80 ? ' warn' : '');
@@ -393,10 +474,75 @@ ${glyphCss}
   // Enter always sends: while the agent is working, the message is queued behind the current turn. The button stops.
   function send() {
     const t = cur(); if (!t) return;
-    const text = $input.value; if (!text.trim()) return;
+    const p = panes.get(active), shots = p ? p.shots : [];
+    const text = $input.value; if (!text.trim() && !shots.length) return;
     closeMenu();
-    vscode.postMessage({ type: 'send', sid: active, text }); $input.value = ''; panes.get(active).draft = ''; grow();
+    vscode.postMessage(Object.assign({ type: 'send', sid: active, text }, shots.length ? { images: shots.map((s) => Object.assign({ mime: s.mime, data: s.data }, s.thumb ? { thumb: s.thumb } : {})) } : {}));
+    $input.value = ''; p.draft = ''; p.shots = []; grow(); renderShots();
   }
+
+  // ---- pasted images. They wait above the message and go with it. A large one is scaled down first: the agents take
+  // images up to a size, and a full-screen capture of a large display is over it.
+  const $shots = $('shots');
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_SHOTS = 8, MAX_SIDE = 2000, MAX_CHARS = 5000000, THUMB_SIDE = 320;
+  const parts = (url) => { const at = url.indexOf(','), head = url.slice(5, at); return head.endsWith(';base64') ? { mime: head.slice(0, -7), data: url.slice(at + 1) } : null; };
+  function renderShots() {
+    const p = panes.get(active), list = p ? p.shots : [];
+    $shots.textContent = ''; $shots.hidden = !list.length;
+    for (const s of list) {
+      const d = el('span', 'shot'); d.title = s.name + (s.width ? ' · ' + s.width + '×' + s.height : '');
+      const i = document.createElement('img'); i.alt = s.name; i.src = 'data:' + s.mime + ';base64,' + s.data;
+      const x = el('button', 'x', '×'); x.title = 'Remove'; x.type = 'button';
+      x.addEventListener('click', (e) => { e.stopPropagation(); p.shots = p.shots.filter((q) => q !== s); renderShots(); $input.focus(); });
+      d.append(i, x); $shots.append(d);
+    }
+  }
+  function readImage(file) {
+    return new Promise((resolve) => {
+      const r = new FileReader();
+      r.onerror = () => resolve(null);
+      r.onload = () => { const got = typeof r.result === 'string' ? parts(r.result) : null; resolve(got && got.data ? fit(file, Object.assign(got, { mime: file.type, name: file.name || 'image' })) : null); };
+      r.readAsDataURL(file);
+    });
+  }
+  async function fit(file, shot) {
+    if (typeof createImageBitmap !== 'function') return shot;
+    let bmp; try { bmp = await createImageBitmap(file); } catch (_) { return shot; }
+    shot.width = bmp.width; shot.height = bmp.height;
+    // a small rendering for the transcript, where the message shows it; the image itself is not kept there
+    try { const t = document.createElement('canvas'), tk = Math.min(1, THUMB_SIDE / Math.max(bmp.width, bmp.height)); t.width = Math.max(1, Math.round(bmp.width * tk)); t.height = Math.max(1, Math.round(bmp.height * tk)); const tc = t.getContext('2d'); if (tc) { tc.drawImage(bmp, 0, 0, t.width, t.height); shot.thumb = t.toDataURL('image/jpeg', 0.7); } } catch (_) { /* no thumbnail: the message says how many images */ }
+    const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    if (k === 1 && shot.data.length <= MAX_CHARS) return shot;
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    const ctx = c.getContext('2d'); if (!ctx) return shot;
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    let got = parts(c.toDataURL('image/png'));
+    if (!got || got.data.length > MAX_CHARS) got = parts(c.toDataURL('image/jpeg', 0.85));
+    return got && got.data ? Object.assign(shot, got, { width: c.width, height: c.height }) : shot;
+  }
+  async function addShots(sid, files) {
+    const p = panes.get(sid); if (!p) return;
+    let over = 0, bad = 0;
+    for (const f of files) {
+      if (p.shots.length >= MAX_SHOTS) { over++; continue; }
+      const s = await readImage(f);
+      if (!panes.has(sid)) return;                       // the tab was closed while the image was being read
+      if (!s || s.data.length > MAX_CHARS) { bad++; continue; }
+      if (p.shots.length >= MAX_SHOTS) { over++; continue; }
+      p.shots.push(s);
+      if (sid === active) renderShots();
+    }
+    if (bad) add(p, 'status', bad + (bad > 1 ? ' images' : ' image') + ' could not be attached: unreadable, or still over 5 MB after scaling');
+    if (over) add(p, 'status', 'A message takes ' + MAX_SHOTS + ' images; ' + over + ' left out');
+  }
+  // a paste that carries an image attaches it; any other paste is text, as usual
+  $input.addEventListener('paste', (e) => {
+    const t = cur(), cd = e.clipboardData; if (!t || !cd) return;
+    const files = Array.from(cd.items || []).filter((i) => i.kind === 'file' && IMAGE_TYPES.includes(i.type)).map((i) => i.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    e.preventDefault();
+    addShots(t.id, files);
+  });
   $send.addEventListener('click', () => { const t = cur(); if (!t) return; if (t.busy) vscode.postMessage({ type: 'stop', sid: active }); else send(); });
   $input.addEventListener('keydown', (e) => {
     if (menu && menuOwner === 'slash' && (e.key === 'Enter' || e.key === 'Tab')) { const first = menu.querySelector('.it:not(.dis)'); if (first) { e.preventDefault(); first.click(); return; } }
@@ -411,7 +557,7 @@ ${glyphCss}
     else if (menuOwner === 'slash' && menu && menu.dataset.typed) closeMenu();
   });
   $tAdd.addEventListener('click', () => { if (cur()) vscode.postMessage({ type: 'attach', sid: active }); });
-  $tIde.addEventListener('click', () => { const t = cur(); if (t && t.kind === 'codex') vscode.postMessage({ type: 'setIde', sid: t.id, value: !t.ide }); });
+  $tIde.addEventListener('click', () => { const t = cur(); if (t) vscode.postMessage({ type: 'setIde', sid: t.id, value: !t.ide }); });
 
   // ---- menus
   function closeMenu() { if (menu) { menu.remove(); menu = null; menuOwner = null; } }
@@ -441,8 +587,7 @@ ${glyphCss}
   $tModel.addEventListener('click', (e) => {
     e.stopPropagation(); const t = cur(); if (!t) return;
     openMenu('model', $tModel, (m) => {
-      const lock = fixed(t);
-      if (lock) m.append(el('div', 'note', 'This thread keeps the model and effort it started with. Open a new tab to change them.'));
+      const lock = false;
       m.append(el('div', 'h', 'Model'));
       for (const o of norm(t.models)) m.append(item(o.label, { radio: true, checked: o.value === (t.model || ''), disabled: lock, desc: o.title && o.value ? o.title : '', pick: () => vscode.postMessage({ type: 'setModel', sid: t.id, value: o.value }) }));
       const effs = norm(t.efforts);
@@ -455,8 +600,7 @@ ${glyphCss}
   $tMode.addEventListener('click', (e) => {
     e.stopPropagation(); const t = cur(); if (!t) return;
     openMenu('mode', $tMode, (m) => {
-      const lock = fixed(t);
-      if (lock) m.append(el('div', 'note', 'This thread keeps the sandbox it started with. Open a new tab to change it.'));
+      const lock = false;
       m.append(el('div', 'h', t.kind === 'claude' ? 'Permission mode' : 'Sandbox'));
       for (const v of (t.modes || [])) { const d = MODES[v] || [v, '']; m.append(item(d[0], { radio: true, checked: v === t.mode, disabled: lock, desc: d[1], pick: () => vscode.postMessage({ type: 'setMode', sid: t.id, value: v }) })); }
       if (t.kind === 'codex') m.append(el('div', 'note', 'Approvals: ' + (t.approvals || 'default') + '. Set with perch.codex.approvalPolicy.'));
@@ -505,13 +649,25 @@ ${glyphCss}
   // ---- transcript events
   function onEvent(sid, m) {
     const p = panes.get(sid); if (!p) return;
+    // what it is doing now, for the line at the foot of the transcript
+    const doing = { delta: 'Writing', text: 'Working', thinking: 'Thinking', tool_result: 'Working', user: 'Working' }[m.kind];
+    if (doing) p.doing = doing; else if (m.kind === 'tool_start' || m.kind === 'tool_use') p.doing = 'Running ' + m.name;
+    if (m.kind === 'permission' || m.kind === 'question') p.asking++; else if (m.kind === 'clear') { p.asking = 0; p.doing = ''; }
     if (m.kind === 'voice') { if (m.phase === 'idle') voice.delete(sid); else voice.set(sid, m); if (sid === active) syncComposer(); return; }
     switch (m.kind) {
-      case 'user': { endLive(p); const d = add(p, 'user' + (m.queued ? ' queued' : ''), ''); const tags = [m.queued ? 'queued' : '', m.tag || ''].filter(Boolean); if (tags.length) d.append(el('span', 'tag', tags.join(' · '))); d.append(m.text); break; }
-      case 'delta': if (!p.live) p.live = add(p, 'assistant live', ''); p.live.textContent += m.text; p.log.scrollTop = p.log.scrollHeight; break;
-      case 'text': endLive(p); add(p, 'assistant', m.text); break;
+      case 'user': {
+        endLive(p); const d = add(p, 'user' + (m.queued ? ' queued' : ''), '');
+        const thumbs = Array.isArray(m.thumbs) ? m.thumbs.filter((t) => typeof t === 'string' && /^data:image\\/(png|jpeg|webp);base64,/.test(t)) : [];
+        const unseen = (m.images || 0) - thumbs.length;    // images with no thumbnail are counted instead
+        const tags = [m.queued ? 'queued' : '', unseen > 0 ? unseen + (unseen > 1 ? ' images' : ' image') : '', m.tag || ''].filter(Boolean);
+        if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
+        if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; row.append(i); } d.append(row); }
+        d.append(m.text); break; }
+      case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); break;
+      case 'text': endLive(p); add(p, 'assistant md', '').append(drawn(m.text)); break;
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
-      case 'tool_use': { endLive(p); const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input))); if (m.id) p.tools[m.id] = d; break; }
+      case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
+        const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input))); if (m.id) p.tools[m.id] = d; break; }
       case 'tool_result': { const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : '')); const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d); break; }
       case 'permission': {
         endLive(p); const d = add(p, 'perm', ''); const head = el('div'); head.append(el('b', null, 'Allow '), el('span', null, m.tool), '?');
@@ -519,20 +675,68 @@ ${glyphCss}
         for (const [dec, label, cls] of [['allow', 'Allow', 'primary'], ['always', 'Always', ''], ['deny', 'Deny', '']]) {
           if (dec === 'always' && !m.hasSuggestions) continue;
           const b = el('button', cls, label);
-          b.addEventListener('click', () => { vscode.postMessage({ type: 'permission', sid, id: m.id, decision: dec }); d.className = 'msg status'; d.textContent = m.tool + ': ' + dec; });
+          b.addEventListener('click', () => { vscode.postMessage({ type: 'permission', sid, id: m.id, decision: dec }); d.className = 'msg status'; d.textContent = m.tool + ': ' + dec; p.asking = Math.max(0, p.asking - 1); syncWork(sid); });
           btns.append(b);
         }
-        d.append(head, el('div', 'in', fmtIn(m.input)), btns); p.log.scrollTop = p.log.scrollHeight; break; }
-      case 'result': { endLive(p); const u = m.usage || {}; add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.cost !== undefined ? ' · $' + Number(m.cost).toFixed(2) : '')); break; }
+        d.append(head, el('div', 'in', fmtIn(m.input)), btns); p.stick = true; break; }
+      case 'question': { endLive(p); asking(add(p, 'ask', ''), m, sid, p); p.stick = true; break; }
+      case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
+      case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' : m.cost !== undefined ? ' · session \u2248$' + usd(m.cost) : '') + ((m.costTurn !== undefined || m.cost !== undefined) && cur() && cur().backend === 'subscription' ? ' at API rates' : ''));
+        if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far \u2248$' + usd(m.cost) + '.' : 'What the whole conversation so far would cost at Anthropic\\'s API list prices, as Claude Code reckons it.') + (cur() && cur().backend === 'subscription' ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : ''); break; }
       case 'note': endLive(p); add(p, 'status', m.text); break;
-      case 'status': p.status.textContent = m.text; break;
-      case 'session': p.status.title = 'session ' + m.id; break;
-      case 'busy': p.dot.className = 'dot' + (m.busy ? ' busy' : ''); break;
+      case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); add(p, 'error', m.text); break;
-      case 'clear': p.log.textContent = ''; p.live = null; p.tools = {}; break;
+      case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; break;
       case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
       case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
     }
+    syncWork(sid);
+    pin(p);
+  }
+
+  // ---- a question from the agent. Each question is answered by a choice or a line of your own; all are sent together.
+  function answered(d, questions, answers) {
+    for (const q of questions || []) {
+      if (!q) continue;
+      const row = el('div', 'q'); if (q.header) row.append(el('span', 'chip', q.header), ' ');
+      row.append(el('span', 't', q.question || ''));
+      const a = answers ? answers[q.question] : undefined;
+      row.append(el('span', 'a' + (a ? '' : ' none'), a || (answers ? 'not answered' : '')));
+      d.append(row);
+    }
+  }
+  function asking(d, m, sid, p) {
+    const qs = (m.questions || []).filter((q) => q && typeof q.question === 'string');
+    const picks = qs.map(() => new Set()), others = qs.map(() => ''), marks = [];
+    const send = el('button', 'primary', qs.length > 1 ? 'Answer all' : 'Answer'), skip = el('button', null, 'Skip');
+    const ready = () => qs.every((q, i) => picks[i].size || others[i].trim());
+    const refresh = () => { for (const f of marks) f(); send.disabled = !ready(); };
+    const answers = () => { const out = {}; qs.forEach((q, i) => { out[q.question] = [...(q.options || []).filter((o) => o && picks[i].has(o.label)).map((o) => o.label), others[i].trim()].filter(Boolean).join(', '); }); return out; };
+    const finish = (decision) => {
+      vscode.postMessage(decision === 'answer' ? { type: 'permission', sid, id: m.id, decision, answers: answers() } : { type: 'permission', sid, id: m.id, decision });
+      d.textContent = '';
+      if (decision === 'answer') { d.className = 'msg ask done'; answered(d, qs, answers()); } else { d.className = 'msg status'; d.textContent = 'question skipped'; }
+      p.asking = Math.max(0, p.asking - 1); syncWork(sid);
+    };
+    qs.forEach((q, i) => {
+      const sec = el('div', 'q'); if (q.header) sec.append(el('span', 'chip', q.header));
+      sec.append(el('span', 't', q.question));
+      for (const o of (q.options || [])) {
+        if (!o || typeof o.label !== 'string') continue;
+        const b = el('button', 'opt'); b.type = 'button'; b.append(el('span', 'l', o.label)); if (o.description) b.append(el('span', 'd', o.description));
+        b.addEventListener('click', (e) => { e.stopPropagation(); if (q.multiSelect) { if (picks[i].has(o.label)) picks[i].delete(o.label); else picks[i].add(o.label); } else { picks[i] = new Set([o.label]); others[i] = ''; inp.value = ''; } refresh(); });
+        marks.push(() => b.classList.toggle('on', picks[i].has(o.label)));
+        sec.append(b);
+      }
+      const inp = el('input', 'other'); inp.type = 'text'; inp.placeholder = q.multiSelect ? 'Something else, as well or instead…' : 'Something else…';
+      inp.addEventListener('input', () => { others[i] = inp.value; if (!q.multiSelect && inp.value.trim()) picks[i].clear(); refresh(); });
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && ready()) { e.preventDefault(); finish('answer'); } });
+      inp.addEventListener('click', (e) => e.stopPropagation());
+      sec.append(inp); d.append(sec);
+    });
+    send.addEventListener('click', (e) => { e.stopPropagation(); if (ready()) finish('answer'); });
+    skip.addEventListener('click', (e) => { e.stopPropagation(); finish('deny'); });
+    const btns = el('div', 'btns'); btns.append(send, skip); d.append(btns); refresh();
   }
 
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.

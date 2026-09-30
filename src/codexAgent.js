@@ -3,6 +3,11 @@
 // The SDK is non-interactive: approvals resolve by policy and sandbox, so there
 // is no permission callback here, unlike the Claude side.
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
+
 class CodexAgent {
   /**
    * @param {object} opts
@@ -13,15 +18,20 @@ class CodexAgent {
    * @param {string} [opts.model]
    * @param {string} [opts.reasoningEffort]
    * @param {string} [opts.resume]   thread id to resume
+   * @param {string} [opts.executable]  path to a codex program, in place of the one that comes with the SDK
    */
   constructor(opts) {
     this.opts = opts;
     this.emit = opts.emit;
     this.thread = null;
+    this.codex = null;
+    this.changed = false;            // the model, effort, or sandbox was changed since the thread last ran
     this.threadId = opts.resume || null;
     this.running = false;
     this.lastAnswer = '';
     this.turnAbort = null;
+    this.imageDir = null;            // Codex takes an image as a file: pasted ones are written here, and removed with the agent
+    this.imageCount = 0;
     this.ready = this._init();
   }
 
@@ -29,7 +39,13 @@ class CodexAgent {
     let sdk;
     try { sdk = await import('@openai/codex-sdk'); }
     catch (err) { this.emit({ kind: 'error', text: 'Codex SDK not installed: ' + err.message + '. Run `make deps` in /git/perch.' }); return false; }
-    const codex = new sdk.Codex();
+    this.codex = new sdk.Codex(this.opts.executable ? { codexPathOverride: this.opts.executable } : {});
+    this._thread();
+    this.emit({ kind: 'status', text: 'ready' });
+    return true;
+  }
+
+  _options() {
     const topts = {
       workingDirectory: this.opts.cwd,
       skipGitRepoCheck: true,
@@ -38,27 +54,45 @@ class CodexAgent {
     };
     if (this.opts.model) topts.model = this.opts.model;
     if (this.opts.reasoningEffort) topts.modelReasoningEffort = this.opts.reasoningEffort;
-    this.thread = this.threadId ? codex.resumeThread(this.threadId, topts) : codex.startThread(topts);
-    this.emit({ kind: 'status', text: 'ready' });
-    return true;
+    return topts;
   }
+
+  /**
+   * The thread as its next turn will run it. Codex runs each turn as a process of its own, given the thread to carry
+   * on and how to run: so a thread is carried on under a new model, effort, or sandbox by taking it up again with them.
+   */
+  _thread() {
+    if (this.thread && !this.changed) return this.thread;
+    const id = this.threadId || (this.thread && this.thread.id) || null;
+    this.thread = id ? this.codex.resumeThread(id, this._options()) : this.codex.startThread(this._options());
+    this.changed = false;
+    return this.thread;
+  }
+
+  // Each applies from the next turn; a turn that is running finishes as it began. An empty value is Codex's own default.
+  setModel(model) { this.opts.model = model || undefined; this.changed = true; }
+  setEffort(level) { this.opts.reasoningEffort = level || undefined; this.changed = true; }
+  setSandboxMode(mode) { this.opts.sandboxMode = mode || undefined; this.changed = true; }
 
   /**
    * @param {string} text   what the agent receives
    * @param {{text: string, tag?: string}} [shown]  what the transcript shows, when that differs (IDE context is attached to
    *   the message but not repeated in the transcript)
+   * @param {{mime: string, data: string}[]} [images]  base64
    */
-  async send(text, shown) {
-    if (!text || !text.trim()) return;
+  async send(text, shown, images) {
+    text = String(text || '');
+    const pics = Array.isArray(images) ? images : [];
+    if (!text.trim() && !pics.length) return;
     if (!(await this.ready)) return;
     if (this.running) { this.emit({ kind: 'error', text: 'Codex is still working on the previous turn.' }); return; }
     this.running = true;
     this.turnAbort = new AbortController();
-    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text }, shown && shown.tag ? { tag: shown.tag } : {}));
+    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text }, pics.length ? { images: pics.length } : {}, shown && shown.tag ? { tag: shown.tag } : {}));
     this.emit({ kind: 'busy', busy: true });
     const t0 = Date.now();
     try {
-      const { events } = await this.thread.runStreamed(text, { signal: this.turnAbort.signal });
+      const { events } = await this._thread().runStreamed(pics.length ? this._input(text, pics) : text, { signal: this.turnAbort.signal });
       for await (const e of events) this._onEvent(e, t0);
     } catch (err) {
       if (!(this.turnAbort && this.turnAbort.signal.aborted)) this.emit({ kind: 'error', text: String(err && err.message || err) });
@@ -104,7 +138,7 @@ class CodexAgent {
             if (final) this.emit({ kind: 'status', text: 'plan: ' + (it.items || []).map((t) => (t.completed ? '[x] ' : '[ ] ') + t.text).join(' · ') });
             return;
           case 'error':
-            this.emit({ kind: 'error', text: it.message || 'error' });
+            this._said(it.message || 'error');
             return;
           default:
             return;
@@ -119,15 +153,33 @@ class CodexAgent {
         this.emit({ kind: 'result', ok: false, duration_ms: Date.now() - t0, error: e.error && e.error.message });
         return;
       case 'error':
-        this.emit({ kind: 'error', text: e.message });
+        this._said(e.message);
         return;
       default:
         return;
     }
   }
 
+  /** Codex says that a thread is being carried on under another model as an error. It is the user's own choice: a note. */
+  _said(text) { this.emit({ kind: /^This session was recorded with model /.test(String(text)) ? 'note' : 'error', text: String(text) }); }
+
+  /** A message with images, in the form the SDK takes: the text, then each image as a file of its own. */
+  _input(text, pics) {
+    if (!this.imageDir) this.imageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-images-'));
+    const input = text.trim() ? [{ type: 'text', text }] : [];
+    for (const p of pics) {
+      const file = path.join(this.imageDir, String(++this.imageCount) + (EXT[p.mime] || '.png'));
+      fs.writeFileSync(file, Buffer.from(p.data, 'base64'), { mode: 0o600 });
+      input.push({ type: 'local_image', path: file });
+    }
+    return input;
+  }
+
   async interrupt() { if (this.turnAbort && this.running) this.turnAbort.abort(); }
-  dispose() { if (this.turnAbort) this.turnAbort.abort(); }
+  dispose() {
+    if (this.turnAbort) this.turnAbort.abort();
+    if (this.imageDir) { try { fs.rmSync(this.imageDir, { recursive: true, force: true }); } catch (_) { /* the OS clears its temp directory */ } this.imageDir = null; }
+  }
 }
 
 module.exports = { CodexAgent };

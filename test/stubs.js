@@ -24,6 +24,7 @@ const CODEX_LIMITS = (a, b) => [{ kind: 'session', label: '5h', name: '5h sessio
 const flush = () => new Promise((r) => setImmediate(r));   // lets the async catalog load settle
 const realMeter = origLoad.call(Module, require.resolve('../src/meter.js'), module, false);
 const realModels = origLoad.call(Module, require.resolve('../src/models.js'), module, false);   // the loaders are faked; the pure helpers are real
+const realStore = origLoad.call(Module, require.resolve('../src/sessionStore.js'), module, false);   // the records are faked; names and times are real
 const HOUR = 3600000;
 const LIMITS = () => [{ kind: 'session', percent: 9, resetsAt: new Date(Date.now() + HOUR + 60000).toISOString(), model: null }, { kind: 'weekly_all', percent: 5, resetsAt: new Date(Date.now() + 150 * HOUR).toISOString(), model: null }];
 
@@ -33,11 +34,13 @@ const engines = [];   // every FakeEngine constructed, in order
 // the tests get a turn that is still running. As Claude it queues further messages itself, as the real agent does.
 class FakeAgent {
   constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
-  send(t, shown) {
-    this.sent.push(t);
+  send(t, a, b) {
+    const shown = this.claude ? b : a, images = (this.claude ? a : b) || [];   // the two agents take their arguments as the real ones do
+    this.sent.push(t); (this.images = this.images || []).push(images);
+    const n = images.length ? { images: images.length } : {};
     if (shown) { this.shownAs = this.shownAs || []; this.shownAs.push(shown); t = Object.assign(new String(t), { shown }); }
-    if (this.running) { this.emit({ kind: 'user', text: t, queued: true }); this.waiting.push(t); return; }   // only Claude is ever sent a message mid-turn
-    this.emit(Object.assign({ kind: 'user', text: t.shown ? t.shown.text : String(t), queued: false }, t.shown && t.shown.tag ? { tag: t.shown.tag } : {}));
+    if (this.running) { this.emit(Object.assign({ kind: 'user', text: t, queued: true }, n)); this.waiting.push(t); return; }   // only Claude is ever sent a message mid-turn
+    this.emit(Object.assign({ kind: 'user', text: t.shown ? t.shown.text : String(t), queued: false }, n, t.shown && t.shown.tag ? { tag: t.shown.tag } : {}));
     this.begin(String(t));
   }
   begin(t) {
@@ -61,12 +64,21 @@ class FakeAgent {
   finish() { if (this.held) this.answer(this.held); }
   interrupt() { this.interrupted++; this.waiting = []; if (this.running) { this.running = false; this.held = null; this.emit({ kind: 'busy', busy: false }); } }
   setPermissionMode(m) { this.modes.push(m); }
+  setSandboxMode(m) { this.modes.push(m); }
   setEffort(e) { this.efforts.push(e); }
   setModel(m) { this.models.push(m); }
   dispose() { this.disposed = true; }
 }
 
-function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote } = {}) {
+function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past } = {}) {
+  // the agents' own records of past sessions: what they list, and every name written to them
+  const store = Object.assign({ sessions: [], failed: [], renamed: [], lists: [], failRename: null, transcripts: {}, loads: [] }, past);
+  store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
+  const fakeStore = Object.assign({}, realStore, {
+    listSessions: async (o) => { store.lists.push(o); return { sessions: store.sessions.map((x) => Object.assign({}, x)), failed: store.failed.slice() }; },
+    loadTranscript: async (kind, id, o) => { store.loads.push([kind, id, o]); const t = store.transcripts[id]; if (t instanceof Error) throw t; return t ? JSON.parse(JSON.stringify(t)) : { events: [], earlier: 0 }; },
+    renameSession: async (kind, id, title, o) => { const name = realStore.cleanTitle(title); if (!name) throw new Error('A session name cannot be empty.'); if (store.failRename) throw new Error(store.failRename); store.renamed.push([kind, id, name, o]); for (const x of store.sessions) if (x.kind === kind && x.id === id) { x.title = name; x.named = true; } return name; },
+  });
   const cfgBox = Object.assign({}, config);                 // mutable, so a test can change a setting and fire the change event
   const cats = Object.assign({}, CATALOGS, catalogs);     // pass { claude: null } to simulate an agent that cannot list models
   const loads = { claude: 0, codex: 0 };
@@ -105,7 +117,20 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] } };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [] }, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null };
+  // a list with a search box: the test chooses a row, or presses the button on one
+  const makeList = () => {
+    const on = { accept: [], button: [], hide: [] };
+    const qp = { title: '', placeholder: '', busy: false, items: [], selectedItems: [], shown: false, disposed: false,
+      onDidAccept: (f) => { on.accept.push(f); return { dispose() {} }; }, onDidTriggerItemButton: (f) => { on.button.push(f); return { dispose() {} }; }, onDidHide: (f) => { on.hide.push(f); return { dispose() {} }; },
+      show() { this.shown = true; }, hide() { if (!this.shown) return; this.shown = false; for (const f of on.hide) f(); }, dispose() { this.disposed = true; },
+      // test helpers
+      rows() { return this.items.map((i) => [i.label, i.description]); },
+      choose(find) { this.selectedItems = [this.items.find(find)].filter(Boolean); for (const f of on.accept) f(); },
+      press(find, n) { const item = this.items.find(find); return Promise.all(on.button.map((f) => f({ item, button: item.buttons[n || 0] }))); },
+    };
+    ui.lists.push(qp); return qp;
+  };
   // an editor tab: a page of its own, which VS Code can hide, focus, close, and bring back after a reload
   const makePanel = (viewType, title, show, options) => {
     const got = []; let onMsg = () => {}; const gone = [], changed = [];
@@ -133,11 +158,17 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never' }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
+      createQuickPick: () => makeList(),
+      // every editor tab of Perch's: those with a page, and those VS Code has kept without one until they are shown
+      tabGroups: { get activeTabGroup() { return ui.group ? ui.group() : this.all[0]; }, get all() { return [{ viewColumn: 2, tabs: [...ui.waiting, ...ui.panels.filter((p) => !p.disposed).map((p) => ({ label: p.title, input: { viewType: 'mainThreadWebview-' + p.viewType } })), { label: 'a.js', input: { uri: {} } }, { label: 'Other', input: { viewType: 'mainThreadWebview-other.view' } }] }]; },
+        close: async (t) => { ui.closedTabs.push(t.label); const i = ui.waiting.indexOf(t); if (i >= 0) ui.waiting.splice(i, 1); return true; } },
+      showTextDocument: async (doc, o) => { ui.columns.push(o && o.viewColumn); ui.opened.push([doc.uri.fsPath, o && o.selection ? [o.selection.a, o.selection.c] : null]); },
+      showInputBox: async (o) => { ui.asked.push(o); return ui.inputs.shift(); },
       createStatusBarItem: (id, align, prio) => { const it = { id, prio, text: '', tooltip: '', shown: false, disposed: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() { this.disposed = true; this.shown = false; } }; ui.bars.push(it); return it; },
       withProgress: async (o, task) => { ui.progress.push(o.title); return task({ report: (r) => ui.progress.push(r.message) }); },
       showOpenDialog: async (o) => { ui.dialogs.push(o); return ui.picked; },
@@ -156,8 +187,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     StatusBarAlignment: { Left: 1, Right: 2 },
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
     ThemeColor: class { constructor(id) { this.id = id; } },
+    ThemeIcon: class { constructor(id) { this.id = id; } },
+    Range: class { constructor(a, b, c, d) { Object.assign(this, { a, b, c, d }); } },
     MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } appendCodeblock(v) { this.value += '\n```\n' + v + '\n```\n'; return this; } },
-    Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), fsPath: [base.path, ...parts].join('/') }) },
+    Uri: { file: (p) => ({ path: p, fsPath: p }), joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), fsPath: [base.path, ...parts].join('/') }) },
   };
   Module._load = function (req, parent, isMain) {
     if (req === 'vscode') return vscodeStub;
@@ -165,6 +198,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
     if (req === './meter') return Object.assign({}, realMeter, { createMeter: () => fakeMeter });   // real formatting and summary, fake machine
     if (req === './voice') return { VoiceEngine: FakeEngine, DEFAULT_HOME: '/home/u/.local/share/perch/voice' };
+    if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
@@ -177,9 +211,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const globalState = makeMemento(globals);
   const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, extensionUri: { path: '/ext/fennets.perch' } });
   const changeConfig = (patch) => { Object.assign(cfgBox, patch); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => Object.keys(patch).some((k) => ('perch.' + k).startsWith(sec)) }); };
+  const waitingTab = (label) => { const t = { label, input: { viewType: 'mainThreadWebview-perch.session' } }; ui.waiting.push(t); return t; };
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
-  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, vbox, abox };
+  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, vbox, abox, store };
 }
 
 function fakeView() {

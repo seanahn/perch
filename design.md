@@ -1,6 +1,6 @@
 # perch: design
 
-Version 0.6.0, 2026-09-29. This document describes perch as built, the
+Version 0.6.0, 2026-09-30. This document describes perch as built, the
 reasons behind its shape, and what has and has not been verified. Setup
 and everyday use are in [README.md](README.md).
 
@@ -8,21 +8,22 @@ and everyday use are in [README.md](README.md).
 
 1. [Purpose](#1-purpose)
 2. [Why a shell and not an agent](#2-why-a-shell-and-not-an-agent)
-3. [Architecture](#3-architecture)
-4. [Sessions and surfaces](#4-sessions-and-surfaces)
-5. [State, replay, and persistence](#5-state-replay-and-persistence)
-6. [The page protocol](#6-the-page-protocol)
-7. [The agents](#7-the-agents)
-8. [Model catalogs](#8-model-catalogs)
-9. [The composer](#9-the-composer)
-10. [Usage meters](#10-usage-meters)
-11. [Dictation](#11-dictation)
-12. [Security and privacy](#12-security-and-privacy)
-13. [Testing](#13-testing)
-14. [Verified and not verified](#14-verified-and-not-verified)
-15. [Limitations and open work](#15-limitations-and-open-work)
-16. [Decision log](#16-decision-log)
-17. [References](#17-references)
+3. [Token economy: how the reuse is achieved](#3-token-economy-how-the-reuse-is-achieved)
+4. [Architecture](#4-architecture)
+5. [Sessions and surfaces](#5-sessions-and-surfaces)
+6. [State, replay, and persistence](#6-state-replay-and-persistence)
+7. [The page protocol](#7-the-page-protocol)
+8. [The agents](#8-the-agents)
+9. [Model catalogs](#9-model-catalogs)
+10. [The composer](#10-the-composer)
+11. [Usage meters](#11-usage-meters)
+12. [Dictation](#12-dictation)
+13. [Security and privacy](#13-security-and-privacy)
+14. [Testing](#14-testing)
+15. [Verified and not verified](#15-verified-and-not-verified)
+16. [Limitations and open work](#16-limitations-and-open-work)
+17. [Decision log](#17-decision-log)
+18. [References](#18-references)
 
 ## 1. Purpose
 
@@ -33,6 +34,13 @@ like its vendor's own panel.
 It exists because running two vendor extensions means two panels, two
 sets of habits, and no way to pass work between them, while the tools
 that do unify models do it by replacing the agent.
+
+The reason it is written this way, rather than adopting Continue or
+another harness that already unifies models, is token usage. perch reuses
+the vendors' own agents, the Claude Code CLI and the Codex CLI, whole:
+their prompt layout, their caching, their compaction, their logins. It
+adds no request of its own. Section 2 argues the choice; section 3 sets
+out how the reuse is achieved and what it was measured to cost.
 
 ## 2. Why a shell and not an agent
 
@@ -88,7 +96,135 @@ own caching against OpenAI's API.
   arrangement. Distributing perch to others would require API-key
   billing under both vendors' terms.
 
-## 3. Architecture
+## 3. Token economy: how the reuse is achieved
+
+### What a turn costs
+
+An agent's turn is a loop of model calls, one per step, and each call
+carries the whole conversation: system prompt, tool definitions, every
+message and tool result so far, then the new step. The cost of a turn is
+therefore dominated by the size of the conversation, not by what the
+user just typed. Two things keep it affordable:
+
+- **Prompt caching.** A call whose prefix is byte-identical to a recent
+  one is billed at 0.1 times the input rate for the cached part; writing
+  the cache costs 1.25 times. On a subscription the cache lives an hour
+  after each answer; on the API, Bedrock, Vertex, or Foundry, five
+  minutes. With a 100k-token conversation, a cached step bills the
+  equivalent of about 10k input tokens; a cold one about 125k. The whole
+  economy of a long session rests on staying cached.
+- **Compaction.** When the conversation nears the window, the agent
+  summarises it. Done well, the summary keeps what the rest of the task
+  needs; done badly, or too often, the model re-reads files it had.
+
+Caching needs the prefix to be stable, so it is a property of how the
+agent lays out and reuses the prompt. Compaction needs judgement about
+the task, so it is a property of the agent too. perch's approach is to
+own neither: it runs each vendor's agent as the vendor's own terminal
+would, and only shows what happens.
+
+### The mechanisms
+
+1. **No request of perch's own.** perch never assembles a prompt, never
+   inserts a system message, never re-renders a context provider near
+   the front of the conversation. The prompt an agent sends from a perch
+   tab is the prompt it would send from a terminal, so its cache hits
+   are the terminal's cache hits. Everything the page shows is derived
+   from the agent's event stream, not requested from a model.
+
+2. **One conversation per tab, kept alive.** A Claude tab is one Claude
+   Code process fed messages over its lifetime (the SDK's streaming-input
+   mode). Every turn extends the same conversation, so the prefix grows
+   at the end and the cache written by one turn is read by the next. A
+   message sent mid-turn is queued in that same process, not sent as a
+   new conversation. Mode and effort changes are applied to the running
+   session rather than by restarting it.
+
+3. **A Codex thread continued, not replayed.** The Codex SDK runs each
+   turn as a `codex exec` process that resumes the thread by id. What
+   goes to the model is the thread as Codex itself recorded it, with the
+   same prefix each time, so OpenAI's prefix caching applies as it does
+   from the Codex CLI. A model, effort, or sandbox change is made by
+   taking the thread up again with the new setting; Codex then compacts
+   once, which is the one token cost of switching.
+
+4. **Resume by the agent's own id.** A tab that is reopened, or brought
+   back after a window reload, hands the agent its session id. The agent
+   continues the transcript it kept, with its own compaction state. perch
+   does not re-send history, summarise it, or hold a copy that could
+   drift from the agent's. The transcript the page shows after a resume
+   is read from the agent's file on disk: a file read, no tokens.
+
+5. **The system prompt is the SDK's, which is smaller.** Started through
+   the Agent SDK without a `systemPrompt` option, Claude Code runs with
+   the SDK's default prompt rather than the full Claude Code prompt.
+   Measured on 2026-09-30 with a one-line question on Haiku: **15,226
+   tokens** written to the cache on the first turn as perch runs it,
+   against **21,581** with `systemPrompt: { type: 'preset', preset:
+   'claude_code' }`. The difference is paid once per session and again on
+   every cache miss. What is lost is Claude Code's own guidance on how to
+   work; `CLAUDE.md`, settings, skills, hooks, and MCP servers are still
+   loaded, because the SDK loads all setting sources by default.
+   Switching to the preset is one line in `src/claudeAgent.js` if parity
+   with the terminal matters more than the tokens.
+
+6. **Nothing else perch does touches a model.** Opening a tab starts no
+   process. Model lists come from a Claude Code process started without
+   a message, and from Codex's `models_cache.json`. The sessions list,
+   renaming, and the transcript reader work on the agents' files.
+   Context usage is asked of the running Claude process locally. Claude's
+   usage gauge reads Anthropic's usage endpoint, which reports limits and
+   costs no tokens; Codex's is read from the last `token_count` event in
+   its session files. Dictation is local Whisper.
+
+7. **No shared context between tabs.** Two tabs are two conversations.
+   The only bridge, handoff, pastes one tab's last answer into another's
+   message box, so the receiving agent sees a message, not a transplanted
+   history that would invalidate its prefix and duplicate its context.
+
+8. **The cache clock.** The composer shows how long the prompt cache
+   stays warm after the last answer, so a follow-up can be sent before it
+   goes cold. It is a display of the agent's timing, not a mechanism of
+   perch's; it exists because the difference between a warm and a cold
+   turn is the 12-fold one above.
+
+### What a perch tab spends that a terminal would not
+
+| Cost | When | Size |
+| --- | --- | --- |
+| IDE context on a message | With the toggle on, which it is by default | The active file's selection, up to 12,000 characters |
+| Compaction on a Codex model switch | Only when the model is changed mid-thread | One compaction of the thread |
+| A pasted image | Only when one is sent | Scaled to at most 2000 px on the long side; roughly 3,000 tokens for a full-width screenshot, by the vendors' area-based estimates |
+
+Nothing else. In particular perch adds no per-message instructions, no
+retrieval, no summaries, and no hidden calls.
+
+### Comparison
+
+Section 2 compares the harnesses. In these terms: OpenCode caches
+soundly but on API billing with a five-minute lifetime; Continue's
+context providers re-render near the front of the prompt, so its prefix
+is not stable and a gateway below it cannot make it so. Both replace the
+vendor's agent, so neither gets its compaction or its subscription
+billing. perch gets both because it changes nothing in the agent.
+
+### How to see it
+
+Each turn's result line in the transcript shows the agent's own usage
+figures: tokens in, tokens read from cache, tokens out, and for Claude
+the cost. A warm turn shows nearly all of its input as cached. The
+figures come from the agents (`result` messages from Claude Code,
+`turn.completed` from Codex), not from an estimate of perch's.
+
+### Not verified
+
+- Codex's cache behaviour is inferred from the SDK's design (one thread,
+  resumed by id, the same prefix) and its `cached_input_tokens` figures,
+  not from OpenAI's cache keys, which the SDK does not expose.
+- The image token figure is the vendors' published estimate, not a
+  measurement.
+
+## 4. Architecture
 
 ```mermaid
 flowchart LR
@@ -124,20 +260,23 @@ flowchart LR
 
 In a local window both boxes are the same machine. Under Remote-SSH they
 are two, and the split between them is what makes dictation possible
-(section 11).
+(section 12).
 
 ### Modules
 
 | File | Lines | Depends on VS Code | Responsibility |
 | --- | --- | --- | --- |
-| `src/extension.js` | 677 | yes | Sessions, surfaces, routing, persistence, commands |
-| `src/webview.js` | 583 | no | The page: markup, styles, and script, as one template |
-| `src/claudeAgent.js` | 173 | no | One Claude Code session through the Agent SDK |
-| `src/codexAgent.js` | 133 | no | One Codex thread through the Codex SDK |
+| `src/extension.js` | 877 | yes | Sessions, surfaces, routing, persistence, commands, the sessions list |
+| `src/webview.js` | 774 | no | The page: markup, styles, and script, as one template |
+| `src/markdown.js` | 126 | no | An answer's Markdown, drawn as DOM nodes; written into the page as source |
+| `src/sessionStore.js` | 257 | no | Past sessions, their names, and their transcripts, from the agents' records |
+| `src/binaries.js` | 52 | no | Where the agents' programs are: the SDK's own, or the vendor extension's |
+| `src/claudeAgent.js` | 188 | no | One Claude Code session through the Agent SDK |
+| `src/codexAgent.js` | 185 | no | One Codex thread through the Codex SDK |
 | `src/models.js` | 91 | no | Model and slash-command catalogs, read from the agents |
 | `src/meter.js` | 426 | no | Claude usage, cost, the backend switch, cache lifetime |
 | `src/codexMeter.js` | 101 | no | ChatGPT plan usage, read from Codex's session files |
-| `src/meterHost.js` | 248 | yes | Polling, back-off, status bar items, login |
+| `src/meterHost.js` | 185 | yes | Polling, back-off, the backend switch, login |
 | `src/voice.js` | 157 | no | The speech-to-text engine: environment, server process |
 | `src/voiceHost.js` | 135 | yes | Dictation: recorder to engine to message box |
 | `voice/server.py` | 140 | n/a | faster-whisper behind JSON lines |
@@ -146,7 +285,7 @@ are two, and the split between them is what makes dictation possible
 
 **A rule the layout enforces:** logic that can be written without the
 VS Code API is, and takes its home directory, environment, and
-collaborators as parameters. Eight of the thirteen files have no VS Code
+collaborators as parameters. Eleven of the sixteen files have no VS Code
 dependency, which is why most of the behaviour is tested against
 throwaway directories and stand-in processes with no editor running.
 
@@ -154,8 +293,8 @@ throwaway directories and stand-in processes with no editor running.
 
 | Package | Version | Why |
 | --- | --- | --- |
-| `@anthropic-ai/claude-agent-sdk` | 0.3.284 | Runs Claude Code. Bundles its own CLI |
-| `@openai/codex-sdk` | 0.159.0 | Runs Codex. Its dependency bundles the `codex` binary |
+| `@anthropic-ai/claude-agent-sdk` | 0.3.284 | Runs Claude Code. Installed from npm it brings its own CLI; packaged, perch uses the Claude Code extension's |
+| `@openai/codex-sdk` | 0.159.0 | Runs Codex. Installed from npm its dependency brings `codex`; packaged, perch uses the ChatGPT extension's |
 | `@picovoice/pvrecorder-node` | 1.2.9 | Microphone capture, in perch-audio. Prebuilt for macOS, Linux, Windows |
 | `faster-whisper` | 1.2.1 | Speech-to-text, in a private Python environment |
 | `jsdom` | 25 | Development only: runs the page script in tests |
@@ -163,7 +302,7 @@ throwaway directories and stand-in processes with no editor running.
 Both SDKs are ES modules. The extension is CommonJS, so they are loaded
 with a dynamic `import()`.
 
-## 4. Sessions and surfaces
+## 5. Sessions and surfaces
 
 A **session** is one tab: one agent, one context. A **surface** is a page
 that shows sessions. There are two kinds.
@@ -214,7 +353,7 @@ A tab can be moved between surfaces. The session, its agent, and its
 transcript are untouched; only its `location` changes and the new
 surface is sent a replay.
 
-## 5. State, replay, and persistence
+## 6. State, replay, and persistence
 
 ### The host owns everything
 
@@ -245,8 +384,18 @@ id, kind, title, mode, effort, model, IDE-context flag, location, and the
 
 On reload a tab resumes by handing that id back to the agent
 (`resume` for Claude, `resumeThread` for Codex). The agent has the
-conversation on disk. The tab shows a note that the earlier transcript
-is not redrawn.
+conversation on disk. The transcript shown in the tab is read back from
+the agent's own record, by `src/sessionStore.js`: the Agent SDK's
+`getSessionMessages` for Claude, the rollout file for Codex. The last
+thousand entries are shown; a note says how many earlier ones are not.
+Until the record has been read, or if it cannot be, the tab says the
+earlier transcript is not shown. No tokens are spent on any of this.
+
+A tab's name is saved with the tab and also written to the agent's own
+record of the session (`renameSession` for Claude; a line appended to
+`~/.codex/session_index.jsonl` for Codex), so the vendors' own clients
+show the same name. A name given before the first turn is written when
+the first turn ends, since the record does not exist before then.
 
 Tab counters are saved too. Rebuilding them by counting restored tabs
 let a new tab reuse the name of an open one; a test caught that.
@@ -257,13 +406,17 @@ let a new tab reuse the name of an open one; a test caught that.
 2. After a reload VS Code calls `deserializeWebviewPanel(panel, state)`.
 3. The host attaches that panel to the session, or disposes it if the
    session is gone, has moved, or already has a tab.
-4. A session that VS Code fails to bring back is given a tab after a
-   four-second wait, so none is left without a surface.
+4. VS Code brings a tab back lazily: one behind another has no page
+   until it is shown. After a four-second wait, a session with no page
+   is checked against the tabs VS Code still holds (`tabGroups`); only a
+   session with no tab at all is given one. The first version opened a
+   tab for every session without a page, which duplicated the tabs that
+   were merely waiting.
 
 A tab saved before editor tabs existed has no `location`. It takes the
 current setting, which migrates old sidebar tabs on the next reload.
 
-## 6. The page protocol
+## 7. The page protocol
 
 The page and the host exchange plain JSON with `postMessage`.
 
@@ -276,7 +429,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `stop` | `sid` | Stop the turn and drop what is queued |
 | `permission` | `sid`, `id`, `decision` | `allow`, `always`, or `deny` |
 | `setModel`, `setEffort`, `setMode` | `sid`, `value` | A choice from a menu |
-| `setIde` | `sid`, `value` | IDE context on or off, Codex tabs |
+| `setIde` | `sid`, `value` | IDE context on or off |
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
@@ -301,16 +454,17 @@ The page and the host exchange plain JSON with `postMessage`.
 | `delta` | no | Streaming text in a live bubble |
 | `tool_use`, `tool_result` | yes | A tool call with its result beneath |
 | `permission` | yes, becomes a `note` once answered | Allow, Always, Deny |
+| `question` | yes, becomes `answered` | Claude's `AskUserQuestion`: choices as buttons, a line of your own, one answer for all |
 | `result` | yes | Duration, tokens in, cached, out |
 | `note`, `error` | yes | A line in the transcript |
-| `status`, `busy` | latest value only | The state line, the busy dot |
+| `status`, `busy` | latest value only | A working line at the foot of the transcript: what the agent is doing, for how long. A status that is not idle, working, or ready becomes a `note` |
 | `fill`, `insert` | no, held as a draft if no page | Text into the message box |
 | `voice` | no, re-sent on `ready` | The microphone's state |
 
 Agents emit a few more that the host consumes and does not forward:
 `session`, `model`, `context`, `responded`, `commands`.
 
-## 7. The agents
+## 8. The agents
 
 Both agent modules take an `emit` callback and know nothing of VS Code.
 They translate the vendor's events into the kinds above.
@@ -328,6 +482,9 @@ They translate the vendor's events into the kinds above.
 | Slash commands | `supportedCommands()` |
 | Stop | `interrupt()` |
 | Settings | All sources are loaded, the SDK's default, so the user's `~/.claude/settings.json` applies |
+| System prompt | The SDK's default, not Claude Code's full prompt: about 6,400 tokens smaller (section 3) |
+| Questions | `AskUserQuestion` arrives through `canUseTool`; the answers go back as `updatedInput.answers` |
+| Images | Pasted images go as base64 `image` blocks before the text |
 
 Claude Code auto-approves a set of read-only shell commands such as
 `echo` without prompting. That is the agent's behaviour, not a gap in
@@ -339,15 +496,17 @@ perch. A `Write` prompts every time in default mode.
 | --- | --- |
 | Process | The SDK wraps `codex exec`: one process per turn, one thread across turns |
 | Approvals | **By policy, not by prompt.** `codex exec` is non-interactive. `perch.codex.approvalPolicy` and the sandbox decide |
-| Model, effort, sandbox | Fixed when the thread starts. The menus say so once it has |
+| Model, effort, sandbox | Changed from the next turn: the thread is taken up again (`resumeThread`) with the new options. Codex compacts once and notes the model change |
+| Images | Written to a private temporary directory and passed as `local_image` inputs; removed with the agent |
 | Queueing | One turn at a time, so **perch holds the queue** and drains it as each turn ends, without the tab flickering to idle |
 | IDE context | Attached by perch (below) |
 | Stop | An `AbortSignal` on the turn |
 
 ### IDE context
 
-Off by default, per Codex tab. When on, a message carries the active
-file and, if there is one, the selection:
+On both kinds of tab; on by default for new tabs (`perch.ideContext`), and
+kept per tab. When on, a message carries the active file and, if there is
+one, the selection:
 
 ````
 why is b 2?
@@ -370,7 +529,7 @@ const b = 2;
 - The code fence is made longer than any run of backticks inside.
 - Unsaved and non-file editors attach nothing.
 
-## 8. Model catalogs
+## 9. Model catalogs
 
 Lists are read from the agents, never hardcoded. An earlier hardcoded
 Codex effort list was wrong: it offered `minimal`, which no listed model
@@ -399,7 +558,7 @@ with no effort control, Haiku for one, says so.
 effort list and offer only the default model. A catalog that arrives
 after a tab exists corrects that tab.
 
-## 9. The composer
+## 10. The composer
 
 One composer, shared by all tabs on a page, reflecting the active tab.
 It takes its vendor's look through a class on the container and CSS
@@ -442,7 +601,7 @@ A filter of one or two letters matches command **names** only.
 Descriptions are searched from three letters. Otherwise `/c` matched
 `/model`, whose description contains a "c".
 
-## 10. Usage meters
+## 11. Usage meters
 
 The footer follows the active tab.
 
@@ -509,8 +668,10 @@ limit.
 - A settings file that is not valid JSON is **refused**, not replaced.
 - A running tab keeps its backend, and is told so.
 
-**The status bar.** perch provides AI Meter's two items, but stands down
-while that extension is installed.
+**No status bar items.** The gauge is the footer of each tab, where it
+follows the tab's vendor. An earlier version put AI Meter's two items in
+the status bar as well, standing down while that extension was installed;
+they showed Claude's figures under a Codex tab too, and were removed.
 
 ### Codex
 
@@ -537,7 +698,7 @@ files.
   since reset.
 - perch re-reads after each Codex turn it runs.
 
-## 11. Dictation
+## 12. Dictation
 
 ### The constraint that shapes it
 
@@ -661,7 +822,7 @@ the remote.
 | OpenAI transcription API | Not built. Needs a key, costs per minute, sends audio out |
 | Codex realtime voice | Not applicable. A spoken conversation, not dictation, and only through the app-server protocol |
 
-## 12. Security and privacy
+## 13. Security and privacy
 
 ### The page
 
@@ -702,7 +863,7 @@ perch ships no logos. Icons are read at runtime from the installed vendor
 extensions, so no trademarked artwork is redistributed and the icons
 track vendor updates. Without an extension, a tab shows a letter.
 
-## 13. Testing
+## 14. Testing
 
 | Suite | What it runs | Model calls |
 | --- | --- | --- |
@@ -742,7 +903,7 @@ track vendor updates. Without an extension, a tab shows a letter.
    answered requests concurrently produced failures the real server
    cannot.
 
-## 14. Verified and not verified
+## 15. Verified and not verified
 
 ### Verified against real services, on the development machine
 
@@ -761,33 +922,43 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Whisper resampling, silence, CPU fallback | 48 kHz input; empty result for silence; `small` on CPU in 1.9 s |
 | The recorder library loads and opens a device | Captured frames |
 | Unplugged-jack detection | This machine's input reported `unplugged` |
+| Dictation end to end | Messages dictated into a tab by the user, 2026-09-30 |
+| System prompt size, SDK default against Claude Code's | 15,226 and 21,581 tokens written to the cache on a first turn (2026-09-30) |
+| Images reach both agents | A solid red 64×64 PNG; both answered "Red" |
+| A Claude question round trip | Claude asked "Which colour do you prefer?", perch answered "Blue", Claude replied "You chose Blue" |
+| Renaming a Claude session | On a copy of a real session in a temporary config directory: the custom title was written and read back |
+| Reading real records | 23 sessions listed for a folder; transcripts of 86 and 169 entries read |
+| A Codex model switch is accepted | A thread on `gpt-5.5` was taken up on `gpt-5.6-luna`; Codex noted the change. The turn itself was refused by a usage limit |
+| The packaged extension runs | From the unpacked `.vsix`, Claude answered through the Claude Code extension's program |
 
 ### Not verified
 
 | Claim | Why not |
 | --- | --- |
-| **Dictation end to end** | The development machine has no microphone |
 | **Anything under Remote-SSH** | Not run in a remote window. The design follows VS Code's documented extension-kind model |
 | **perch-audio on macOS or Windows** | Prebuilt binaries ship for both. Not run |
 | **Microphone permission prompts** | No device to trigger one |
 | **The page in a real webview** | Tested in jsdom, which does not lay out or paint. Visual defects have been found by eye and fixed |
 | **Editor-tab restoration in VS Code** | The serializer is tested against a stub |
+| **Codex cache reuse across `exec` processes** | Inferred from the design and the `cached_input_tokens` figures; the SDK exposes no cache key |
+| **Group locking, the sessions list, and the question card in a live window** | Tested against stubs and jsdom |
+| **Installation from the marketplace** | Not yet published |
 
-## 15. Limitations and open work
+## 16. Limitations and open work
 
 | Item | Notes |
 | --- | --- |
-| Transcripts do not survive a reload | The agent has the conversation. Redrawing it needs the agents' session files read back |
-| No session history or picker | A closed tab's conversation is on disk but perch forgets its id |
-| Codex approvals cannot prompt | A property of `codex exec`. The app-server protocol would allow it, at the cost of rewriting the Codex integration |
+| Codex approvals cannot prompt, and Codex cannot ask a question | A property of `codex exec`. Codex's `request_user_input` needs the app-server protocol, at the cost of rewriting the Codex integration |
+| A Codex name written by perch may not show in the ChatGPT extension | perch appends to `session_index.jsonl`, Codex's own name file; Codex also keeps titles in a database perch does not write |
+| Resumed transcripts show the last thousand entries | Older ones are the agent's; a note says how many |
 | No streaming for Codex text | The SDK reports completed messages |
 | Mentions are inserted as text | The agent resolves `@path` |
-| No images or attachments | |
 | AI Meter's fixes are not upstreamed | The rate-limit back-off and the settings safeguards would benefit the standalone extension |
 | Two extensions poll the usage endpoint | While AI Meter is also installed, both query it. Uninstalling AI Meter removes the duplicate |
-| perch-audio must be installed by hand on a laptop | `make package-audio` builds the file |
+| perch-audio must be installed by hand from a `.vsix` | From the marketplace it comes with perch, through `extensionPack` |
+| No syntax colouring in code blocks | The Markdown renderer draws code as text |
 
-## 16. Decision log
+## 17. Decision log
 
 | Decision | Alternative | Why |
 | --- | --- | --- |
@@ -799,14 +970,23 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Lists from the agents | Hardcoded | The hardcoded Codex efforts were wrong |
 | Icons from installed extensions | Bundled artwork | No trademarked files redistributed |
 | Merge AI Meter | Have it export an API | The user's choice. One extension to install |
+| No status bar items | AI Meter's two items, standing down while it is installed | They showed Claude under a Codex tab; the tab footer follows the vendor |
 | Codex usage from files | Query the app-server | No request, no rate limit |
 | Footer follows the active tab | One gauge for all | Claude's usage under a Codex tab was wrong |
 | Queue Codex messages in the host | Refuse while busy | Same behaviour in both kinds of tab |
 | Dictation in two extensions | One | The microphone and the GPU may be on different machines |
 | Local Whisper | ChatGPT's endpoint, the OpenAI API | Private, free, not dependent on private interfaces |
 | Probe jacks with `pactl` | Judge by signal level | Noise from an empty jack is indistinguishable from a quiet room |
+| Transcripts read from the agents' records | Save them in perch | The record is the agent's truth, and reading it costs nothing |
+| Names written to the agents' records | Keep them in perch | One name wherever the session is listed |
+| The sessions list is a quick pick | A page of perch's own | Search, rows, and buttons for free; works from either surface |
+| Own Markdown renderer, DOM-built | `marked` and a sanitiser | No dependency, and no path by which text becomes markup |
+| Programs from the vendors' extensions when packaged | Bundle per platform | Hundreds of megabytes per platform, against 8 MB |
+| Lock an editor group of sessions | Leave it | Files opened from the Explorer landed among the sessions |
+| Codex settings changed by resuming the thread | Fixed for the thread's life | Each turn is a process anyway; the cost is one compaction |
+| perch-audio through `extensionPack`, not a dependency | `extensionDependencies` | A missing companion must not stop perch from starting |
 
-## 17. References
+## 18. References
 
 ### VS Code
 
@@ -854,7 +1034,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 ### Compared and related
 
 - [AI Meter](https://github.com/seanahn/ai-meter): the origin of
-  section 10.
+  section 11.
 - [OpenCode](https://github.com/sst/opencode):
   `packages/opencode/src/provider/transform.ts`, `applyCaching`.
 - [Continue](https://github.com/continuedev/continue).

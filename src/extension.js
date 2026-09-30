@@ -7,6 +7,8 @@ const { getHtml } = require('./webview');
 const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
+const { resolveProgram } = require('./binaries');
+const { listSessions, renameSession, loadTranscript, cleanTitle, ago } = require('./sessionStore');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -53,6 +55,25 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+// what both agents take as an image. The size is of the base64 text, which is what the services measure.
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_IMAGES = 8, MAX_IMAGE_CHARS = 5000000;
+const MAX_THUMB_CHARS = 80000;   // a thumbnail is kept in the transcript; the image itself is not
+
+/** The images of a message that can be sent, and how many of those offered cannot. */
+function usableImages(list) {
+  const all = Array.isArray(list) ? list : [], images = [];
+  for (const i of all) {
+    if (images.length >= MAX_IMAGES) break;
+    if (i && IMAGE_TYPES.includes(i.mime) && typeof i.data === 'string' && i.data && i.data.length <= MAX_IMAGE_CHARS && /^[A-Za-z0-9+/]+={0,2}$/.test(i.data)) images.push({ mime: i.mime, data: i.data, thumb: thumbOf(i) });
+  }
+  return { images, dropped: all.length - images.length };
+}
+/** A small rendering of the image, as a data URL, for the transcript. The page makes it; the host only checks it is one. */
+function thumbOf(i) {
+  const t = i && i.thumb;
+  return typeof t === 'string' && t.length <= MAX_THUMB_CHARS && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(t) ? t : '';
+}
 
 /**
  * The icon of an editor tab. VS Code tints nothing here, so the file must carry its own colour: Claude's glyph is
@@ -75,6 +96,11 @@ function tabIcon(kind) {
     return typeof pj.icon === 'string' && pj.icon ? at(pj.icon) : undefined;
   } catch (_) { return undefined; }
 }
+
+/** A tab's name without the marks a tab's title carries while its session works or waits. */
+function tabName(label) { return String(label || '').replace(/^\u25cf /, '').replace(/ \u2026$/, ''); }
+
+function isPerchTab(t) { return !!(t && t.input && typeof t.input.viewType === 'string' && t.input.viewType.endsWith(PANEL_TYPE)); }
 
 function cwd() {
   const f = vscode.workspace.workspaceFolders;
@@ -106,6 +132,16 @@ function ideContext() {
   return { block: lines.join('\n'), tag };
 }
 
+/**
+ * The program an agent runs: the user's choice, else the SDK's own, else the one inside the vendor's extension.
+ * @returns {{ path: string, from: string }}
+ */
+function program(kind) {
+  let vendorRoot = ''; try { const ext = vscode.extensions.getExtension(VENDOR_EXTENSIONS[kind]); vendorRoot = (ext && (ext.extensionUri.fsPath || ext.extensionPath)) || ''; } catch (_) { /* not installed */ }
+  return resolveProgram(kind, { configured: String(cfg(kind + '.executable') || ''), vendorRoot });
+}
+const MISSING = { claude: 'Perch runs the claude program that comes with the Claude Code extension, which is not installed here. Install it, or set perch.claude.executable to a claude program.', codex: 'Perch runs the codex program that comes with the ChatGPT extension, which is not installed here. Install it, or set perch.codex.executable to a codex program.' };
+
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
 function defaultEffort(kind) { return String((kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''); }
 function defaultModel(kind) { return String((kind === 'claude' ? cfg('claude.model') : cfg('codex.model')) || ''); }
@@ -113,12 +149,13 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, mode, effort, model, ide, resume, location, paneled }) {
+  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
     this.title = title;
-    this.titled = !!titled;          // true once the title came from the first message
+    this.titled = !!titled;          // true once the title came from the first message, or from the user
+    this.unsaved = !!unsaved;        // the user's name for it has yet to reach the agent's own record of the session
     this.mode = mode || defaultMode(kind);
     this.model = typeof model === 'string' ? model : defaultModel(kind);     // '' = the agent's default model
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
@@ -126,8 +163,10 @@ class Session {
     this.backend = '';               // claude only: the backend this tab's agent started on
     this.context = null;             // claude only: { percent, used, max } of the context window
     this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
+    this.costSoFar = typeof costSoFar === 'number' ? costSoFar : null;   // claude only: the session's cost at API rates, as last reported, so each turn's own cost can be told
     this.queue = [];                 // codex only: messages waiting for the current turn to end
-    this.ide = kind === 'codex' && !!ide;   // codex only: attach the active file and selection to each message
+    this.thumbs = [];                // the thumbnails of each message sent, until the agent reports the message and they join it
+    this.ide = ide === undefined ? cfg('ideContext') !== false : !!ide;   // attach the active file and selection to each message, as the vendors' own panels do
     this.location = location === 'sidebar' || location === 'editor' ? location : view.where();   // which surface shows this tab
     this.paneled = !!paneled;        // an editor tab has been opened for it at some point, so VS Code will restore that tab
     this.prefill = '';               // text waiting for a page that is not ready yet
@@ -139,7 +178,20 @@ class Session {
     this.busy = false;
     this.attention = false;          // a prompt is waiting while the tab is not active
     this.lastStatus = this.idleStatus();
-    if (resume) this.history.push({ kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` });
+    if (resume) { this.history.push(this.resumed = { kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` }); this.loadPast(resume); }
+  }
+
+  /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
+  async loadPast(id) {
+    let past; try { past = await loadTranscript(this.kind, id, { dir: cwd() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
+    const at = this.history.indexOf(this.resumed);
+    if (this.disposed || at < 0 || !past || !past.events.length) return;
+    // the transcript speaks for itself; only what is missing from it is said, where it is missing
+    const cut = past.earlier ? [{ kind: 'note', text: `${past.earlier} earlier entries are not shown, the agent still has them` }] : [];
+    this.history.splice(at, 1, ...cut, ...past.events);
+    this.resumed = null;
+    if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
+    this.view.replay(this);
   }
 
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
@@ -178,25 +230,34 @@ class Session {
 
   post(ev) {
     switch (ev.kind) {
-      case 'status': this.lastStatus = ev.text; break;
+      case 'status':
+        this.lastStatus = ev.text;
+        // the page shows whether a session works at the foot of its transcript; anything else an agent reports is part of the transcript
+        if (!/^(idle|working|ready)\b/.test(String(ev.text))) this.post({ kind: 'note', text: String(ev.text) });
+        break;
       case 'busy':
-        if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown); }); return; }   // stay busy: the next queued message starts now
+        if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown, next.images); }); return; }   // stay busy: the next queued message starts now
         this.stopping = false;
         if (!ev.busy && this.kind === 'codex' && this.busy) { const t = setTimeout(() => this.view.meter.refreshCodex(), 400); if (t.unref) t.unref(); }   // Codex has just recorded its limits
-        this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' }); return;
+        if (ev.busy && !this.busy) this.busySince = Date.now(); else if (!ev.busy) this.busySince = 0;
+        this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
+        if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
+        return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
       case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
       case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
+      case 'result': if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); } break;
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
       case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
-      case 'clear': this.history = []; break;
+      case 'clear': this.history = []; this.resumed = null; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
       case 'user':
         // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
         if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
-        if (!this.titled) { this.title = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28) || this.title; this.titled = true; this.view.sendTabs(); this.view.persist(); }
+        if (ev.images && this.thumbs.length) { const t = this.thumbs.shift(); if (t.some(Boolean)) ev.thumbs = t; }
+        if (!this.titled) { const name = ev.text.replace(/\s+/g, ' ').trim().slice(0, 28); if (name) { this.title = name; this.titled = true; this.view.sendTabs(); this.view.persist(); } }   // a message that is only an image names nothing
         this.history.push(ev); break;
-      case 'permission':
+      case 'permission': case 'question':
         if (!this.view.isVisible(this)) { this.attention = true; this.view.sendTabs(); }
         this.history.push(ev); break;
       default: this.history.push(ev);
@@ -209,6 +270,8 @@ class Session {
     if (this.agent) return this.agent;
     const emit = (ev) => this.post(ev);
     const resume = this.agentSessionId || undefined;
+    const prog = program(this.kind);
+    if (prog.from === 'none') this.post({ kind: 'error', text: MISSING[this.kind] });
     if (this.kind === 'claude') {
       this.backend = this.view.meter ? this.view.meter.backend() : '';     // fixed for the life of the agent process
       this.agent = new ClaudeAgent({
@@ -216,7 +279,8 @@ class Session {
         permissionMode: this.mode,
         model: this.model || undefined,
         effort: this.effort || undefined,
-        executable: cfg('claude.executable') || undefined,
+        executable: prog.path || undefined,
+        costBefore: this.costSoFar === null ? undefined : this.costSoFar,
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
@@ -226,6 +290,7 @@ class Session {
         approvalPolicy: cfg('codex.approvalPolicy'),
         model: this.model || undefined,
         reasoningEffort: this.effort || undefined,
+        executable: prog.path || undefined,
       });
     }
     return this.agent;
@@ -233,29 +298,40 @@ class Session {
 
   /** A message sent while the agent is working is queued. Claude Code queues it itself; for Codex, whose SDK takes one
    * turn at a time, the queue is kept here and drained as each turn ends. */
-  send(text) {
-    if (!text || !text.trim()) return;
+  send(text, offered) {
+    text = String(text || '');
+    const { images, dropped } = usableImages(offered);
+    if (dropped) this.post({ kind: 'note', text: `${dropped} image${dropped > 1 ? 's' : ''} left out: a message takes ${MAX_IMAGES} images, each a PNG, JPEG, GIF, or WebP of up to 5 MB` });
+    if (!text.trim() && !images.length) return;
     const agent = this.ensureAgent();
-    if (this.kind !== 'codex') { agent.send(text); return; }
+    const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
     const ctx = this.ide ? ideContext() : null;
     const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? 'IDE context · ' + ctx.tag : undefined };
+    if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
-      this.queue.push({ text: full, shown }); (this.shown = this.shown || []).push(text);
-      this.post(Object.assign({ kind: 'user', text, queued: true }, shown.tag ? { tag: shown.tag } : {}));
+      this.queue.push({ text: full, shown, images: sent }); (this.shown = this.shown || []).push(text);
+      this.post(Object.assign({ kind: 'user', text, queued: true }, sent.length ? { images: sent.length } : {}, thumbs.some(Boolean) ? { thumbs } : {}, shown.tag ? { tag: shown.tag } : {}));
       this.view.sendTabs();          // the queue count is part of the tab
       return;
     }
-    agent.send(full, shown);
+    if (sent.length) this.thumbs.push(thumbs);
+    agent.send(full, shown, sent);
   }
 
-  setIde(on) { if (this.kind !== 'codex') return; this.ide = !!on; this.view.persist(); }
+  setIde(on) { this.ide = !!on; this.view.persist(); }
 
-  answerPermission(id, decision) {
+  /** @param {Record<string,string>} [answers]  for a question: each question's answer, by the question's text */
+  answerPermission(id, decision, answers) {
+    const clean = answers && typeof answers === 'object' && !Array.isArray(answers) ? Object.fromEntries(Object.entries(answers).filter(([q, a]) => typeof q === 'string' && q && typeof a === 'string' && a.trim()).map(([q, a]) => [q, a.trim()])) : null;
     const r = this.pending.get(id);
-    if (r) { this.pending.delete(id); r({ decision }); }
-    const i = this.history.findIndex((h) => h.kind === 'permission' && h.id === id);
-    if (i >= 0) this.history[i] = { kind: 'note', text: `${this.history[i].tool}: ${decision}` };
+    if (r) { this.pending.delete(id); r(decision === 'answer' ? { decision: clean && Object.keys(clean).length ? 'answer' : 'deny', answers: clean } : { decision }); }
+    const i = this.history.findIndex((h) => (h.kind === 'permission' || h.kind === 'question') && h.id === id);
+    if (i >= 0) {
+      const h = this.history[i];
+      if (h.kind === 'question') this.history[i] = { kind: 'answered', questions: h.questions, answers: clean || {} };
+      else this.history[i] = { kind: 'note', text: `${h.tool}: ${decision}` };
+    }
     if (!this.pending.size && this.attention) { this.attention = false; this.view.sendTabs(); }
   }
 
@@ -265,7 +341,7 @@ class Session {
     this.view.persist();
     if (!this.agent) return;
     if (this.kind === 'claude') this.agent.setPermissionMode(value);
-    else this.post({ kind: 'note', text: `sandbox ${value} applies to a new Codex tab; this thread keeps the sandbox it started with` });
+    else this.agent.setSandboxMode(value);                            // Codex: from the next turn
   }
 
   setEffort(value) {
@@ -273,8 +349,7 @@ class Session {
     this.effort = value;
     this.view.persist();
     if (!this.agent) return;
-    if (this.kind === 'claude') this.agent.setEffort(value);          // live: applies from the next request
-    else this.post({ kind: 'note', text: `effort ${value || 'default'} applies to a new Codex tab; this thread keeps the effort it started with` });
+    this.agent.setEffort(value);          // Claude: from the next request. Codex: from the next turn
   }
 
   setModel(value) {
@@ -283,8 +358,7 @@ class Session {
     const effortReset = this.reconcile();                              // the new model may not accept the current effort
     this.view.persist();
     if (!this.agent) return;
-    if (this.kind === 'claude') { this.agent.setModel(value); if (effortReset) this.agent.setEffort(''); }
-    else this.post({ kind: 'note', text: `model ${value || 'default'} applies to a new Codex tab; this thread keeps the model it started with` });
+    this.agent.setModel(value); if (effortReset) this.agent.setEffort('');
   }
 
   /** Stops the current turn and drops anything queued behind it. */
@@ -292,6 +366,7 @@ class Session {
   lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
 
   dispose() {
+    this.disposed = true;
     if (this.agent) { this.agent.dispose(); this.agent = null; }
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session closed' });
     this.pending.clear();
@@ -299,20 +374,20 @@ class Session {
 
   toTab() {
     return {
-      id: this.id, kind: this.kind, title: this.title, busy: this.busy, attention: this.attention, started: !!this.agent,
+      id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
       mode: this.mode, modes: MODES[this.kind],
       model: this.model, models: this.modelOptions(), actualModel: this.actualModel,
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
       backend: this.agent ? this.backend : '',
       queued: this.queue.length,
-      ide: this.kind === 'codex' ? this.ide : null,
+      ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : ''), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar }; }
 }
 
 /** The single Perch view: a tab bar over any number of sessions. */
@@ -397,7 +472,7 @@ class PerchView {
     };
     try { apply('codex', loadCodexModels()); } catch (_) { /* keep the fallback lists */ }
     this.loading = Promise.resolve()
-      .then(() => loadClaudeModels({ cwd: cwd(), executable: cfg('claude.executable') || undefined }))
+      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined }))
       .then((cat) => apply('claude', cat))
       .catch(() => { /* keep the fallback lists */ });
     return this.loading;
@@ -420,16 +495,47 @@ class PerchView {
   persist() { this.context.workspaceState.update(STATE_KEY, { active: this.activeId, counters: this.counters, sessions: this.sessions.map((s) => s.toState()) }); }
 
   /**
-   * Called once the extension is active. VS Code brings back the editor tabs that were open, through the serializer.
-   * A tab that has never had an editor tab (it was moved here from the sidebar by a change of setting) is opened now;
-   * one that VS Code fails to bring back is opened after a short wait, so no session is left without a surface.
+   * Called once the extension is active. VS Code brings back the editor tabs that were open, through the serializer,
+   * but only as each is shown: a tab behind another stays a tab without a page until it is clicked. So a session
+   * whose page has not come back is not thereby without a tab. A tab that has never had an editor tab (it was moved
+   * here from the sidebar by a change of setting) is opened now; one that has no tab left at all is opened after a
+   * short wait, so no session is left without a surface.
    */
   start() {
     for (const s of this.sessions) if (s.location === 'editor' && !s.paneled) this.openPanel(s, { preserveFocus: true });
     if (this.sessions.some((s) => s.location === 'editor' && s.paneled)) {
-      this.graceTimer = setTimeout(() => { this.graceTimer = null; for (const s of this.sessions) if (s.location === 'editor' && !this.panels.has(s.id)) this.openPanel(s, { preserveFocus: true }); }, RESTORE_GRACE_MS);
+      this.graceTimer = setTimeout(() => {
+        this.graceTimer = null;
+        const waiting = this.waitingTabs();
+        for (const s of this.sessions) {
+          if (s.location !== 'editor' || this.panels.has(s.id)) continue;
+          const i = waiting.findIndex((t) => tabName(t.label) === s.title);
+          if (i >= 0) waiting.splice(i, 1);                    // its tab is there, waiting to be shown
+          else this.openPanel(s, { preserveFocus: true });
+        }
+      }, RESTORE_GRACE_MS);
       if (this.graceTimer.unref) this.graceTimer.unref();
     }
+  }
+
+  /**
+   * An editor group that holds only sessions is locked, as a terminal's is: VS Code opens a file in the group that was
+   * last used, which after a message is this one, and a locked group is passed over for the one beside it.
+   */
+  lockGroup() {
+    if (cfg('lockGroup') === false) return;
+    const g = vscode.window.tabGroups && vscode.window.tabGroups.activeTabGroup;
+    if (!g || !g.tabs || !g.tabs.length || !g.tabs.every(isPerchTab)) return;
+    Promise.resolve(vscode.commands.executeCommand('workbench.action.lockEditorGroup')).catch(() => { /* an older VS Code */ });
+  }
+
+  /** Perch's editor tabs that have no page yet: VS Code has kept them, and will ask for each when it is shown. */
+  waitingTabs() {
+    const groups = (vscode.window.tabGroups && vscode.window.tabGroups.all) || [], out = [];
+    for (const g of groups) for (const t of g.tabs || []) if (isPerchTab(t)) out.push(t);
+    // a tab with a page is known by its name; of tabs with one name, as many are waiting as have no page
+    const have = [...this.panels.values()].map((e) => tabName(e.panel.title));
+    return out.filter((t) => { const i = have.indexOf(tabName(t.label)); if (i < 0) return true; have.splice(i, 1); return false; });
   }
 
   // ---- surfaces
@@ -455,6 +561,9 @@ class PerchView {
 
   openPanel(s, { preserveFocus } = {}) {
     if (this.panels.has(s.id)) { this.panels.get(s.id).panel.reveal(undefined, !!preserveFocus); return; }
+    // a tab of its own may be waiting, without a page: the new tab takes its place, so the session has one tab
+    const old = this.waitingTabs().find((t) => tabName(t.label) === s.title);
+    if (old && vscode.window.tabGroups.close) Promise.resolve(vscode.window.tabGroups.close(old, true)).catch(() => { /* it went by itself */ });
     const panel = vscode.window.createWebviewPanel(PANEL_TYPE, this.panelTitle(s), { viewColumn: this.column(), preserveFocus: !!preserveFocus }, { enableScripts: true, retainContextWhenHidden: true });
     this.attachPanel(s, panel);
   }
@@ -467,7 +576,8 @@ class PerchView {
     const icon = tabIcon(s.kind); if (icon) panel.iconPath = icon;
     this.mount(panel.webview);
     panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg, s.id));
-    panel.onDidChangeViewState(() => { if (panel.visible && s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } });
+    panel.onDidChangeViewState(() => { if (panel.active) this.lockGroup(); if (panel.visible && s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } });
+    if (panel.active) setImmediate(() => { if (panel.active && this.panels.get(s.id) === entry) this.lockGroup(); });
     // closing the editor tab closes the session, unless the tab is going away for another reason (a move, or shutdown)
     panel.onDidDispose(() => { if (this.panels.get(s.id) !== entry) return; this.panels.delete(s.id); if (!this.closing && this.get(s.id) && s.location === 'editor') this.closeSession(s.id); });
     this.persist();
@@ -527,9 +637,9 @@ class PerchView {
         for (const x of mine) { this.replay(x); this.voice.resend(x.id); }
         return;
       }
-      case 'send': if (s) s.send(msg.text); return;
+      case 'send': if (s) s.send(msg.text, msg.images); return;
       case 'stop': if (s) s.interrupt(); return;
-      case 'permission': if (s) s.answerPermission(msg.id, msg.decision); return;
+      case 'permission': if (s) s.answerPermission(msg.id, msg.decision, msg.answers); return;
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
       case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
@@ -544,15 +654,21 @@ class PerchView {
       case 'activate': this.activate(msg.sid); return;
       case 'new': this.addSession(msg.kind); return;
       case 'close': this.closeSession(msg.sid); return;
+      case 'rename': if (s) this.renameTab(s.id); return;
+      case 'open': this.openTarget(msg.target); return;
+      case 'history': this.pickSession(); return;
       default: return;
     }
   }
 
   // ---- session management
-  addSession(kind, { fill, location } = {}) {
+  /** @param {object} [o]  `resume` opens the tab on a session the agent has already recorded, under the name it has there */
+  addSession(kind, { fill, location, resume, title } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
-    const n = ++this.counters[kind];
-    const s = new Session(this, { kind, title: `${kind === 'claude' ? 'Claude' : 'Codex'} ${n}`, location: location || this.where() });
+    const vendor = kind === 'claude' ? 'Claude' : 'Codex';
+    const s = new Session(this, resume
+      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, location: location || this.where() }
+      : { kind, title: `${vendor} ${++this.counters[kind]}`, location: location || this.where() });
     this.sessions.push(s);
     if (fill) s.prefill = fill;
     if (s.location === 'editor') { this.openPanel(s); this.sendTabs(); return s; }     // its page asks for the replay when it is ready
@@ -581,6 +697,101 @@ class PerchView {
     if (!this.sessions.length) this.counters = { claude: 0, codex: 0 };   // nothing open, nothing to collide with: numbering starts over
     this.persist();
     this.sendTabs();
+  }
+
+  /** A link in an answer that names a file, as `path`, `path#L12`, `path#L12-L20`, or `path:12`. It is looked for in every workspace folder. */
+  async openTarget(target) {
+    const fs = require('fs'), path = require('path');
+    const m = /^(.*?)(?:#L(\d+)(?:-L?(\d+))?|:(\d+)(?::\d+)?)?$/.exec(String(target || '').replace(/^file:\/\//, ''));
+    let file = m[1]; try { file = decodeURIComponent(file); } catch (_) { /* it is not encoded */ }
+    if (!file) return;
+    const from = Number(m[2] || m[4]) || 0, to = Math.max(from, Number(m[3]) || 0);
+    const roots = [...new Set([...(vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath), cwd()])];
+    const hit = (path.isAbsolute(file) ? [file] : roots.map((r) => path.join(r, file))).find((p) => { try { return fs.statSync(p).isFile(); } catch (_) { return false; } });
+    if (!hit) { vscode.window.showWarningMessage(`Perch: ${file} is not a file in this workspace.`); return; }
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(hit));
+      // beside the sessions, not among them: in the first group that is not theirs
+      const other = ((vscode.window.tabGroups && vscode.window.tabGroups.all) || []).find((g) => !(g.tabs || []).some(isPerchTab));
+      await vscode.window.showTextDocument(doc, Object.assign({ viewColumn: other ? other.viewColumn : vscode.ViewColumn.Beside }, from ? { selection: new vscode.Range(from - 1, 0, to - 1, 0) } : {}));
+    } catch (e) { vscode.window.showWarningMessage(`Perch: ${file} could not be opened. ${e.message}`); }
+  }
+
+  // ---- names, and the sessions of the past
+  /**
+   * Name a tab. The name also goes into the agent's own record of the session, so every client shows the same one.
+   * @returns {Promise<boolean>} false if there was no name to give
+   */
+  async setTitle(s, title) {
+    const name = cleanTitle(title);
+    if (!s || !name) return false;
+    s.title = name; s.titled = true; s.unsaved = true;
+    this.persist();
+    this.sendTabs();
+    await this.saveName(s);
+    return true;
+  }
+
+  /** Write a tab's name to its agent's record. A tab that has not had a turn has no record yet: this runs again when its first turn ends. */
+  async saveName(s) {
+    if (!s.unsaved || !s.agentSessionId) return;
+    s.unsaved = false;                 // tried once: a record that cannot be written is not retried after every turn
+    this.persist();
+    try { await renameSession(s.kind, s.agentSessionId, s.title, { dir: cwd() }); }
+    catch (e) { vscode.window.showWarningMessage(`Perch: this tab keeps its name, but ${s.kind === 'claude' ? 'Claude Code' : 'Codex'}'s record of the session could not be given it. ${e.message}`); }
+  }
+
+  askName(current) {
+    return vscode.window.showInputBox({ title: 'Rename session', value: current, prompt: 'The name is saved with the session, so it is the same wherever the session is listed.', validateInput: (v) => (cleanTitle(v) ? null : 'A name cannot be empty.') });
+  }
+
+  async renameTab(id) {
+    const s = (id && this.get(id)) || this.active();
+    if (!s) return;
+    const name = await this.askName(s.title);
+    if (name !== undefined) await this.setTitle(s, name);
+  }
+
+  /** Rename a session from the list, whether or not a tab is open on it. */
+  async renamePast(past) {
+    const name = cleanTitle(await this.askName(past.title));
+    if (!name) return;
+    const open = this.sessions.find((s) => s.kind === past.kind && s.agentSessionId === past.id);
+    if (open) { await this.setTitle(open, name); return; }
+    try { await renameSession(past.kind, past.id, name, { dir: cwd() }); }
+    catch (e) { vscode.window.showErrorMessage(`Perch: the session could not be renamed. ${e.message}`); }
+  }
+
+  /** Open a tab on a past session, or go to the tab that is already open on it: two agents must not write one record. */
+  resumeSession(past) {
+    const open = this.sessions.find((s) => s.kind === past.kind && s.agentSessionId === past.id);
+    if (!open) return this.addSession(past.kind, { resume: past.id, title: past.title });
+    this.activate(open.id);
+    if (open.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
+    return open;
+  }
+
+  /** The list of past sessions of this folder, from both agents: type to search, choose one to open it, or rename it. */
+  async pickSession() {
+    const qp = vscode.window.createQuickPick();
+    qp.title = 'Perch sessions'; qp.placeholder = 'Search sessions…'; qp.matchOnDescription = true; qp.busy = true;
+    qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it) this.resumeSession(it.past); });
+    // the box that asks for the name takes the list's place, so the list is opened again afterwards, with the new name in it
+    qp.onDidTriggerItemButton(async (e) => { qp.hide(); await this.renamePast(e.item.past); await this.pickSession(); });
+    qp.onDidHide(() => qp.dispose());
+    qp.show();
+    const { sessions, failed } = await listSessions({ dir: cwd(), limit: 200 });
+    const rename = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Rename session' };
+    qp.items = sessions.map((p) => {
+      const open = this.sessions.find((s) => s.kind === p.kind && s.agentSessionId === p.id);
+      const past = open && open.unsaved ? Object.assign({}, p, { title: open.title }) : p;
+      return { label: past.title, description: [p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename], past };
+    });
+    const missing = failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ');
+    if (!sessions.length) qp.placeholder = missing ? `The sessions of ${missing} could not be read` : 'No past sessions in this folder';
+    else if (missing) qp.title = `Perch sessions · those of ${missing} could not be read`;
+    qp.busy = false;
+    return qp;
   }
 
   /** Bring a tab to the front, wherever it lives. */
@@ -654,6 +865,8 @@ function activate(context) {
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    vscode.commands.registerCommand('perch.sessions', () => perch.pickSession()),
+    vscode.commands.registerCommand('perch.renameTab', () => perch.renameTab()),
     vscode.commands.registerCommand('perch.moveToEditor', () => { const s = perch.active(); if (s) perch.move(s.id, 'editor'); }),
     vscode.commands.registerCommand('perch.moveToSidebar', () => { const s = perch.active(); if (s) perch.move(s.id, 'sidebar'); }),
     vscode.commands.registerCommand('perch.moveAllToEditor', () => perch.moveAll('editor')),

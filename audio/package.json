@@ -3,8 +3,13 @@
   "displayName": "Perch Audio",
   "description": "Microphone capture for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
   "version": "0.1.0",
-  "publisher": "fennets",
+  "publisher": "seanahn",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seanahn/perch"
+  },
+  "homepage": "https://github.com/seanahn/perch/tree/main/audio",
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Other"],
   "extensionKind": ["ui"],

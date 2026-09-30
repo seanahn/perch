@@ -29,7 +29,7 @@ const ev = (sid, e) => host({ type: 'event', sid, ev: e });
 const visiblePane = () => $$('.pane').filter(shown);
 const opt = (v, label, title) => Object.assign({ value: v, label: label || v || 'default' }, title ? { title } : {});
 const tab = (o) => Object.assign({
-  busy: false, attention: false, started: false, actualModel: '', backend: '', queued: 0, ide: o.kind === 'codex' ? false : null, approvals: o.kind === 'codex' ? 'on-failure' : '',
+  busy: false, attention: false, started: false, actualModel: '', backend: '', queued: 0, ide: false, approvals: o.kind === 'codex' ? 'on-failure' : '',
   model: '', models: o.kind === 'claude' ? [opt('', 'default · Opus 5.5', 'The model the agent picks by default'), opt('fable', 'Fable 5.1', 'For your toughest challenges'), opt('haiku', 'Haiku 4.5', 'Fastest')] : [opt('', 'default · GPT-5.6-Sol'), opt('gpt-5.5', 'GPT-5.5')],
   effort: '', efforts: o.kind === 'claude' ? [opt(''), opt('low'), opt('high'), opt('max')] : [opt('', 'default · ultra'), opt('high'), opt('ultra')],
   mode: o.kind === 'claude' ? 'default' : 'workspace-write', modes: o.kind === 'claude' ? ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'] : ['read-only', 'workspace-write', 'danger-full-access'],
@@ -73,7 +73,7 @@ ev('b', { kind: 'text', text: 'codex says hi' });
 const paneA = $$('.pane')[0], paneB = $$('.pane')[1];
 assert.deepStrictEqual([...paneA.querySelectorAll('.msg')].map((m) => m.textContent), ['hello a', 'final answer']);
 assert.deepStrictEqual([...paneB.querySelectorAll('.msg')].map((m) => m.textContent), ['codex says hi'], 'background tab received its own event only');
-assert.deepStrictEqual([paneA.querySelector('.state').textContent, paneB.querySelector('.state').textContent], ['ready', 'idle'], 'status is per tab, and state only');
+assert.deepStrictEqual([paneA.querySelector('.state'), paneA.querySelector('.bar'), paneB.querySelector('.dot')], [null, null, null], 'an idle tab says nothing about itself: the foot of the transcript speaks while it works');
 assert.strictEqual(paneA.querySelectorAll('select').length, 0, 'no selector row: the composer carries the choices');
 ev('a', { kind: 'user', text: 'later', queued: true });
 const q = [...paneA.querySelectorAll('.user')].pop();
@@ -82,7 +82,7 @@ assert.deepStrictEqual([q.classList.contains('queued'), q.querySelector('.tag').
 // ---- composer, Claude tab
 assert.strictEqual($('#composer').className, 'claude');
 assert.strictEqual($('#input').placeholder, 'Message Claude…');
-assert(!shown($('#t-ide')) && !shown($('#tools .sep')) && !shown($('#t-model .chev')), 'IDE context and the chevron belong to Codex');
+assert(shown($('#t-ide')) && !shown($('#tools .sep')) && !shown($('#t-model .chev')), 'IDE context on both; the rule and the chevron belong to Codex');
 assert(/M9 1\.5L3\.5 9/.test($('#t-mode').innerHTML), 'a bolt');
 assert.strictEqual(window.getComputedStyle($('#send')).borderRadius, '7px', 'a rounded square');
 assert.deepStrictEqual([$('#t-model .m').textContent, $('#t-model .e').textContent], ['Opus 5.5', ''], 'the pill names what the default resolves to; an unknown default effort is left out');
@@ -216,18 +216,17 @@ $('#t-model').click();
 assert.deepStrictEqual([$$('#menu .h').map((n) => n.textContent), $$('#menu .note').map((n) => n.textContent)], [['Model'], ['This model has no effort control.']]);
 d.body.click();
 
-// a started Codex thread cannot change model, effort, or sandbox: the menus say so and the items are inert
+// a started Codex thread changes model, effort, and sandbox as a Claude session does: from the next message
 host({ type: 'tabs', tabs: [A, with_(B, { started: true, model: 'gpt-5.5', effort: 'high' })], active: 'b' });
 assert.deepStrictEqual([$('#t-model .m').textContent, $('#t-model .e').textContent], ['GPT-5.5', 'High']);
-assert(/A Codex thread keeps the model and effort it started with\.$/.test($('#t-model').title));
+assert(/Changes apply from the next message\.$/.test($('#t-model').title));
 $('#t-model').click();
-assert(/keeps the model and effort it started with/.test($('#menu .note').textContent));
-assert(menuItems().every((x) => x.dis), 'every choice is disabled');
-assert.deepStrictEqual(menuItems().filter((x) => x.on).map((x) => x.label), ['GPT-5.5', 'High'], 'but the current ones are still marked');
-menuItems()[0].n.click(); assert.strictEqual(out.length, 0, 'and clicking one sends nothing');
-d.body.click();
+assert(menuItems().every((x) => !x.dis), 'every choice can be made');
+assert.deepStrictEqual(menuItems().filter((x) => x.on).map((x) => x.label), ['GPT-5.5', 'High']);
+menuItems()[0].n.click(); assert.deepStrictEqual(out.pop(), { type: 'setModel', sid: 'b', value: '' });
+$('#t-model').click(); pickItem('Ultra'); assert.deepStrictEqual(out.pop(), { type: 'setEffort', sid: 'b', value: 'ultra' });
 $('#t-mode').click();
-assert(/keeps the sandbox it started with/.test($('#menu .note').textContent)); assert(menuItems().every((x) => x.dis));
+assert(menuItems().every((x) => !x.dis)); pickItem('Read only'); assert.deepStrictEqual(out.pop(), { type: 'setMode', sid: 'b', value: 'read-only' });
 d.body.click();
 
 // ---- mode menu
@@ -340,6 +339,47 @@ assert.strictEqual(paneA.querySelectorAll('.perm').length, 0, 'answered prompt c
 ev('a', { kind: 'permission', id: 'p2', tool: 'Bash', input: { command: 'rm x' }, hasSuggestions: true });
 assert.deepStrictEqual([...paneA.querySelectorAll('.perm button')].map((b) => b.textContent), ['Allow', 'Always', 'Deny']);
 
+// ---- a question from the agent: choices as buttons, a line of your own, one answer for all
+{
+  const Q = [
+    { question: 'Which store?', header: 'Store', options: [{ label: 'Redis', description: 'Fast' }, { label: 'S3', description: 'Cheap' }], multiSelect: false },
+    { question: 'Which features?', header: 'Features', options: [{ label: 'Rename' }, { label: 'Resume' }, { label: 'Images' }], multiSelect: true },
+  ];
+  ev('a', { kind: 'question', id: 'q1', questions: Q });
+  const card = paneA.querySelector('.ask'); const secs = [...card.querySelectorAll('.q')];
+  assert.deepStrictEqual(secs.map((s) => [s.querySelector('.chip').textContent, s.querySelector('.t').textContent, [...s.querySelectorAll('.opt .l')].map((n) => n.textContent)]), [['Store', 'Which store?', ['Redis', 'S3']], ['Features', 'Which features?', ['Rename', 'Resume', 'Images']]]);
+  assert.strictEqual(secs[0].querySelector('.opt .d').textContent, 'Fast');
+  const send = card.querySelector('.btns .primary'), opts = (i) => [...secs[i].querySelectorAll('.opt')];
+  assert.deepStrictEqual([send.textContent, send.disabled, card.querySelector('.btns button:not(.primary)').textContent], ['Answer all', true, 'Skip'], 'nothing can be sent until every question has an answer');
+  opts(0)[0].click(); opts(0)[1].click();
+  assert.deepStrictEqual(opts(0).map((b) => b.classList.contains('on')), [false, true], 'one choice at a time');
+  assert.strictEqual(send.disabled, true, 'the second question is still open');
+  opts(1)[0].click(); opts(1)[2].click(); opts(1)[0].click(); opts(1)[1].click();
+  assert.deepStrictEqual(opts(1).map((b) => b.classList.contains('on')), [false, true, true], 'several at once');
+  assert.strictEqual(send.disabled, false);
+  const own = secs[0].querySelector('.other'); own.value = 'Postgres'; own.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.deepStrictEqual(opts(0).map((b) => b.classList.contains('on')), [false, false], 'an answer of your own replaces the choice');
+  assert.strictEqual(key(own, 'Enter'), false, 'Enter in the line sends the answers, not the message');
+  assert.deepStrictEqual(out.pop(), { type: 'permission', sid: 'a', id: 'q1', decision: 'answer', answers: { 'Which store?': 'Postgres', 'Which features?': 'Resume, Images' } });
+  assert.strictEqual(paneA.querySelectorAll('.ask button').length, 0, 'answered, the card is settled');
+  assert.deepStrictEqual([...paneA.querySelectorAll('.ask.done .q')].map((q) => q.querySelector('.t').textContent + ' ' + q.querySelector('.a').textContent), ['Which store? Postgres', 'Which features? Resume, Images']);
+
+  // skipped
+  ev('a', { kind: 'question', id: 'q2', questions: Q.slice(0, 1) });
+  const c2 = [...paneA.querySelectorAll('.ask')].pop(); assert.strictEqual(c2.querySelector('.btns .primary').textContent, 'Answer');
+  c2.querySelector('.btns button:not(.primary)').click();
+  assert.deepStrictEqual(out.pop(), { type: 'permission', sid: 'a', id: 'q2', decision: 'deny' });
+  assert.strictEqual(c2.className, 'msg status');
+
+  // an answered question comes back from the host settled, and a past one shows what was asked
+  ev('a', { kind: 'answered', questions: Q.slice(0, 1), answers: { 'Which store?': 'S3' } });
+  ev('a', { kind: 'answered', questions: Q.slice(0, 1), answers: {} });
+  ev('a', { kind: 'tool_use', id: 't9', name: 'AskUserQuestion', input: { questions: Q.slice(0, 1) } });
+  const done = [...paneA.querySelectorAll('.ask.done')].slice(-3);
+  assert.deepStrictEqual(done.map((d) => d.querySelector('.a').textContent), ['S3', 'not answered', '']);
+  assert.strictEqual(paneA.querySelectorAll('.tool').length, 0, 'a question is not shown as a tool call as well');
+}
+
 // ---- tool call and result pair up; result line shows cache usage
 ev('a', { kind: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/y' } });
 ev('a', { kind: 'text', text: 'between' });
@@ -347,6 +387,24 @@ ev('a', { kind: 'tool_result', id: 't1', text: 'file body' });
 const kids = [...paneA.querySelectorAll('.msg')]; const ti = kids.findIndex((k) => k.classList.contains('tool'));
 assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under its tool call');
 ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, cache_read: 7680, output: 11 } });
+{
+  // the cost figure is Claude Code's running estimate for the whole session at API rates, and says so; on a subscription it is not a bill
+  host({ type: 'tabs', tabs: [with_(A, { backend: 'subscription' }), B], active: 'a' });
+  ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 43.567 });
+  const r = [...paneA.querySelectorAll('.result')].pop();
+  assert(/ · session ≈\$43\.57 at API rates$/.test(r.textContent), r.textContent);
+  assert(/nothing is billed per token/.test(r.title));
+  // once the agent can tell, each turn's own cost is shown, which is what matters in a session that runs for months
+  ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 43.591, costTurn: 0.0241 });
+  const rt = [...paneA.querySelectorAll('.result')].pop();
+  assert(/ · ≈\$0\.024 this turn at API rates$/.test(rt.textContent), rt.textContent);
+  assert(/This turn's cost .* the session so far ≈\$43\.59\./.test(rt.title) && /nothing is billed/.test(rt.title));
+  host({ type: 'tabs', tabs: [with_(A, { backend: 'api' }), B], active: 'a' });
+  ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, cost: 0.5 });
+  const r2 = [...paneA.querySelectorAll('.result')].pop();
+  assert(/ · session ≈\$0\.500$/.test(r2.textContent), r2.textContent); assert(!/billed/.test(r2.title));
+  host({ type: 'tabs', tabs: [A, B], active: 'a' });
+}
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));
 
 // ---- footer: Claude backend and usage
@@ -438,6 +496,19 @@ window.close();
   p3.w.close();
 }
 
+// ---- a double-click on a tab's name asks the host to rename it; it does not switch tabs or close anything
+{
+  const p3 = page(ICONS); p3.out.length = 0;
+  p3.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'First' }), tab({ id: 'b', kind: 'codex', title: 'Second' })], active: 'a' });
+  const names = p3.$$('.tab .t');
+  assert.deepStrictEqual(p3.$$('.tab').map((n) => n.title), ['First · claude · double-click to rename', 'Second · codex · double-click to rename']);
+  names[1].dispatchEvent(new p3.w.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  assert.deepStrictEqual(p3.out, [{ type: 'rename', sid: 'b' }]);
+  p3.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'First' }), tab({ id: 'b', kind: 'codex', title: 'Renamed' })], active: 'a' });
+  assert.deepStrictEqual(p3.$$('.tab .t').map((n) => n.textContent), ['First', 'Renamed'], 'the new name arrives from the host like any other change');
+  p3.w.close();
+}
+
 // ---- no vendor icons: letters everywhere. Nothing the host supplies can break out of the script, the stylesheet, or the markup.
 {
   const p2 = page({ codex: { image: 'x</script><script>window.pwned=1</script>', glyph: 'y"); } </style><script>window.pwned=2</script>' } });
@@ -460,4 +531,150 @@ window.close();
   p2.w.close();
 }
 
-console.log('PAGE OK');
+// ---- an answer is Markdown, drawn; and the transcript keeps to its end
+{
+  const p5 = page(ICONS); p5.out.length = 0;
+  p5.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+  const e5 = (e, sid) => p5.host({ type: 'event', sid: sid || 'a', ev: e });
+  const log = p5.$$('.pane')[0].querySelector('.log');
+  let height = 1000; Object.defineProperty(log, 'scrollHeight', { get: () => height }); Object.defineProperty(log, 'clientHeight', { get: () => 200 });
+  const userScrolls = (to) => { log.scrollTop = to; log.dispatchEvent(new p5.w.Event('scroll')); };
+
+  e5({ kind: 'user', text: '**not** drawn: what the user wrote is shown as written' });
+  assert.strictEqual(log.querySelector('.user').innerHTML, '**not** drawn: what the user wrote is shown as written');
+  e5({ kind: 'delta', text: '## Wh' }); e5({ kind: 'delta', text: 'at\n\n- **one**\n- tw' });
+  assert.strictEqual(log.querySelector('.live').innerHTML, '<h2>What</h2><ul><li><strong>one</strong></li><li>tw</li></ul>', 'drawn as it arrives');
+  e5({ kind: 'text', text: '## What\n\n- **one**\n- two, in [a.js:3](src/a.js#L3)\n\n`code`' });
+  assert.strictEqual(log.querySelectorAll('.live').length, 0);
+  const ans = log.querySelector('.assistant');
+  assert.strictEqual(ans.className, 'msg assistant md');
+  assert.strictEqual(ans.innerHTML, '<h2>What</h2><ul><li><strong>one</strong></li><li>two, in <a title="src/a.js#L3" href="#" data-open="src/a.js#L3">a.js:3</a></li></ul><p><code>code</code></p>');
+  ans.querySelector('a').click();
+  assert.deepStrictEqual(p5.out.pop(), { type: 'open', target: 'src/a.js#L3' }, 'a link to a file asks the host to open it');
+  e5({ kind: 'delta', text: 'next ' }); e5({ kind: 'text', text: 'next answer' });
+  assert.strictEqual(log.querySelectorAll('.assistant')[1].textContent, 'next answer', 'one answer\'s arriving text does not run into the next');
+
+  // at the end, it stays at the end as more arrives
+  assert.strictEqual(log.scrollTop, 1000);
+  height = 1500; e5({ kind: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } });
+  assert.strictEqual(log.scrollTop, 1500);
+  // scrolled away to read, it is left where it is
+  userScrolls(300); height = 2000; e5({ kind: 'text', text: 'more' }); e5({ kind: 'delta', text: 'and more' });
+  assert.strictEqual(log.scrollTop, 300);
+  // scrolled back to the end, it keeps to it again
+  userScrolls(1790); height = 2500; e5({ kind: 'text', text: 'again' });
+  assert.strictEqual(log.scrollTop, 2500);
+  // a transcript given again is shown from its end, wherever the last one was left
+  userScrolls(100); e5({ kind: 'clear' }); height = 4000;
+  for (let i = 0; i < 30; i++) e5({ kind: 'text', text: 'past ' + i });
+  e5({ kind: 'busy', busy: false }); e5({ kind: 'status', text: 'idle' });
+  assert.strictEqual(log.scrollTop, 4000, 'a resumed session opens on the last thing said');
+  // a prompt that needs an answer is brought into view
+  userScrolls(100); height = 4200; e5({ kind: 'permission', id: 'p', tool: 'Bash', input: {} });
+  assert.strictEqual(log.scrollTop, 4200);
+  // coming back to a tab shows its end
+  userScrolls(50);
+  p5.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'b' });
+  p5.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+  assert.strictEqual(log.scrollTop, 4200);
+  p5.w.close();
+}
+
+// ---- while a session works, the foot of its transcript says so
+{
+  const p6 = page(ICONS); p6.out.length = 0;
+  const tabs6 = (a, b) => p6.host({ type: 'tabs', tabs: [tab(Object.assign({ id: 'a', kind: 'claude', title: 'A' }, a)), tab(Object.assign({ id: 'b', kind: 'codex', title: 'B' }, b))], active: 'a' });
+  const e6 = (e, sid) => p6.host({ type: 'event', sid: sid || 'a', ev: e });
+  const foot = (i) => { const n = p6.$$('.pane')[i || 0].querySelector('.work'); return n.hidden ? null : [n.className, n.querySelector('.what').textContent, n.querySelector('.for').textContent]; };
+  tabs6();
+  assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
+  const kids = [...p6.$$('.pane')[0].children].map((n) => n.className);
+  assert.deepStrictEqual(kids, ['log', 'work'], 'under the transcript, above the message; nothing over it');
+
+  tabs6({ busy: true, busySince: Date.now() - 75000 });
+  assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');
+  e6({ kind: 'thinking', text: 'hm' }); assert.strictEqual(foot()[1], 'Thinking…');
+  e6({ kind: 'tool_start', name: 'Bash' }); assert.strictEqual(foot()[1], 'Running Bash…');
+  e6({ kind: 'tool_use', id: 't', name: 'Bash', input: {} }); e6({ kind: 'tool_result', id: 't', text: 'ok' }); assert.strictEqual(foot()[1], 'Working…');
+  e6({ kind: 'delta', text: 'The ' }); assert.strictEqual(foot()[1], 'Writing…');
+  tabs6({ busy: true, busySince: Date.now() - 4000, queued: 2 }); assert.deepStrictEqual(foot(), ['work', 'Writing…', '4s · 2 queued']);
+
+  // a prompt that waits on the user is not work
+  e6({ kind: 'permission', id: 'p1', tool: 'Bash', input: {} });
+  assert.deepStrictEqual(foot().slice(0, 2), ['work ask', 'Waiting for your answer']);
+  p6.$$('.pane')[0].querySelector('.perm button').click();
+  assert.deepStrictEqual(foot().slice(0, 2), ['work', 'Working…'].map((x, i) => (i ? foot()[1] : x)));
+  assert.notStrictEqual(foot()[1], 'Waiting for your answer');
+
+  // done, it is gone, and the next turn starts from nothing
+  tabs6({ busy: false }); assert.strictEqual(foot(), null);
+  tabs6({ busy: true, busySince: Date.now() }); assert.deepStrictEqual(foot(), ['work', 'Working…', '0s']);
+  tabs6({}, { busy: true, busySince: 0 }); assert.deepStrictEqual([foot(0), foot(1)], [null, ['work', 'Working…', '']]);
+  p6.w.close();
+}
+
+// ---- pasted images
+(async () => {
+  const p4 = page(ICONS); p4.out.length = 0;
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5)); };
+  const file = (name, type, bytes) => new p4.w.File([new Uint8Array(bytes)], name, { type });
+  const paste = (items, text) => { const e = new p4.w.Event('paste', { bubbles: true, cancelable: true }); e.clipboardData = { items, getData: () => text || '' }; p4.$('#input').dispatchEvent(e); return e; };
+  const img = (f) => ({ kind: 'file', type: f.type, getAsFile: () => f });
+  const thumbs = () => p4.$$('#shots .shot img').map((n) => n.getAttribute('src'));
+
+  // with no tab there is nowhere to put one
+  p4.host({ type: 'tabs', tabs: [], active: null });
+  assert.strictEqual(paste([img(file('a.png', 'image/png', [1, 2, 3]))]).defaultPrevented, false);
+  p4.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+  assert.strictEqual(p4.shown(p4.$('#shots')), false, 'nothing attached, nothing shown');
+
+  // text pastes as it always did
+  assert.strictEqual(paste([{ kind: 'string', type: 'text/plain', getAsFile: () => null }], 'words').defaultPrevented, false);
+  assert.strictEqual(paste([img(file('a.svg', 'image/svg+xml', [60]))]).defaultPrevented, false, 'a kind of image the agents do not take is left to the browser');
+  await settle(); assert.deepStrictEqual(thumbs(), []);
+
+  // an image is attached, shown, and sent with the message
+  assert.strictEqual(paste([{ kind: 'string', type: 'text/html', getAsFile: () => null }, img(file('shot.png', 'image/png', [137, 80, 78, 71]))]).defaultPrevented, true);
+  await settle();
+  assert.deepStrictEqual(thumbs(), ['data:image/png;base64,iVBORw==']);
+  assert(p4.shown(p4.$('#shots')));
+  paste([img(file('two.jpg', 'image/jpeg', [255, 216, 255])), img(file('three.webp', 'image/webp', [82, 73]))]); await settle();
+  assert.deepStrictEqual(thumbs().length, 3);
+  p4.$$('#shots .shot .x')[1].click();
+  assert.deepStrictEqual(thumbs(), ['data:image/png;base64,iVBORw==', 'data:image/webp;base64,Ukk='], 'one can be taken off again');
+
+  // they belong to the tab they were pasted in
+  p4.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'b' });
+  assert.deepStrictEqual([thumbs(), p4.shown(p4.$('#shots'))], [[], false]);
+  p4.$('#input').value = 'only words'; key(p4.$('#input'), 'Enter');
+  assert.deepStrictEqual(p4.out.pop(), { type: 'send', sid: 'b', text: 'only words' }, 'a message without images is sent as before');
+  p4.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+  assert.strictEqual(thumbs().length, 2);
+
+  p4.$('#input').value = 'what is this'; key(p4.$('#input'), 'Enter');
+  assert.deepStrictEqual(p4.out.pop(), { type: 'send', sid: 'a', text: 'what is this', images: [{ mime: 'image/png', data: 'iVBORw==' }, { mime: 'image/webp', data: 'Ukk=' }] });
+  assert.deepStrictEqual([thumbs(), p4.$('#input').value, p4.shown(p4.$('#shots'))], [[], '', false], 'sent, they are gone from the box');
+
+  // an image alone can be sent
+  paste([img(file('alone.png', 'image/png', [1]))]); await settle();
+  p4.$('#send').click();
+  assert.deepStrictEqual(p4.out.pop(), { type: 'send', sid: 'a', text: '', images: [{ mime: 'image/png', data: 'AQ==' }] });
+  p4.$('#send').click(); assert.strictEqual(p4.out.length, 0, 'nothing at all is still not sent');
+
+  // no more than a message takes
+  paste(Array.from({ length: 10 }, (_, i) => img(file(i + '.png', 'image/png', [i])))); await settle();
+  assert.strictEqual(thumbs().length, 8);
+  assert.strictEqual(p4.$$('.pane')[0].querySelector('.log .status:last-child').textContent, 'A message takes 8 images; 2 left out');
+
+  // the transcript says a message carried images
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'what is this', queued: false, images: 2 } });
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: '', queued: true, images: 1 } });
+  assert.deepStrictEqual(p4.$$('.pane')[0].querySelectorAll('.user .tag').length && [...p4.$$('.pane')[0].querySelectorAll('.user .tag')].map((n) => n.textContent), ['2 images', 'queued · 1 image']);
+  // with thumbnails, the message shows the images themselves; only those without one are counted
+  const T = 'data:image/jpeg;base64,/9j/4AAQ';
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'see these', queued: false, images: 3, thumbs: [T, '', 'javascript:alert(1)'] } });
+  const last = [...p4.$$('.pane')[0].querySelectorAll('.user')].pop();
+  assert.deepStrictEqual([[...last.querySelectorAll('.pics img')].map((i) => i.getAttribute('src')), last.querySelector('.tag').textContent, last.textContent.endsWith('see these')], [[T], '2 images', true]);
+  p4.w.close();
+  console.log('PAGE OK');
+})().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });

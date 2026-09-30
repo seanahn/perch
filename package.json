@@ -2,9 +2,16 @@
   "name": "perch",
   "displayName": "Perch",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.0",
-  "publisher": "fennets",
+  "version": "0.6.1",
+  "publisher": "seanahn",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seanahn/perch"
+  },
+  "extensionPack": [
+    "seanahn.perch-audio"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -62,8 +69,18 @@
       },
       {
         "command": "perch.handoff",
-        "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
+        "title": "Perch: Hand Off Last Answer to Another Tab…",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "perch.sessions",
+        "title": "Perch: Sessions…",
+        "icon": "$(history)"
+      },
+      {
+        "command": "perch.renameTab",
+        "title": "Perch: Rename Active Tab…",
+        "icon": "$(edit)"
       },
       {
         "command": "perch.refreshModels",
@@ -84,7 +101,7 @@
       },
       {
         "command": "perch.new",
-        "title": "Perch: New Tab\u2026",
+        "title": "Perch: New Tab…",
         "icon": "$(add)"
       },
       {
@@ -128,12 +145,22 @@
         {
           "command": "perch.handoff",
           "when": "view == perch.main",
-          "group": "navigation@1"
+          "group": "1_new@5"
         },
         {
           "command": "perch.stop",
           "when": "view == perch.main",
           "group": "navigation@2"
+        },
+        {
+          "command": "perch.sessions",
+          "when": "view == perch.main",
+          "group": "navigation@3"
+        },
+        {
+          "command": "perch.renameTab",
+          "when": "view == perch.main",
+          "group": "1_new@4"
         },
         {
           "command": "perch.newClaude",
@@ -185,7 +212,17 @@
         {
           "command": "perch.handoff",
           "when": "activeWebviewPanelId == 'perch.session'",
-          "group": "navigation@2"
+          "group": "2_move@2"
+        },
+        {
+          "command": "perch.sessions",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "perch.renameTab",
+          "when": "activeWebviewPanelId == 'perch.session'",
+          "group": "1_new@3"
         },
         {
           "command": "perch.newClaude",
@@ -219,9 +256,19 @@
         }
       ]
     },
+    "configurationDefaults": {
+      "workbench.editor.autoLockGroups": {
+        "mainThreadWebview-perch.session": true
+      }
+    },
     "configuration": {
       "title": "Perch",
       "properties": {
+        "perch.lockGroup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Lock an editor group that holds only Perch tabs, so files opened from the Explorer go to your other editor group and not in among the sessions."
+        },
         "perch.newTabs": {
           "type": "string",
           "enum": [
@@ -260,7 +307,17 @@
         "perch.claude.executable": {
           "type": "string",
           "default": "",
-          "description": "Path to a claude CLI to use instead of the one bundled with the Agent SDK."
+          "description": "Path to a claude program to run. Empty uses the one that comes with the Claude Code extension."
+        },
+        "perch.codex.executable": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a codex program to run. Empty uses the one that comes with the ChatGPT extension."
+        },
+        "perch.ideContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "New tabs attach the active file and, if there is one, the selection to each message, as the vendors' own panels do. Each tab can turn it on or off; the choice is kept with the tab."
         },
         "perch.codex.approvalPolicy": {
           "type": "string",
@@ -338,26 +395,6 @@
           "default": 10,
           "description": "Error colour when any limit has less than this percent remaining."
         },
-        "perch.meter.hideWhenUnavailable": {
-          "type": "boolean",
-          "default": false,
-          "description": "Hide the status bar items when no Claude credentials are found."
-        },
-        "perch.meter.statusBar": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "on",
-            "off"
-          ],
-          "default": "auto",
-          "enumDescriptions": [
-            "Show the status bar items unless the standalone AI Meter extension is installed.",
-            "Always show them.",
-            "Never show them; the panel footer is enough."
-          ],
-          "description": "Whether Perch puts the Claude usage gauge and backend switch in the status bar."
-        },
         "perch.voice.model": {
           "type": "string",
           "default": "large-v3-turbo",
@@ -410,7 +447,7 @@
     "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

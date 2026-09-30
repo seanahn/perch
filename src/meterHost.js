@@ -1,12 +1,13 @@
 'use strict';
-// The editor-facing half of the meter: polling, caching, the backend switch, login, and the status bar items.
+// The editor-facing half of the meter: polling, caching, the backend switch, and login. The gauge itself is the
+// footer of each tab; perch puts nothing in the status bar.
 // Merged from AI Meter. The logic it drives lives in ./meter and has no VS Code dependency.
 const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { createMeter, summarize, fmtTok, fmtUsd, shortModel, tankBar } = require('./meter');
+const { createMeter, summarize } = require('./meter');
 const { readCodexUsage } = require('./codexMeter');
 
 const CACHE_KEY = 'perch.meter.limits';
@@ -14,7 +15,6 @@ const STASH = 'perch.meter.stash.';
 const POLL_RETRY_MS = 15000;          // fast retry until the first successful fetch
 const MIN_BACKOFF_MS = 60000;         // after a rate limit, leave the endpoint alone for at least this long
 const MAX_BACKOFF_MS = 30 * 60000;
-const LEGACY = 'seanahn.ai-meter';     // the standalone extension this was merged from
 const unref = (t) => { if (t && typeof t.unref === 'function') t.unref(); return t; };
 
 class MeterHost {
@@ -30,7 +30,6 @@ class MeterHost {
     this.mode = 'subscription';
     this.backoffUntil = 0;             // no request to the usage endpoint before this time
     this.backoffMs = 0;
-    this.items = null;                 // { usage, backend } status bar items, when perch owns the status bar
     this.pollTimer = null; this.retryTimer = null; this.credWatcher = null; this.credDebounce = null;
     this.disposables = [];
   }
@@ -66,11 +65,10 @@ class MeterHost {
   }
   refreshCodex() { this.emit('codex'); }
 
-  emit(why) { const s = this.state(); if (why !== 'codex') this.renderStatusBar(s); try { this.onChange(s, why, this.codexState()); } catch (_) { /* a listener must not break polling */ } }
+  emit(why) { const s = this.state(); try { this.onChange(s, why, this.codexState()); } catch (_) { /* a listener must not break polling */ } }
 
   start() {
     this.mode = this.resolveMode();
-    this.syncStatusBar();
     this.emit('poll');                 // cached reading first, so the gauge is there immediately after a reload
     this.poll();
     this.schedule();
@@ -83,8 +81,7 @@ class MeterHost {
       }));
     } catch (_) { /* ~/.claude missing, or fs.watch unsupported: polling still covers it */ }
     this.disposables.push(
-      vscode.workspace.onDidChangeConfiguration((e) => { if (!e.affectsConfiguration('perch.meter')) return; this.schedule(); this.syncStatusBar(); this.poll('config'); }),
-      vscode.extensions.onDidChange(() => this.syncStatusBar()),          // the standalone extension was installed or removed
+      vscode.workspace.onDidChangeConfiguration((e) => { if (!e.affectsConfiguration('perch.meter')) return; this.schedule(); this.poll('config'); }),
     );
   }
 
@@ -119,65 +116,6 @@ class MeterHost {
       this.retryTimer = unref(setInterval(() => this.poll(), POLL_RETRY_MS));
     }
     this.emit(why || 'poll');
-  }
-
-  // ---- status bar. perch stands down while the standalone AI Meter is installed, so the gauge is never shown twice.
-  wantStatusBar() {
-    const v = this.cfg('statusBar') || 'auto';
-    if (v === 'on') return true;
-    if (v === 'off') return false;
-    return !vscode.extensions.getExtension(LEGACY);
-  }
-  syncStatusBar() {
-    const want = this.wantStatusBar();
-    if (want && !this.items) {
-      // Explicit id and name keep each entry's identity stable across restarts and name it in the context menu.
-      // The 0.001 gap between the priorities keeps other extensions' items from slotting in between.
-      const usage = vscode.window.createStatusBarItem('perch.meter.usage', vscode.StatusBarAlignment.Right, 100.01);
-      usage.name = 'Perch: Claude Usage'; usage.command = 'perch.meter.refresh';
-      const backend = vscode.window.createStatusBarItem('perch.meter.backend', vscode.StatusBarAlignment.Right, 100.011);
-      backend.name = 'Perch: Claude Backend'; backend.command = 'perch.meter.toggleBackend';
-      this.items = { usage, backend };
-      this.renderStatusBar(this.state());
-    } else if (!want && this.items) {
-      this.items.usage.dispose(); this.items.backend.dispose(); this.items = null;
-    }
-  }
-  renderStatusBar(s) {
-    if (!this.items) return;
-    const { usage, backend } = this.items;
-    if (s.mode !== 'cost' && !s.limits && s.error === 'no-credentials' && this.cfg('hideWhenUnavailable')) { usage.hide(); backend.hide(); return; }
-    const warn = new vscode.ThemeColor('statusBarItem.warningBackground'), err = new vscode.ThemeColor('statusBarItem.errorBackground');
-    backend.text = s.backend === 'api' ? '$(cloud) API' + (s.backendWarn ? ' $(warning)' : '') : '$(account) sub';
-    backend.backgroundColor = s.backendWarn ? warn : undefined;
-    backend.tooltip = s.backendTitle;
-    usage.text = '$(dashboard) ' + s.text;
-    usage.backgroundColor = s.level === 'error' ? err : s.level === 'warn' ? warn : undefined;
-    const md = new vscode.MarkdownString();
-    if (s.mode === 'cost' && s.cost) {
-      const c = s.cost;
-      md.appendMarkdown('**Claude cost**, estimated from local transcripts  \n');
-      md.appendMarkdown('**Session (5h)** ' + fmtTok(c.session.tokens) + ' tokens · ≈' + fmtUsd(c.session.cost) + '  \n');
-      md.appendMarkdown('**Today** ' + fmtTok(c.today.tokens) + ' tokens · ≈' + fmtUsd(c.today.cost) + (c.latestModel ? ' · current model `' + shortModel(c.latestModel) + '`' : '') + '  \n');
-      md.appendMarkdown('\n**Last 7 days**\n');
-      const max = Math.max(0.000001, ...c.days.map((d) => d.cost));
-      md.appendCodeblock(c.days.map((d) => d.label + ' ' + '▇'.repeat(Math.round(d.cost / max * 20)).padEnd(20, '·') + ' ' + fmtTok(d.tokens).padStart(6) + ' ' + fmtUsd(d.cost).padStart(6)).join('\n'), 'text');
-      md.appendMarkdown('\n');
-      for (const m of c.models) md.appendMarkdown('`' + m.model + '` in ' + fmtTok(m.input) + ' · out ' + fmtTok(m.output) + ' · cache r ' + fmtTok(m.cacheRead) + ' w ' + fmtTok(m.cacheWrite) + ' · ' + (m.unpriced ? 'no price data' : '≈' + fmtUsd(m.cost)) + '  \n');
-      if (!c.models.length) md.appendMarkdown('No Claude Code activity today (`~/.claude/projects`).  \n');
-      md.appendMarkdown('\n_Priced at Anthropic list rates; Bedrock or partner billing may differ. ');
-    } else if (s.limits) {
-      md.appendMarkdown('**Claude usage**, ' + (this.cfg('display') === 'used' ? 'percent used' : 'percent remaining') + '  \n');
-      md.appendMarkdown(s.limits.map((l) => (l.level === 'error' ? '🔴' : l.level === 'warn' ? '🟡' : '🟢') + ' `' + tankBar(l.remaining) + '` **' + l.name + '** ' + l.remaining + '% · resets ' + l.reset + (l.eta ? ' (' + l.eta + ')' : '')).join('  \n'));
-      md.appendMarkdown('  \n_');
-    } else {
-      md.appendMarkdown(s.lines.join('  \n') + (s.action === 'login' ? '\n\n[**Log in to Claude**](command:perch.meter.login)' : '') + '\n\n_');
-      md.isTrusted = true;
-    }
-    if (s.fetchedAt) md.appendMarkdown('Updated ' + new Date(s.fetchedAt).toLocaleTimeString() + ' · ');
-    md.appendMarkdown('click to refresh_');
-    usage.tooltip = md;
-    usage.show(); backend.show();
   }
 
   /** Switch the backend the NEXT Claude session uses, by flipping env.CLAUDE_CODE_USE_BEDROCK in ~/.claude/settings.json.
@@ -240,9 +178,8 @@ class MeterHost {
   dispose() {
     clearInterval(this.pollTimer); clearInterval(this.retryTimer); clearTimeout(this.credDebounce);
     if (this.credWatcher) this.credWatcher.close();
-    if (this.items) { this.items.usage.dispose(); this.items.backend.dispose(); this.items = null; }
     for (const d of this.disposables) d.dispose();
   }
 }
 
-module.exports = { MeterHost, LEGACY };
+module.exports = { MeterHost };

@@ -31,6 +31,7 @@ class AsyncQueue {
  * @param {string} [opts.effort]                      low | medium | high | xhigh | max; empty uses the model default
  * @param {string} [opts.resume]                      session id to resume
  * @param {string} [opts.executable]                  path to claude CLI
+ * @param {number} [opts.costBefore]                   the session's cost so far, as last reported, so the first turn's own cost is known
  */
 class ClaudeAgent {
   constructor(opts) {
@@ -42,6 +43,7 @@ class ClaudeAgent {
     this.running = false;
     this.pending = 0;                // messages sent and not yet answered
     this.lastAnswer = '';
+    this.lastCost = typeof opts.costBefore === 'number' ? opts.costBefore : null;   // Claude Code reports the session's whole cost; a turn's is the difference
     this.live = '';          // streamed text for the in-flight assistant message
     this.abort = new AbortController();
     this.done = this._run();
@@ -60,6 +62,13 @@ class ClaudeAgent {
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();
+        // A question for the user is a tool call: the answers go back as part of its input
+        if (toolName === 'AskUserQuestion' && input && Array.isArray(input.questions)) {
+          this.emit({ kind: 'question', id, questions: input.questions });
+          const ans = await this.opts.askPermission({ id, tool: toolName, input });
+          if (ans.decision === 'answer' && ans.answers) return { behavior: 'allow', updatedInput: Object.assign({}, input, { answers: ans.answers }) };
+          return { behavior: 'deny', message: ans.message || 'The user did not answer.' };
+        }
         this.emit({ kind: 'permission', id, tool: toolName, input, hasSuggestions: !!(suggestions && suggestions.length) });
         const ans = await this.opts.askPermission({ id, tool: toolName, input });
         if (ans.decision === 'allow') return { behavior: 'allow', updatedInput: input };
@@ -87,6 +96,16 @@ class ClaudeAgent {
     }
   }
 
+  /**
+   * Claude Code's own word on whether a turn is running. It is authoritative: the count of results below is not, because
+   * two messages sent during a turn can be taken up together and answered with one result, which would leave a tab
+   * shown as working for good.
+   */
+  _state(state) {
+    if (state === 'idle') { if (this.running || this.pending) { this.running = false; this.pending = 0; this.emit({ kind: 'busy', busy: false }); } }
+    else if (state === 'running' && !this.running) { this.running = true; this.pending = Math.max(1, this.pending); this.emit({ kind: 'busy', busy: true }); }
+  }
+
   /** How full the context window is. Asked after every turn; a failure just leaves the last figure in place. */
   async _context() {
     if (!this.query || typeof this.query.getContextUsage !== 'function') return;
@@ -103,6 +122,7 @@ class ClaudeAgent {
       case 'system':
         if (m.subtype === 'init') { if (m.model) this.emit({ kind: 'model', id: m.model }); }   // the model actually in use, for the tab's tooltip
         else if (m.subtype === 'compact_boundary') this.emit({ kind: 'status', text: 'context compacted' });
+        else if (m.subtype === 'session_state_changed') this._state(m.state);
         return;
       case 'stream_event': {
         const ev = m.event || {};
@@ -135,7 +155,10 @@ class ClaudeAgent {
         this.pending = Math.max(0, this.pending - 1);
         this.emit({ kind: 'responded', at: Date.now() });   // the prompt cache is warm from now
         this._context();
-        this.emit({ kind: 'result', ok: m.subtype === 'success', cost: m.total_cost_usd, duration_ms: m.duration_ms, turns: m.num_turns, usage: m.usage && { input: m.usage.input_tokens, cache_read: m.usage.cache_read_input_tokens, cache_write: m.usage.cache_creation_input_tokens, output: m.usage.output_tokens }, error: m.subtype !== 'success' ? (m.result || m.subtype) : undefined });
+        const cost = typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined;
+        const costTurn = cost !== undefined && this.lastCost !== null ? Math.max(0, cost - this.lastCost) : undefined;
+        if (cost !== undefined) this.lastCost = cost;
+        this.emit({ kind: 'result', ok: m.subtype === 'success', cost, costTurn, duration_ms: m.duration_ms, turns: m.num_turns, usage: m.usage && { input: m.usage.input_tokens, cache_read: m.usage.cache_read_input_tokens, cache_write: m.usage.cache_creation_input_tokens, output: m.usage.output_tokens }, error: m.subtype !== 'success' ? (m.result || m.subtype) : undefined });
         if (!this.running) this.emit({ kind: 'busy', busy: false });
         return;
       case 'system_commands': return;
@@ -147,15 +170,25 @@ class ClaudeAgent {
     }
   }
 
-  /** While a turn is running, a message is queued: Claude Code takes it up as soon as the current turn ends. */
-  send(text) {
-    if (!text || !text.trim()) return;
+  /**
+   * While a turn is running, a message is queued: Claude Code takes it up as soon as the current turn ends.
+   * @param {string} text
+   * @param {{mime: string, data: string}[]} [images]  base64, placed before the text, where the model reads them best
+   * @param {{text: string, tag?: string}} [shown]  what the transcript shows, when that differs (IDE context is attached to
+   *   the message but not repeated in the transcript)
+   */
+  send(text, images, shown) {
+    text = String(text || '');
+    const pics = Array.isArray(images) ? images : [];
+    if (!text.trim() && !pics.length) return;
     const queued = this.running;
     this.pending++;
     this.running = true;
-    this.emit({ kind: 'user', text, queued });
+    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text, queued }, pics.length ? { images: pics.length } : {}, shown && shown.tag ? { tag: shown.tag } : {}));
     this.emit({ kind: 'busy', busy: true });
-    this.queue.push({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, priority: queued ? 'next' : undefined, message: { role: 'user', content: [{ type: 'text', text }] } });
+    const content = pics.map((p) => ({ type: 'image', source: { type: 'base64', media_type: p.mime, data: p.data } }));
+    if (text.trim()) content.push({ type: 'text', text });
+    this.queue.push({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, priority: queued ? 'next' : undefined, message: { role: 'user', content } });
   }
 
   /** Stops the current turn. Messages already queued are dropped with it, so nothing runs that the user did not see start. */

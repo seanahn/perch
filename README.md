@@ -3,19 +3,41 @@
 Claude Code and Codex as tabs in VS Code, in the editor area or the sidebar.
 Any number of sessions, with usage and backend switching built in.
 
-The design, its reasons, and what has and has not been verified are in
-[design.md](design.md).
+## Why: the vendors' own agents, so their caching
 
-perch is a **shell, not an agent**. Each tab spawns the vendor's own
-agent through its SDK, so prompt caching, context compaction,
-permissions, memory, and tool behavior are the vendor's, unchanged. perch
-only renders the event stream and forwards your input. Continue and
-similar harnesses replace the agent; perch keeps it.
+perch runs the **Claude Code CLI** and the **Codex CLI** themselves, one
+process per tab, through the vendors' own SDKs. It is a shell around
+them, not an agent of its own. That is the whole design, and the reason
+is tokens.
+
+An agent sends the whole conversation to the model at every step of a
+turn. What keeps that affordable is prompt caching: a step whose prompt
+prefix matches the last one is billed at a tenth of the rate. A cache hit
+needs the prefix byte-identical from step to step, which only the program
+that lays out the prompt can guarantee. Claude Code and Codex do; a
+harness that replaces them with its own loop, as Continue and similar
+tools do, gets its own caching, its own compaction, and API billing
+instead of your subscription.
+
+So perch never builds a request. Each tab is the vendor's agent, with the
+vendor's prompt, caching, compaction, permissions, memory, `CLAUDE.md`,
+skills, hooks, and MCP servers, unchanged, on your existing login. A tab
+costs what a terminal session would; the earlier turns of a session stay
+cached across a window reload, because the tab resumes the same session.
+What perch adds on top (the sessions list, names, transcripts, usage
+gauges) is read from the agents' files and asks nothing of a model.
+
+The full reasoning, with measurements, is in
+[design.md](design.md), section 3.
 
 | Tab kind | Agent | How it runs | Auth |
 | --- | --- | --- | --- |
 | Claude | Claude Code | `@anthropic-ai/claude-agent-sdk`, streaming input, `canUseTool` for permission prompts | your existing `claude` login |
-| Codex | Codex | `@openai/codex-sdk`, which bundles the `codex` binary | your existing `codex` login |
+| Codex | Codex | `@openai/codex-sdk`, one `codex exec` per turn on one thread | your existing `codex` login |
+
+Installed from the marketplace, perch runs the `claude` and `codex`
+programs that come with the **Claude Code** and **ChatGPT** extensions,
+so those two must be installed as well.
 
 ## Where tabs live
 
@@ -38,6 +60,10 @@ Both can be used at once. `Perch: Move Tab to the Editor Area` and
 agent, and its transcript are untouched. There are `Move All` versions of
 both. Tabs saved before this setting existed follow it on the next reload.
 
+An editor group that holds only Perch tabs is locked, the way a terminal's
+is, so a file opened from the Explorer goes to the group beside it and not
+in among the sessions. `perch.lockGroup` turns that off.
+
 After a window reload VS Code brings the editor tabs back where they were,
 and each resumes its session.
 
@@ -46,8 +72,12 @@ and each resumes its session.
 Press **+** to open a Claude or a Codex tab: in the editor title bar, or in
 the sidebar view's tab bar. Each tab is its own session
 with its own agent process, context, mode, draft, and transcript. Open as
-many as you like of either kind. A tab is titled from its first message.
-A dot on a tab means it is working; a red dot means it is waiting on a
+many as you like of either kind. Paste an image into the message box to
+attach it: up to eight to a message, each scaled down if it is larger
+than the agents take. A tab is titled from its first message,
+or by you (see below).
+While a session works, the foot of its transcript says what it is doing
+and for how long. A dot on a tab means it is working; a red dot means it is waiting on a
 permission prompt. Middle-click or × closes a tab and stops its agent.
 
 Tab icons are the vendors' own, read at runtime from the Claude Code and
@@ -57,18 +87,50 @@ Claude's spark in orange, the ChatGPT blossom in the theme's text colour.
 Without a glyph it uses the marketplace image, and without the extension
 a letter, C or X.
 
+Answers are drawn as Markdown: headings, lists, tables, code, links. A
+link to a file opens it in the editor, at its line if it names one. The
+transcript keeps to its end as more arrives, until you scroll away to
+read; scroll back to the end and it follows again.
+
 Agents start lazily: an open tab costs nothing until you send a message.
 
 Tabs survive a window reload. perch saves each tab's session id and the
 agent resumes its own saved conversation on the next message. The earlier
-transcript is not redrawn; the agent still has it.
+transcript is read back from the agent's own record of the session: the
+last thousand entries of it, with images as a count and Codex's sealed
+reasoning left out.
 
-Tabs do not share history. **Hand off** (the swap icon in the view title,
-or `Perch: Hand Off Last Answer to Another Tab…`) pastes the active tab's
+## Names and past sessions
+
+A tab is named from its first message until you name it yourself: run
+`Perch: Rename Active Tab…`, or double-click a tab's name in the sidebar.
+
+`Perch: Sessions…` (the clock icon in the title bar) lists the past
+sessions of the workspace folder, Claude's and Codex's together, newest
+first. Type to search. Choose one to open a tab on it, or go to the tab
+already open on it. The pencil on a row renames that session, open or not.
+
+perch keeps no list or names of its own. It reads each agent's records,
+and writes a name where that agent keeps names: for Claude, in the
+session's file under `~/.claude/projects/`, through the Agent SDK, which
+is where Claude Code's own `/rename` writes; for Codex, as a line added to
+`~/.codex/session_index.jsonl`. So a session named in Claude Code has that
+name here, and the reverse. A tab named before its first message has no
+record yet; its name is written when its first turn ends.
+
+Tabs do not share history. **Hand off** (`Perch: Hand Off Last Answer to
+Another Tab…`, in the `…` menu of the title bar and in the command
+palette) pastes the active tab's
 last answer into another tab's input box, or into a new tab. That is the
 only bridge, on purpose: shared context would defeat each agent's caching.
 
 ## Install
+
+From the marketplace: install **Perch**; Perch Audio, the microphone
+companion, comes with it. Have the Claude Code and ChatGPT extensions
+installed too, and be logged in to each.
+
+From a checkout:
 
 ```
 make install     # npm install, syntax check, symlink into the extension dirs
@@ -85,9 +147,7 @@ Always / Deny. The default mode for new tabs is a setting
 
 Codex: the SDK runs `codex exec`, which is non-interactive. Approvals
 resolve by policy (`perch.codex.approvalPolicy`) and the sandbox
-(`perch.codex.sandboxMode`). There is no per-command prompt. A Codex
-thread keeps the sandbox it started with, so choose it before the first
-message.
+(`perch.codex.sandboxMode`). There is no per-command prompt.
 
 ## The composer
 
@@ -111,9 +171,10 @@ Full access, the last in amber), the model with its effort, **IDE context**,
 and a round send button. "Work locally" sits beneath, because perch runs
 Codex on this machine through the SDK.
 
-**IDE context** is off by default and remembered per tab. When on, each
-message carries the active file and, if there is one, the selection with
-its line numbers. The transcript shows your message and a tag naming what
+**IDE context**, on both kinds of tab, is on by default for new tabs
+(`perch.ideContext`) and remembered per tab. When on, each message carries
+the active file and, if there is one, the selection with its line numbers,
+as the vendors' own panels do. The transcript shows your message and a tag naming what
 was attached, not the attachment itself. The context is read when you
 write the message, so a queued message keeps the file that was open then.
 
@@ -146,9 +207,10 @@ resets to default. `Perch: Refresh Model Lists` re-reads both.
 Claude: model, effort, and mode all change live, from the next message.
 Hover the model selector to see the model actually running.
 
-Codex: a thread keeps the model, effort, and sandbox it started with, so
-choose them before the first message. Once it has started, the menus show
-the current choices and say why they cannot change. The sandbox menu also
+Codex: model, effort, and sandbox change from the next message too. Codex
+runs each turn as a process of its own, so perch takes the thread up again
+with the new choice. Codex itself notes in the transcript when a thread
+recorded with one model is carried on with another. The sandbox menu also
 shows the approval policy.
 
 Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
@@ -181,10 +243,9 @@ is shown as full again. perch re-reads after each Codex turn it runs.
   Click to refresh. Hover for detail.
 
 This is [AI Meter](https://github.com/seanahn/ai-meter) merged into perch.
-perch also provides AI Meter's two status bar items, but stands down while
-the standalone extension is installed, so the gauge is never shown twice.
-Uninstall AI Meter and perch takes over the status bar on its own. Set
-`perch.meter.statusBar` to `on` or `off` to decide yourself.
+The gauge lives in the footer of each tab; perch puts nothing in the
+status bar. AI Meter can stay installed for a gauge that is visible
+whatever editor is open.
 
 Privacy is unchanged from AI Meter. Subscription mode reads the OAuth token
 Claude Code stores and sends it only to `api.anthropic.com/api/oauth/usage`.
@@ -202,9 +263,7 @@ minute, doubling up to half an hour. Clicking refresh during that pause
 makes no request.
 
 Settings: `perch.meter.mode`, `pollMinutes`, `display`, `showModelWeekly`,
-`warnBelow`, `errorBelow`, `hideWhenUnavailable`, `statusBar`.
-
-The status bar items are Claude's only. Codex usage appears in the panel.
+`warnBelow`, `errorBelow`.
 
 ## Dictation
 
@@ -227,14 +286,40 @@ microphone is:
 If no microphone is connected, the button says so. `Perch Audio: Choose
 Microphone` picks among several.
 
-**Status: not yet tested end to end.** Transcription and recording are
-each verified, but the machine this was built on has no microphone.
+Verified end to end on 2026-09-30, dictating messages into a tab.
 
 ## Cost
 
 Both agents run on your subscriptions through their normal logins. This
 is for personal use on your own machine. Shipping it to other people
 would require API-key billing under both vendors' terms.
+
+## Packaging and publishing
+
+`make package` builds `perch-<version>.vsix`, about 8 MB. It carries the
+two SDKs but not the `claude` and `codex` programs they run: those are
+hundreds of megabytes, and built for one platform. A packaged Perch runs
+the programs inside the Claude Code and ChatGPT extensions, so those two
+extensions must be installed where Perch is. `perch.claude.executable` and
+`perch.codex.executable` name a program of your own instead. In this
+checkout, installed from npm, the SDKs bring their own programs and those
+are used.
+
+Install the file on another machine with
+`code --install-extension perch-<version>.vsix`.
+
+To publish to the marketplace, as AI Meter is: create the publisher named
+in `package.json`, run `make login` once (or put `VSCE_PAT=<token>` in
+`.env`), then `make publish`. `make publish-patch` and `make publish-minor`
+bump the version, commit, and tag first.
+
+Perch Audio, the microphone companion, is an extension of its own,
+because it has to run on the computer you sit at while Perch runs with the
+workspace. Perch names it in its `extensionPack`, so installing Perch from
+the marketplace installs Perch Audio too, each on the machine it belongs
+on. `make publish` publishes Perch Audio first if its version is new.
+Installed from a `.vsix` file, Perch does not fetch it: build it with
+`make package-audio` and install that file as well.
 
 ## Layout
 
@@ -243,14 +328,19 @@ would require API-key billing under both vendors' terms.
 - `src/codexAgent.js` — Codex SDK thread, no VS Code dependency
 - `src/models.js` — model catalogs read from the agents, no VS Code dependency
 - `src/meter.js` — Claude usage, cost, and the backend switch, no VS Code dependency
+- `src/binaries.js` — where the agents' programs are: the SDK's own, or the vendor extension's
 - `src/codexMeter.js` — ChatGPT plan usage, read from Codex's session files
-- `src/meterHost.js` — polling, status bar items, login
+- `src/markdown.js` — an answer's Markdown, drawn as DOM nodes; written into the page as source
+- `src/sessionStore.js` — past sessions and their names, read from and written to the agents' own records
+- `src/meterHost.js` — polling, the backend switch, login
 - `src/voice.js`, `src/voiceHost.js` — the speech-to-text engine, and dictation
 - `voice/server.py` — Whisper behind JSON lines
 - `audio/` — Perch Audio, the recording companion, an extension of its own
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
 - `test/meter.test.js` — usage, cost, and the switch, against throwaway home directories
 - `test/codexMeter.test.js` — Codex usage, against throwaway session directories
+- `test/markdown.test.js` — what each construct becomes, and that nothing written becomes markup
+- `test/sessionStore.test.js` — listing and naming, against throwaway directories and a fake Agent SDK
 - `test/models.test.js` — catalog parsing, no model calls
 - `test/voice.test.js` — the engine, against a stand-in server
 - `audio/test/recorder.test.js` — the recorder, with a library that plays back frames
