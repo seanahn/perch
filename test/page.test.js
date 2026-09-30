@@ -407,9 +407,19 @@ assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under i
   assert.strictEqual(boxes[0].querySelector('.cp').textContent, 'copied');
   ev('a', { kind: 'tool_use', id: 't3', name: 'shell', input: { command: '/bin/bash -lc \'git status --short --branch\'' } });
   const tool = [...paneA.querySelectorAll('.tool')].pop(); tool.querySelector('.cp').click();
+  assert.deepStrictEqual([tool.querySelector('.name').textContent, tool.querySelector('.in').textContent, tool.querySelector('.in').classList.contains('mono')], ['shell', '/bin/bash -lc \'git status --short --branch\'', true], 'a command is shown as itself');
   assert.deepStrictEqual(out[out.length - 1], { type: 'copy', text: '/bin/bash -lc \'git status --short --branch\'' }, 'the command itself, not the JSON around it');
   ev('a', { kind: 'tool_use', id: 't4', name: 'Read', input: { file_path: '/x' } });
   [...paneA.querySelectorAll('.tool')].pop().querySelector('.cp').click();
+  assert.deepStrictEqual([[...paneA.querySelectorAll('.tool')].pop().querySelector('.name').textContent, [...paneA.querySelectorAll('.tool')].pop().querySelector('.in').textContent], ['Read', '/x'], 'a file tool shows the path');
+  // how tool calls read: a Bash with a description, a Read with lines, a search, an agent, and something unknown
+  const view = (name, input) => { ev('a', { kind: 'tool_use', id: 'v' + Math.random(), name, input }); const t = [...paneA.querySelectorAll('.tool')].pop(); return [t.querySelector('.name').textContent, t.querySelector('.in').textContent]; };
+  assert.deepStrictEqual(view('Bash', { command: 'make test', description: 'Run the tests' }), ['Bash · Run the tests', 'make test']);
+  assert.deepStrictEqual(view('Read', { file_path: '/git/perch/src/voice.js', offset: 40, limit: 20 }), ['Read', '/git/perch/src/voice.js:40-60']);
+  assert.deepStrictEqual(view('Grep', { pattern: 'busySince', path: '/git/perch/src', glob: '*.js' }), ['Grep · busySince', '/git/perch/src']);
+  assert.deepStrictEqual(view('Agent', { description: 'Find the callers', prompt: 'Search the tree for callers of restart()', subagent_type: 'Explore' }), ['Agent · Find the callers', 'Search the tree for callers of restart()']);
+  assert.deepStrictEqual(view('WebFetch', { url: 'https://example.com/a', prompt: 'x' }), ['WebFetch', 'https://example.com/a']);
+  assert.deepStrictEqual(view('Odd', { a: 1 }), ['Odd', '{\n "a": 1\n}'], 'anything else: the input as before');
   assert.deepStrictEqual(out[out.length - 1], { type: 'copy', text: '{\n "file_path": "/x"\n}' }, 'no command: the input as shown');
   // while an answer streams, the block already has its button, and only one
   ev('a', { kind: 'delta', text: 'Try\n\n```\nls' }); ev('a', { kind: 'delta', text: ' -la\n```\n' });

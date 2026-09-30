@@ -109,6 +109,8 @@ ${glyphCss}
   .tool { font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-textCodeBlock-background); border-left: 3px solid var(--vscode-charts-blue); }
   .tool .name { font-weight: 600; }
   .tool .in { color: var(--vscode-descriptionForeground); white-space: pre-wrap; max-height: 6em; overflow: hidden; }
+  .tool .in.mono { font-family: var(--vscode-editor-font-family); font-size: 11.5px; }
+  .tool .in:empty { display: none; }
   /* A long result is clipped, and does not take the wheel: scrolling the transcript passes over it. A click opens it to scroll on its own; another closes it. */
   .toolres { font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground); border-left: 3px solid var(--vscode-panel-border); max-height: 8em; overflow: hidden; position: relative; }
   .toolres.more { cursor: pointer; }
@@ -321,6 +323,25 @@ ${glyphCss}
       const box = el('div', 'code'); pre.replaceWith(box); box.append(pre, copyButton(() => pre.textContent));
     }
     return root;
+  }
+  /**
+   * A tool call as a person reads it: a title, and the one thing that matters about it, rather than the input as JSON.
+   * Bash and Codex's shell: the description as the title when there is one, the command as the body. Files: the path.
+   * Searches: the pattern, and where. Anything else: the input as before.
+   */
+  function toolView(name, input) {
+    const i = input && typeof input === 'object' ? input : {};
+    const str = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(' ') : '');
+    if (str(i.command)) return { title: str(i.description) ? name + ' · ' + str(i.description) : name, body: str(i.command), mono: true };
+    if (str(i.file_path) || str(i.path) || str(i.notebook_path)) {
+      const where = str(i.file_path) || str(i.path) || str(i.notebook_path);
+      const at = i.offset ? ':' + i.offset + (i.limit ? '-' + (i.offset + i.limit) : '') : '';
+      return { title: name + (str(i.pattern) ? ' · ' + str(i.pattern) : ''), body: where + at, mono: true };
+    }
+    if (str(i.pattern)) return { title: name, body: str(i.pattern) + (str(i.glob) ? '  (' + str(i.glob) + ')' : ''), mono: true };
+    if (str(i.url)) return { title: name, body: str(i.url), mono: true };
+    if (str(i.description) || str(i.prompt)) return { title: name + (str(i.description) ? ' · ' + str(i.description) : ''), body: str(i.prompt).slice(0, 300), mono: false };
+    return { title: name, body: fmtIn(input), mono: true };
   }
   /** What a tool call's copy button copies: the command itself when there is one, otherwise the input as shown. */
   function commandOf(input) { if (input && typeof input.command === 'string') return input.command; if (input && Array.isArray(input.command)) return input.command.join(' '); return fmtIn(input); }
@@ -700,7 +721,7 @@ ${glyphCss}
       case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
       case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
-        const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input)), copyButton(() => commandOf(m.input))); if (m.id) p.tools[m.id] = d; break; }
+        const tv = toolView(m.name, m.input); const d = add(p, 'tool', ''); d.append(el('span', 'name', tv.title + (m.status ? ' · ' + m.status : '')), el('div', 'in' + (tv.mono ? ' mono' : ''), tv.body), copyButton(() => commandOf(m.input))); if (m.id) p.tools[m.id] = d; break; }
       case 'tool_result': {
         const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : ''));
         const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d);
