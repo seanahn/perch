@@ -88,7 +88,9 @@ Without a glyph it uses the marketplace image, and without the extension
 a letter, C or X.
 
 Answers are drawn as Markdown: headings, lists, tables, code, links. A
-link to a file opens it in the editor, at its line if it names one. The
+link to a file opens it in the editor, at its line if it names one. Each
+code block, and each tool call's command, shows a copy button when the
+pointer is over it. The
 transcript keeps to its end as more arrives, until you scroll away to
 read; scroll back to the end and it follows again. A long tool result is
 clipped and lets the wheel pass, so scrolling the transcript never

@@ -396,6 +396,26 @@ assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under i
   assert(long.classList.contains('more') && !long.classList.contains('open'), 'clipped, not scrollable');
   long.click(); assert(long.classList.contains('open'), 'a click opens it'); long.click(); assert(!long.classList.contains('open'), 'and closes it');
 }
+{
+  // a code block in an answer, and a tool call's command, each carry a copy button; the host does the copying
+  ev('a', { kind: 'text', text: 'Run this in your terminal:\n\n```bash\ngit -C /home/jovyan status --short --branch\n```\n\nand `git log` after.' });
+  const msg = [...paneA.querySelectorAll('.assistant.md')].pop();
+  const boxes = msg.querySelectorAll('.code');
+  assert.deepStrictEqual([boxes.length, boxes[0].querySelector('pre code').textContent, msg.querySelectorAll('.cp').length], [1, 'git -C /home/jovyan status --short --branch', 1], 'the fenced block, not the inline code');
+  const n0 = out.length; boxes[0].querySelector('.cp').click();
+  assert.deepStrictEqual(out.slice(n0), [{ type: 'copy', text: 'git -C /home/jovyan status --short --branch' }]);
+  assert.strictEqual(boxes[0].querySelector('.cp').textContent, 'copied');
+  ev('a', { kind: 'tool_use', id: 't3', name: 'shell', input: { command: '/bin/bash -lc \'git status --short --branch\'' } });
+  const tool = [...paneA.querySelectorAll('.tool')].pop(); tool.querySelector('.cp').click();
+  assert.deepStrictEqual(out[out.length - 1], { type: 'copy', text: '/bin/bash -lc \'git status --short --branch\'' }, 'the command itself, not the JSON around it');
+  ev('a', { kind: 'tool_use', id: 't4', name: 'Read', input: { file_path: '/x' } });
+  [...paneA.querySelectorAll('.tool')].pop().querySelector('.cp').click();
+  assert.deepStrictEqual(out[out.length - 1], { type: 'copy', text: '{\n "file_path": "/x"\n}' }, 'no command: the input as shown');
+  // while an answer streams, the block already has its button, and only one
+  ev('a', { kind: 'delta', text: 'Try\n\n```\nls' }); ev('a', { kind: 'delta', text: ' -la\n```\n' });
+  const live = paneA.querySelector('.live'); assert.deepStrictEqual([live.querySelectorAll('.cp').length, live.querySelector('pre').textContent], [1, 'ls -la']);
+  out.splice(n0);   // the copies this block asked for
+}
 ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, cache_read: 7680, output: 11 } });
 {
   // the cost figure is Claude Code's running estimate for the whole session at API rates, and says so; on a subscription it is not a bill

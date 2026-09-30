@@ -87,6 +87,12 @@ ${glyphCss}
   .md li.task { list-style: none; margin-left: -18px; }
   .md code { font-family: var(--vscode-editor-font-family); font-size: .92em; background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; }
   .md pre { background: var(--vscode-textCodeBlock-background); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  /* a copy button on each code block and each tool call's command; shown when the pointer is over it */
+  .code { position: relative; }
+  .cp { position: absolute; top: 4px; right: 4px; font: inherit; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); cursor: pointer; opacity: 0; transition: opacity .1s; }
+  .code:hover .cp, .tool:hover .cp, .cp:focus, .cp.done { opacity: 1; }
+  .cp:hover { color: var(--vscode-foreground); }
+  .tool { position: relative; }
   .md pre code { background: none; padding: 0; font-size: 12px; }
   .md a { color: var(--vscode-textLink-foreground); text-decoration: none; } .md a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
   .md blockquote { padding: 0 0 0 10px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border)); color: var(--vscode-descriptionForeground); }
@@ -296,6 +302,22 @@ ${glyphCss}
   ${renderMarkdown.toString()}
   const openTarget = (target) => vscode.postMessage({ type: 'open', target });
   const drawn = (text) => renderMarkdown(text, document, openTarget);
+  /** A copy button for a piece of text: the host puts it on the clipboard, the button says so for a moment. */
+  function copyButton(getText) {
+    const b = el('button', 'cp', 'copy'); b.type = 'button'; b.title = 'Copy';
+    b.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'copy', text: getText() }); b.textContent = 'copied'; b.classList.add('done'); setTimeout(() => { b.textContent = 'copy'; b.classList.remove('done'); }, 1200); });
+    return b;
+  }
+  /** Each code block in a rendered answer gets a copy button, in a wrapper so the button stays put while the block scrolls. */
+  function copyable(root) {
+    for (const pre of [...root.querySelectorAll('pre')]) {
+      if (pre.parentNode && pre.parentNode.classList && pre.parentNode.classList.contains('code')) continue;
+      const box = el('div', 'code'); pre.replaceWith(box); box.append(pre, copyButton(() => pre.textContent));
+    }
+    return root;
+  }
+  /** What a tool call's copy button copies: the command itself when there is one, otherwise the input as shown. */
+  function commandOf(input) { if (input && typeof input.command === 'string') return input.command; if (input && Array.isArray(input.command)) return input.command.join(' '); return fmtIn(input); }
 
   function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
   function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
@@ -668,11 +690,11 @@ ${glyphCss}
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
         if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; row.append(i); } d.append(row); }
         d.append(m.text); break; }
-      case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); break;
-      case 'text': endLive(p); add(p, 'assistant md', '').append(drawn(m.text)); break;
+      case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); break;
+      case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
       case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
-        const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input))); if (m.id) p.tools[m.id] = d; break; }
+        const d = add(p, 'tool', ''); d.append(el('span', 'name', m.name + (m.status ? ' · ' + m.status : '')), el('div', 'in', fmtIn(m.input)), copyButton(() => commandOf(m.input))); if (m.id) p.tools[m.id] = d; break; }
       case 'tool_result': {
         const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : ''));
         const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d);

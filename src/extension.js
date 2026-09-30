@@ -789,6 +789,7 @@ class PerchView {
       case 'close': this.closeSession(msg.sid); return;
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
+      case 'copy': vscode.env.clipboard.writeText(String(msg.text || '')); return;
       case 'history': this.pickSession(); return;
       default: return;
     }

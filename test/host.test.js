@@ -977,6 +977,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the page's copy button: the host puts the text on the clipboard
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'copy', text: 'git status --short' }); v.fire({ type: 'copy' }); await flush();
+    assert.deepStrictEqual(m.ui.copied, ['git status --short', '']);
+    m.perch.dispose();
+  }
+
   // ---- Codex's sandbox cannot start on the machine: the choice to run without one, for the tab or for the machine
   {
     const HOST = require('os').hostname(), BWRAP = 'bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with \'sysctl kernel.unprivileged_userns_clone=1\'.';
