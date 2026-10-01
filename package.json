@@ -2,7 +2,7 @@
   "name": "perch",
   "displayName": "Perch",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.25",
+  "version": "0.6.26",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -76,17 +76,17 @@
       },
       {
         "command": "perch.handoff",
-        "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
+        "title": "Perch: Hand Off Last Answer to Another Tab…",
         "icon": "$(arrow-swap)"
       },
       {
         "command": "perch.sessions",
-        "title": "Perch: Sessions\u2026",
+        "title": "Perch: Sessions…",
         "icon": "$(history)"
       },
       {
         "command": "perch.renameTab",
-        "title": "Perch: Rename Active Tab\u2026",
+        "title": "Perch: Rename Active Tab…",
         "icon": "$(edit)"
       },
       {
@@ -108,7 +108,7 @@
       },
       {
         "command": "perch.new",
-        "title": "Perch: New Tab\u2026",
+        "title": "Perch: New Tab…",
         "icon": "$(add)"
       },
       {
