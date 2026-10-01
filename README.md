@@ -427,9 +427,10 @@ second pass over the audio.
 Verified end to end on 2026-09-30, dictating messages into a tab, on
 this machine (GPU) and over Remote-SSH to a CPU-only container.
 
-A web address in an error or a note is a link. The plan badge under a
-Codex tab (Plus, Pro) opens your ChatGPT usage page, where limits and
-credits are managed.
+A web address in an error or a note is a link. The vendor's mark at the
+left of the footer opens the vendor's site, claude.ai or chatgpt.com; the
+plan badge under a Codex tab (Plus, Pro) opens your ChatGPT usage page,
+where limits and credits are managed.
 
 ## Cost
 

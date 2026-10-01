@@ -231,6 +231,8 @@ ${glyphCss}
   /* Claude usage and backend */
   #meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   #meter .k { width: 12px; height: 12px; }
+  #m-claude, #m-codex { cursor: pointer; display: inline-flex; }
+  #m-claude:hover, #m-codex:hover { opacity: .8; }
   #m-claude, #m-codex { flex: none; display: inline-flex; }
   #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; cursor: pointer; }
   #meter .plan:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
@@ -839,6 +841,10 @@ ${glyphCss}
   }
   $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
   $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
+  // the vendor's mark opens the vendor's site
+  $mClaude.title = 'Open claude.ai'; $mCodex.title = 'Open chatgpt.com';
+  $mClaude.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://claude.ai/' }));
+  $mCodex.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/' }));
   $mu.addEventListener('click', () => vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }));
 
   window.addEventListener('message', (e) => {
