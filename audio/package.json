@@ -3,7 +3,7 @@
   "displayName": "Perch Audio",
   "icon": "media/icon.png",
   "description": "Microphone capture and, on a machine with a GPU, speech-to-text for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
