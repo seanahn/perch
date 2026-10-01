@@ -193,11 +193,18 @@ host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTit
 assert(shown($('#meter')) && shown($('#m-where')), 'beneath a Codex tab: where the work runs, and the ChatGPT plan\'s usage');
 assert.strictEqual($('#m-where').textContent, 'Work locally'); assert(/runs Codex on this machine/.test($('#m-where').title));
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
-assert(shown($('#m-codex')) && !shown($('#m-claude')) && !shown($('#m-backend')), 'the ChatGPT glyph; no Claude glyph, and no backend switch, which is Claude\'s');
+assert(shown($('#m-codex')) && !shown($('#m-claude')), 'the ChatGPT glyph; no Claude glyph, and the backend switch shows Codex\'s backend');
 assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
 assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus. Click to open your usage page.']);
 $('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
 $('#m-codex').click(); assert.deepStrictEqual([out.pop(), $('#m-codex').title], [{ type: 'openExternal', url: 'https://chatgpt.com/' }, 'Open chatgpt.com'], 'the vendor mark opens the vendor site');
+// under a Codex tab the backend button shows the Codex backend, and a click asks the host to switch it
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
+assert.deepStrictEqual([shown($('#m-backend')), $('#m-backend').textContent, $('#m-backend').title], [true, 'ChatGPT', 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.']);
+$('#m-backend').click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle', vendor: 'codex' });
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
+assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: CODEX });
 $('#m-claude').click(); assert.deepStrictEqual([out.pop(), $('#m-claude').title], [{ type: 'openExternal', url: 'https://claude.ai/' }, 'Open claude.ai']);
 assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
 $('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
@@ -483,7 +490,7 @@ assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
 assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
 assert.strictEqual($('#m-claude .k').className, 'k glyph claude', 'marked as Claude'); assert(shown($('#m-claude')) && !shown($('#m-codex')) && !shown($('#m-plan')));
-$mb.click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle' });
+$mb.click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle', vendor: 'claude' });
 $mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'claude' });
 host({ type: 'meter', meter: Object.assign({}, METER, { stale: true, lines: METER.lines.concat('Showing the last reading: the usage endpoint is rate limiting requests.') }) });
 assert($mu.classList.contains('stale')); assert(/^5h session: 91% remaining\nShowing the last reading: .*rate limiting requests\.\nUpdated /.test($mu.children[0].title), 'a kept reading says it is old, and why');

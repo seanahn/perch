@@ -77,17 +77,17 @@
       },
       {
         "command": "perch.handoff",
-        "title": "Perch: Hand Off Last Answer to Another Tab…",
+        "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
         "icon": "$(arrow-swap)"
       },
       {
         "command": "perch.sessions",
-        "title": "Perch: Sessions…",
+        "title": "Perch: Sessions\u2026",
         "icon": "$(history)"
       },
       {
         "command": "perch.renameTab",
-        "title": "Perch: Rename Active Tab…",
+        "title": "Perch: Rename Active Tab\u2026",
         "icon": "$(edit)"
       },
       {
@@ -109,7 +109,7 @@
       },
       {
         "command": "perch.new",
-        "title": "Perch: New Tab…",
+        "title": "Perch: New Tab\u2026",
         "icon": "$(add)"
       },
       {
@@ -146,6 +146,18 @@
       {
         "command": "perch.voice.unload",
         "title": "Perch: Unload the Speech Model (frees its memory)"
+      },
+      {
+        "command": "perch.codex.toggleBackend",
+        "title": "Perch: Switch Codex Backend (ChatGPT / API key)"
+      },
+      {
+        "command": "perch.codex.setApiKey",
+        "title": "Perch: Set OpenAI API Key for Codex\u2026"
+      },
+      {
+        "command": "perch.codex.clearApiKey",
+        "title": "Perch: Forget the OpenAI API Key for Codex"
       }
     ],
     "menus": {

@@ -39,10 +39,25 @@ class CodexAgent {
     let sdk;
     try { sdk = await import('@openai/codex-sdk'); }
     catch (err) { this.emit({ kind: 'error', text: 'Codex SDK not installed: ' + err.message + '. Run `make deps` in /git/perch.' }); return false; }
-    this.codex = new sdk.Codex(this.opts.executable ? { codexPathOverride: this.opts.executable } : {});
+    this.sdk = sdk;
+    this.codex = this._client();
     this._thread();
     this.emit({ kind: 'status', text: 'ready' });
     return true;
+  }
+
+  /** The client: the program to run and, on the API backend, the key it runs with (CODEX_API_KEY in its environment). */
+  _client() {
+    const o = {};
+    if (this.opts.executable) o.codexPathOverride = this.opts.executable;
+    if (this.opts.apiKey) o.apiKey = this.opts.apiKey;
+    return new this.sdk.Codex(o);
+  }
+  /** Switch the key the next turn runs with: null means the ChatGPT login. The thread is taken up again by the new client. */
+  setApiKey(key) {
+    this.opts.apiKey = key || undefined;
+    if (!this.sdk) return;
+    this.codex = this._client(); this.changed = true;
   }
 
   _options() {

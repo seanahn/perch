@@ -68,6 +68,7 @@ class FakeAgent {
   setEffort(e) { this.efforts.push(e); }
   setModel(m) { this.models.push(m); }
   dispose() { this.disposed = true; }
+  setApiKey(k) { (this.apiKeys = this.apiKeys || []).push(k); this.o.apiKey = k || undefined; }
 }
 
 function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past } = {}) {
@@ -151,6 +152,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       events: (sid) => got.filter((m) => m.type === 'event' && (!sid || m.sid === sid)).map((m) => m.ev),
       lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
       lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
+      lastCodexMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).codex,
       commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
       show(visible, active) { this.visible = visible; if (active) focus(this); else this.active = false; for (const f of changed) f({ webviewPanel: this }); },
     };
@@ -218,12 +220,14 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const ext = require('../src/extension.js');
   const memento = makeMemento(state);
   const globalState = makeMemento(globals);
-  const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, extensionUri: { path: '/ext/fennets.perch' } });
+  const secrets = Object.assign(new Map(), { get: async function (k) { return this.has(k) ? Map.prototype.get.call(this, k) : undefined; }, store: async function (k, v) { Map.prototype.set.call(this, k, v); }, delete: async function (k) { Map.prototype.delete.call(this, k); } });
+  if (meter && meter.secrets) for (const [k, v] of Object.entries(meter.secrets)) Map.prototype.set.call(secrets, k, v);
+  const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, secrets, extensionUri: { path: '/ext/fennets.perch' } });
   const changeConfig = (patch) => { Object.assign(cfgBox, patch); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => Object.keys(patch).some((k) => ('perch.' + k).startsWith(sec)) }); };
   const waitingTab = (label) => { const t = { label, input: { viewType: 'mainThreadWebview-perch.session' } }; ui.waiting.push(t); return t; };
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
-  return { perch, registered, commands, memento, globalState, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, vbox, abox, store };
+  return { perch, registered, commands, memento, globalState, secrets, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, vbox, abox, store };
 }
 
 function fakeView() {
@@ -232,6 +236,7 @@ function fakeView() {
     events: (sid) => got.filter((m) => m.type === 'event' && m.sid === sid).map((m) => m.ev),
     lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
     lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
+    lastCodexMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).codex,
     lastCodex: () => (got.filter((m) => m.type === 'meter').pop() || {}).codex,
     commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
     tab: (id) => (got.filter((m) => m.type === 'tabs').pop().tabs.find((x) => x.id === id)),

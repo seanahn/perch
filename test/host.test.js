@@ -1001,6 +1001,49 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the Codex backend: the ChatGPT login, or an OpenAI API key kept in secret storage, for every Codex tab from its next turn
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual([v.lastCodexMeter().backend, v.lastCodexMeter().backendLabel], ['chatgpt', 'ChatGPT']);
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hi' }); await flush();
+    const a = created[created.length - 1];
+    assert.deepStrictEqual([a.o.apiKey, v.lastTabs().tabs[0].backend], [undefined, 'chatgpt'], 'on the login: no key is given');
+    // the switch asks for a key the first time, keeps it in secret storage, and moves the open tab
+    v.fire({ type: 'meterToggle', vendor: 'codex' }); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.asked.pop().prompt, v.lastCodexMeter().backend], ['OpenAI API key for Codex', 'chatgpt'], 'no key given: nothing changes');
+    m.ui.inputs.push('sk-test-0123456789abcdefghijklmnop'); v.fire({ type: 'meterToggle', vendor: 'codex' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([v.lastCodexMeter().backend, v.lastCodexMeter().backendLabel, v.lastCodexMeter().plan, v.lastCodexMeter().segments, m.globalState._dump()['perch.codex.backend'], await m.secrets.get('perch.codex.apiKey')],
+      ['api', 'API', '', [], 'api', 'sk-test-0123456789abcdefghijklmnop'], 'on the key: no plan, no limits shown; the key is in secret storage, not in state');
+    assert(!JSON.stringify(m.globalState._dump()).includes('sk-test'), 'and nowhere else');
+    assert.deepStrictEqual([a.apiKeys, v.lastTabs().tabs[0].backend], [['sk-test-0123456789abcdefghijklmnop'], 'api'], 'the open tab takes the key for its next turn');
+    assert(/Codex backend is now your OpenAI API key, from the next message/.test(v.events(x).filter((e) => e.kind === 'note').pop().text));
+    v.fire({ type: 'new', kind: 'codex' }); const y = v.lastTabs().active; v.fire({ type: 'send', sid: y, text: 'hi' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.apiKey, 'sk-test-0123456789abcdefghijklmnop', 'a new tab starts with it');
+    // and back, with the key kept for next time
+    v.fire({ type: 'meterToggle', vendor: 'codex' }); await flush(); await flush();
+    assert.deepStrictEqual([v.lastCodexMeter().backend, a.apiKeys.pop(), await m.secrets.get('perch.codex.apiKey')], ['chatgpt', null, 'sk-test-0123456789abcdefghijklmnop']);
+    v.fire({ type: 'meterToggle', vendor: 'codex' }); await flush(); await flush();
+    assert.deepStrictEqual([v.lastCodexMeter().backend, m.ui.asked.length], ['api', 1], 'the second switch to the key asks nothing');
+    // forgetting the key puts Codex back on the login
+    await m.commands['perch.codex.clearApiKey'](); await flush();
+    assert.deepStrictEqual([v.lastCodexMeter().backend, await m.secrets.get('perch.codex.apiKey'), m.ui.infos.pop()], ['chatgpt', undefined, 'Perch: the Codex API key is gone; Codex uses your ChatGPT login.']);
+    // with no login on the machine, the key is a way in: the first message is not held back
+    m.box.codexLoggedIn = false; m.ui.inputs.push('sk-other-0123456789abcdefghijklmnop'); await m.commands['perch.codex.setApiKey'](); await flush();
+    assert.strictEqual(m.ui.infos.pop(), 'Perch: Codex will use your API key from the next message.');
+    v.fire({ type: 'new', kind: 'codex' }); const z = v.lastTabs().active; const made = created.length; v.fire({ type: 'send', sid: z, text: 'go' }); await flush();
+    assert.deepStrictEqual([created.length, created[created.length - 1].o.apiKey, m.ui.warnings.length], [made + 1, 'sk-other-0123456789abcdefghijklmnop', 0]);
+    m.box.codexLoggedIn = true;
+    m.perch.dispose();
+    // the key comes back from secret storage in a new window
+    const r = install(undefined, { meter: { secrets: { 'perch.codex.apiKey': 'sk-kept-0123456789abcdefghijklmnop' } } }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    r.globalState.update('perch.codex.backend', 'api'); r.perch.meter.refreshCodex(); await flush();
+    assert.strictEqual(rv.lastCodexMeter().backend, 'api');
+    r.perch.dispose();
+  }
+
   // ---- the page's copy button: the host puts the text on the clipboard
   {
     const m = install(); await flush();

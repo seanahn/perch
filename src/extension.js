@@ -319,7 +319,9 @@ class Session {
         model: this.model || undefined,
         reasoningEffort: this.effort || undefined,
         executable: prog.path || undefined,
+        apiKey: this.view.meter && this.view.meter.codexBackend() === 'api' ? this.view.meter.codexApiKey() : undefined,
       });
+      this.backend = this.view.meter ? this.view.meter.codexBackend() : '';
     }
     return this.agent;
   }
@@ -348,7 +350,7 @@ class Session {
       return;
     }
     // Codex with no login here would only be refused (401, five reconnects, an error): hold the message, offer the login
-    if (this.kind === 'codex' && !this.agent && !codexAuth.loggedIn()) {
+    if (this.kind === 'codex' && !this.agent && !(this.view.meter && this.view.meter.codexBackend() === 'api') && !codexAuth.loggedIn()) {
       this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
       this.view.deliver(this.id, text);
       this.view.codexLogin();
@@ -498,6 +500,16 @@ class PerchView {
   // ---- Claude usage and backend
   onMeter(state, why, codex) {
     this.raw({ type: 'meter', meter: state, codex });
+    if (why === 'codexBackend') {
+      // Codex takes its key per process, so every tab moves on its next turn; nothing is restarted
+      const backend = this.meter.codexBackend(), key = backend === 'api' ? this.meter.codexApiKey() : null;
+      for (const s of this.sessions) if (s.kind === 'codex' && s.agent && s.backend !== backend) {
+        s.agent.setApiKey(key); s.backend = backend;
+        s.post({ kind: 'note', text: backend === 'api' ? 'Codex backend is now your OpenAI API key, from the next message; billed per token, no plan limits.' : 'Codex backend is now your ChatGPT login, from the next message.' });
+      }
+      this.sendTabs();
+      return;
+    }
     if (why !== 'backend') return;
     // models differ by backend, and a running process cannot change how it authenticated: so the process ends and the
     // session goes on, resumed by the next message on the new backend, as after a window reload
@@ -807,7 +819,7 @@ class PerchView {
       case 'attach': this.attach(msg.sid); return;
       case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
-      case 'meterToggle': this.meter.toggleBackend(); return;
+      case 'meterToggle': if (msg.vendor === 'codex') this.meter.toggleCodexBackend(); else this.meter.toggleBackend(); return;
       case 'meterLogin': this.meter.login(); return;
       case 'voiceStart': if (s) this.voice.start(s.id); return;
       case 'voiceStop': if (s) this.voice.stop(s.id); return;
@@ -1054,6 +1066,9 @@ function activate(context) {
     vscode.commands.registerCommand('perch.meter.refresh', () => perch.meter.poll()),
     vscode.commands.registerCommand('perch.meter.toggleBackend', () => perch.meter.toggleBackend()),
     vscode.commands.registerCommand('perch.meter.login', () => perch.meter.login()),
+    vscode.commands.registerCommand('perch.codex.toggleBackend', () => perch.meter.toggleCodexBackend()),
+    vscode.commands.registerCommand('perch.codex.setApiKey', async () => { if (await perch.meter.setCodexApiKey()) { await perch.meter.setCodexBackend('api'); vscode.window.showInformationMessage('Perch: Codex will use your API key from the next message.'); } }),
+    vscode.commands.registerCommand('perch.codex.clearApiKey', async () => { await perch.meter.clearCodexApiKey(); vscode.window.showInformationMessage('Perch: the Codex API key is gone; Codex uses your ChatGPT login.'); }),
     vscode.commands.registerCommand('perch.voice.setup', async () => { const r = await perch.voice.prepare(true); if (r === 'already') vscode.window.showInformationMessage('Perch: voice input is already set up here.'); else if (r) vscode.window.showInformationMessage('Perch: voice input is ready.'); }),
     vscode.commands.registerCommand('perch.voice.toggle', () => { const s = perch.active(); if (s) perch.voice.start(s.id); }),
     vscode.commands.registerCommand('perch.voice.cancel', () => perch.voice.cancel()),

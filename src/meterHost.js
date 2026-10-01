@@ -11,6 +11,8 @@ const { createMeter, summarize } = require('./meter');
 const { readCodexUsage } = require('./codexMeter');
 
 const CACHE_KEY = 'perch.meter.limits';
+const CODEX_BACKEND_KEY = 'perch.codex.backend';    // 'chatgpt' (the login) or 'api' (a key); perch's own choice, since Codex has no setting for it
+const CODEX_SECRET = 'perch.codex.apiKey';
 const STASH = 'perch.meter.stash.';
 const POLL_RETRY_MS = 15000;          // fast retry until the first successful fetch
 const MIN_BACKOFF_MS = 60000;         // after a rate limit, leave the endpoint alone for at least this long
@@ -31,6 +33,8 @@ class MeterHost {
     this.backoffUntil = 0;             // no request to the usage endpoint before this time
     this.backoffMs = 0;
     this.pollTimer = null; this.retryTimer = null; this.credWatcher = null; this.credDebounce = null;
+    this.codexKey = null;              // the API key from secret storage, read once at start and kept in memory for the agents
+    this.codexKeyReady = (context.secrets && context.secrets.get ? context.secrets.get(CODEX_SECRET) : Promise.resolve(undefined)).then((k) => { this.codexKey = k || null; }, () => { this.codexKey = null; });
     this.disposables = [];
   }
 
@@ -61,9 +65,40 @@ class MeterHost {
       { vendor: 'Codex', display: this.cfg('display') || 'remaining', warnBelow: this.num('warnBelow', 25), errorBelow: this.num('errorBelow', 10) });
     s.plan = u.plan || ''; s.reached = u.reached || null; s.credits = u.credits || null;
     s.asOf = true;                     // the reading is as old as the last Codex turn, not as the last poll
+    s.backend = this.codexBackend();
+    s.backendLabel = s.backend === 'api' ? 'API' : 'ChatGPT';
+    s.backendTitle = s.backend === 'api' ? 'Codex runs with your OpenAI API key, billed per token; the plan\'s limits do not apply. Click to use the ChatGPT login instead.' : 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.';
+    if (s.backend === 'api') { s.segments = []; s.level = 'none'; s.lines = ['Codex is on your API key: billed per token, no plan limits.']; s.action = null; s.plan = ''; }
     return s;
   }
   refreshCodex() { this.emit('codex'); }
+
+  // ---- the Codex backend: the ChatGPT login, or an OpenAI API key. Codex takes the key from its environment per process,
+  // so the choice is perch's to keep, and a tab moves on its next turn with nothing restarted.
+  /** The key the API backend would run with: the one stored, or OPENAI_API_KEY from the environment. */
+  codexApiKey() { return this.codexKey || process.env.OPENAI_API_KEY || null; }
+  codexBackend() { return this.context.globalState.get(CODEX_BACKEND_KEY) === 'api' && this.codexApiKey() ? 'api' : 'chatgpt'; }
+  async setCodexBackend(backend) { await this.context.globalState.update(CODEX_BACKEND_KEY, backend); this.emit('codexBackend'); }
+  /** Ask for a key and keep it in secret storage. Returns true when one is stored. */
+  async setCodexApiKey() {
+    const key = await vscode.window.showInputBox({ prompt: 'OpenAI API key for Codex', placeHolder: 'sk-…', password: true, ignoreFocusOut: true, validateInput: (v) => (v && v.trim().length > 20 ? null : 'That does not look like an API key') });
+    if (!key) return false;
+    this.codexKey = key.trim();
+    try { if (this.context.secrets && this.context.secrets.store) await this.context.secrets.store(CODEX_SECRET, this.codexKey); } catch (_) { /* kept for this window at least */ }
+    return true;
+  }
+  async clearCodexApiKey() {
+    this.codexKey = null;
+    try { if (this.context.secrets && this.context.secrets.delete) await this.context.secrets.delete(CODEX_SECRET); } catch (_) { /* nothing stored */ }
+    if (this.context.globalState.get(CODEX_BACKEND_KEY) === 'api') await this.setCodexBackend('chatgpt'); else this.emit('codexBackend');
+  }
+  /** Switch Codex between the ChatGPT login and an API key, for every Codex tab from its next turn. */
+  async toggleCodexBackend() {
+    if (this.codexBackend() === 'api') { await this.setCodexBackend('chatgpt'); return true; }
+    if (!this.codexApiKey() && !(await this.setCodexApiKey())) return false;
+    await this.setCodexBackend('api');
+    return true;
+  }
 
   emit(why) { const s = this.state(); try { this.onChange(s, why, this.codexState()); } catch (_) { /* a listener must not break polling */ } }
 

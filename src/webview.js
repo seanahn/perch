@@ -837,13 +837,12 @@ ${glyphCss}
     $meter.hidden = !meter;
     if (!meter) return;
     const claude = meterKind === 'claude';
-    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = !claude; $where.hidden = claude;
+    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false; $where.hidden = claude;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
-    if (claude) {
-      $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \u26A0' : '');
-      $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
-      $mb.title = meter.backendTitle;
-    }
+    // the backend: Claude's subscription or API / Bedrock; Codex's ChatGPT login or API key
+    $mb.textContent = (meter.backendLabel || '') + (meter.backendWarn ? ' \u26A0' : '');
+    $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
+    $mb.title = meter.backendTitle || '';
     $mu.textContent = '';
     $mu.className = 'mu ' + meter.level + (meter.stale ? ' stale' : '');
     if (meter.segments.length) for (const seg of meter.segments) { const n = el('span', 'seg ' + seg.level, seg.text); if (seg.title) n.title = seg.title; $mu.append(n); }
@@ -855,7 +854,7 @@ ${glyphCss}
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
-  $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
+  $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle', vendor: meterKind }));   // the backend of the footer shown
   $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
   // the vendor's mark opens the vendor's site
   $mClaude.title = 'Open claude.ai'; $mCodex.title = 'Open chatgpt.com';

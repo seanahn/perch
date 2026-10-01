@@ -339,9 +339,16 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 
 The footer follows the active tab.
 
-**Under a Codex tab**: "Work locally", your ChatGPT plan, and the plan's
-usage: percent remaining and time to reset for the five-hour window and
-the week. Codex records these in its session files after every turn, so
+**Under a Codex tab**: "Work locally", a **backend switch** (`ChatGPT` or
+`API`), your ChatGPT plan, and the plan's usage: percent remaining and
+time to reset for the five-hour window and the week. The switch moves
+Codex between your ChatGPT login and an OpenAI API key: the first switch
+asks for the key and keeps it in VS Code's secret storage, never in a
+file of perch's; Codex gets it in its environment, per turn, so open tabs
+move on their next message with nothing restarted. On the key there is no
+plan and no limit to show, only per-token billing on your OpenAI account.
+`Perch: Set OpenAI API Key for Codex…` and `Perch: Forget the OpenAI API
+Key for Codex` manage the key. Codex records these in its session files after every turn, so
 perch reads them from `~/.codex/sessions/` and makes no request. The
 figure is as of the last Codex turn on this machine, from any Codex client,
 and the tooltip says when that was. A window whose reset time has passed
