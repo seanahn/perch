@@ -174,7 +174,8 @@ assert.strictEqual($('#m-where').textContent, 'Work locally'); assert(/runs Code
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
 assert(shown($('#m-codex')) && !shown($('#m-claude')) && !shown($('#m-backend')), 'the ChatGPT glyph; no Claude glyph, and no backend switch, which is Claude\'s');
 assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
-assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus']);
+assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus. Click to open your usage page.']);
+$('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
 assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
 $('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
 host({ type: 'meter', meter: null, codex: Object.assign({}, CODEX, { plan: '', level: 'none', text: '\u2014', segments: [], fetchedAt: null, lines: ['Codex usage unavailable: no Codex session on this machine has reported usage yet.'] }) });
@@ -715,6 +716,13 @@ window.close();
   p4.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'see these', queued: false, images: 3, thumbs: [T, '', 'javascript:alert(1)'] } });
   const last = [...p4.$$('.pane')[0].querySelectorAll('.user')].pop();
   assert.deepStrictEqual([[...last.querySelectorAll('.pics img')].map((i) => i.getAttribute('src')), last.querySelector('.tag').textContent, last.textContent.endsWith('see these')], [[T], '2 images', true]);
+  // a web address in an error or a note is a link
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'error', text: 'You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 7:16 PM.' } });
+  const err = [...p4.$$('.pane')[0].querySelectorAll('.error')].pop();
+  assert.deepStrictEqual([...err.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]), [['https://chatgpt.com/explore/pro', 'https://chatgpt.com/explore/pro'], ['https://chatgpt.com/codex/settings/usage', 'https://chatgpt.com/codex/settings/usage']], 'the addresses, without the punctuation around them');
+  assert(err.textContent.startsWith('You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit'), 'the text is whole');
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'note', text: 'see https://claude.ai/settings/usage.' } });
+  assert.deepStrictEqual([...[...p4.$$('.pane')[0].querySelectorAll('.status')].pop().querySelectorAll('a')].map((a) => a.textContent), ['https://claude.ai/settings/usage']);
   // a thumbnail is small; a click shows it at the size it was kept, another puts it back
   const pic = last.querySelector('.pics img');
   assert.deepStrictEqual([pic.classList.contains('big'), pic.title], [false, 'Click to see it larger']);

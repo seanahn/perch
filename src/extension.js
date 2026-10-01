@@ -818,6 +818,7 @@ class PerchView {
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
       case 'copy': vscode.env.clipboard.writeText(String(msg.text || '')); return;
+      case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       default: return;
     }

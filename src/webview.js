@@ -232,7 +232,8 @@ ${glyphCss}
   #meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
   #meter .k { width: 12px; height: 12px; }
   #m-claude, #m-codex { flex: none; display: inline-flex; }
-  #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; }
+  #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; cursor: pointer; }
+  #meter .plan:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .where { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
   #meter .where svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
@@ -396,6 +397,14 @@ ${glyphCss}
 
   function pin(p) { if (p.stick) p.log.scrollTop = p.log.scrollHeight; }
   function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); p.log.append(d); pin(p); return d; }
+  /** A line of plain text whose web addresses are links; the webview opens them in the browser. */
+  function linkified(text) {
+    const f = document.createDocumentFragment(); const re = /https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?'"]/g; let at = 0, m; const t = String(text || '');
+    while ((m = re.exec(t))) { if (m.index > at) f.append(t.slice(at, m.index)); const a = el('a', '', m[0]); a.href = m[0]; a.title = m[0]; f.append(a); at = m.index + m[0].length; }
+    if (at < t.length) f.append(t.slice(at));
+    return f;
+  }
+  function addLinked(p, cls, text) { const d = add(p, cls, ''); d.append(linkified(text)); return d; }
   function endLive(p) { if (p.live) { p.live.remove(); p.live = null; } p.liveText = ''; }
 
   // ---- tabs
@@ -743,9 +752,9 @@ ${glyphCss}
       case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
       case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' + (cur() && cur().backend === 'subscription' ? ' at API rates' : '') : ''));   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
         if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far \u2248$' + usd(m.cost) + '.' : 'The whole conversation so far \u2248$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (cur() && cur().backend === 'subscription' ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : ''); break; }
-      case 'note': endLive(p); add(p, 'status', m.text); break;
+      case 'note': endLive(p); addLinked(p, 'status', m.text); break;
       case 'session': p.work.title = 'session ' + m.id; break;
-      case 'error': endLive(p); add(p, 'error', m.text); break;
+      case 'error': endLive(p); addLinked(p, 'error', m.text); break;
       case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; break;
       case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
       case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
@@ -811,7 +820,7 @@ ${glyphCss}
     if (!meter) return;
     const claude = meterKind === 'claude';
     $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = !claude; $where.hidden = claude;
-    $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan : '';
+    $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
     if (claude) {
       $mb.textContent = meter.backendLabel + (meter.backendWarn ? ' \u26A0' : '');
       $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
@@ -829,6 +838,7 @@ ${glyphCss}
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
   $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle' }));
+  $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
   $mu.addEventListener('click', () => vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }));
 
   window.addEventListener('message', (e) => {

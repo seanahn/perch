@@ -1007,6 +1007,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'copy', text: 'git status --short' }); v.fire({ type: 'copy' }); await flush();
     assert.deepStrictEqual(m.ui.copied, ['git status --short', '']);
+    // the page may open the vendors' own pages in the browser, and nothing else
+    v.fire({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }); v.fire({ type: 'openExternal', url: 'https://claude.ai/settings/usage' });
+    v.fire({ type: 'openExternal', url: 'https://evil.example/chatgpt.com/' }); v.fire({ type: 'openExternal', url: 'http://chatgpt.com/x' }); v.fire({ type: 'openExternal' }); await flush();
+    assert.deepStrictEqual(m.ui.external, ['https://chatgpt.com/codex/settings/usage', 'https://claude.ai/settings/usage']);
     m.perch.dispose();
   }
 
