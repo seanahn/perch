@@ -940,23 +940,34 @@ class PerchView {
   async pickSession() {
     const qp = vscode.window.createQuickPick();
     qp.title = 'Perch sessions'; qp.placeholder = 'Search sessions…'; qp.matchOnDescription = true; qp.busy = true;
-    qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it) this.resumeSession(it.past); });
+    qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it && it.fresh) this.addSession(it.fresh); else if (it) this.resumeSession(it.past); });
     // the box that asks for the name takes the list's place, so the list is opened again afterwards, with the new name in it
     qp.onDidTriggerItemButton(async (e) => { qp.hide(); await this.renamePast(e.item.past); await this.pickSession(); });
     qp.onDidHide(() => qp.dispose());
     qp.show();
     const { sessions, failed } = await listSessions({ dir: cwd(), limit: 200 });
     const rename = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Rename session' };
-    qp.items = sessions.map((p) => {
+    // a new tab is also a way in, so the list begins with one of each kind, whatever is typed
+    const fresh = [{ label: '$(add) New Claude tab', fresh: 'claude', alwaysShow: true }, { label: '$(add) New Codex tab', fresh: 'codex', alwaysShow: true }];
+    qp.items = fresh.concat(sessions.map((p) => {
       const open = this.sessions.find((s) => s.kind === p.kind && s.agentSessionId === p.id);
       const past = open && open.unsaved ? Object.assign({}, p, { title: open.title }) : p;
       return { label: past.title, description: [p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename], past };
-    });
+    }));
     const missing = failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ');
     if (!sessions.length) qp.placeholder = missing ? `The sessions of ${missing} could not be read` : 'No past sessions in this folder';
     else if (missing) qp.title = `Perch sessions · those of ${missing} could not be read`;
     qp.busy = false;
     return qp;
+  }
+
+  /** The way back in when no tab is on screen: the tab last used, or the sessions list, which starts a new tab too. */
+  open() {
+    const s = this.get(this.activeId) || this.sessions[this.sessions.length - 1];
+    if (!s) return this.pickSession();
+    this.activate(s.id);
+    if (s.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
+    return s;
   }
 
   /** Bring a tab to the front, wherever it lives. */
@@ -1026,6 +1037,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider('perch.main', perch, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.window.registerWebviewPanelSerializer(PANEL_TYPE, perch),
     vscode.commands.registerCommand('perch.new', () => perch.pickNew()),
+    vscode.commands.registerCommand('perch.open', () => perch.open()),
     vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
     vscode.commands.registerCommand('perch.newCodex', () => perch.addSession('codex')),
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),

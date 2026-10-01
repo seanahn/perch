@@ -50,6 +50,11 @@
     },
     "commands": [
       {
+        "command": "perch.open",
+        "title": "Perch: Open",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "perch.newClaude",
         "title": "Perch: New Claude Tab",
         "icon": "$(add)"
@@ -71,17 +76,17 @@
       },
       {
         "command": "perch.handoff",
-        "title": "Perch: Hand Off Last Answer to Another Tab…",
+        "title": "Perch: Hand Off Last Answer to Another Tab\u2026",
         "icon": "$(arrow-swap)"
       },
       {
         "command": "perch.sessions",
-        "title": "Perch: Sessions…",
+        "title": "Perch: Sessions\u2026",
         "icon": "$(history)"
       },
       {
         "command": "perch.renameTab",
-        "title": "Perch: Rename Active Tab…",
+        "title": "Perch: Rename Active Tab\u2026",
         "icon": "$(edit)"
       },
       {
@@ -103,7 +108,7 @@
       },
       {
         "command": "perch.new",
-        "title": "Perch: New Tab…",
+        "title": "Perch: New Tab\u2026",
         "icon": "$(add)"
       },
       {
@@ -454,7 +459,14 @@
           "description": "The Python interpreter used to create the private environment. Empty uses python3."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "perch.open",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      }
+    ]
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.284",

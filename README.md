@@ -201,8 +201,11 @@ From a checkout:
 make install     # npm install, syntax check, symlink into the extension dirs
 ```
 
-Reload the window, then run `Perch: New Tab…` from the command palette, or
-click the Perch icon in the activity bar.
+Reload the window, then press **Ctrl+Alt+P** (Cmd+Alt+P on a Mac):
+`Perch: Open` brings back the tab you last used, or, with none open, the
+sessions list, which starts a new tab of either kind at the top. The same
+is behind the Perch icon in the activity bar and `Perch: New Tab…` in the
+command palette.
 
 ## Logins
 

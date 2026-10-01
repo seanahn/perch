@@ -986,6 +986,21 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- Perch: Open, the way back in: the tab last used, or the sessions list with a new tab at the top
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.strictEqual(v.lastTabs().tabs.length, 0);
+    const list = await m.commands['perch.open']();
+    assert.deepStrictEqual([list.shown, list.rows().slice(0, 2).map((r) => r[0])], [true, ['$(add) New Claude tab', '$(add) New Codex tab']], 'nothing open: the sessions list, which starts a tab too');
+    list.choose((i) => i.fresh === 'codex'); await flush();
+    assert.deepStrictEqual([v.lastTabs().tabs.length, v.lastTabs().tabs[0].kind], [1, 'codex']);
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    const back = m.commands['perch.open']();
+    assert.deepStrictEqual([back && back.id, v.lastTabs().active, m.ui.lists.length], [c, c, 1], 'a tab open: it comes to the front, and no list opens');
+    m.perch.dispose();
+  }
+
   // ---- the page's copy button: the host puts the text on the clipboard
   {
     const m = install(); await flush();
@@ -1084,32 +1099,32 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     let list = await m.commands['perch.sessions']();
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     assert.deepStrictEqual([list.shown, list.busy, list.placeholder, list.title], [true, false, 'Search sessions…', 'Perch sessions']);
-    assert.deepStrictEqual(list.rows(), [['Perch session name and loading', 'Claude · 2m'], ['hello', 'Codex · 26m'], ['supertrend', 'Claude · 1mo']]);
-    assert.deepStrictEqual(list.items.map((i) => i.buttons.map((b) => [b.iconPath.id, b.tooltip])), Array(3).fill([['edit', 'Rename session']]));
-    assert.deepStrictEqual(list.items.map((i) => i.iconPath.path || i.iconPath.dark.path), ['/ext/anthropic.claude-code/resources/claude-logo.svg', '/ext/openai.chatgpt/resources/blossom.dark.png', '/ext/anthropic.claude-code/resources/claude-logo.svg'], 'each under its vendor\'s icon, the one its editor tab carries');
+    assert.deepStrictEqual(list.rows(), [['$(add) New Claude tab', undefined], ['$(add) New Codex tab', undefined], ['Perch session name and loading', 'Claude · 2m'], ['hello', 'Codex · 26m'], ['supertrend', 'Claude · 1mo']], 'a new tab of each kind first, then the past');
+    assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.buttons.map((b) => [b.iconPath.id, b.tooltip])), Array(3).fill([['edit', 'Rename session']]));
+    assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.iconPath.path || i.iconPath.dark.path), ['/ext/anthropic.claude-code/resources/claude-logo.svg', '/ext/openai.chatgpt/resources/blossom.dark.png', '/ext/anthropic.claude-code/resources/claude-logo.svg'], 'each under its vendor\'s icon, the one its editor tab carries');
 
     // renaming one that is not open writes to the agent's record, and the list comes back with the new name
     m.ui.inputs.push('  Codex   greeting ');
-    await list.press((i) => i.past.id === 'x-old');
+    await list.press((i) => i.past && i.past.id === 'x-old');
     assert.deepStrictEqual([m.ui.asked.pop().value, list.shown, list.disposed], ['hello', false, true], 'the box opens on the present name, in the list\'s place');
     assert.deepStrictEqual(m.store.renamed, [['codex', 'x-old', 'Codex greeting', { dir: process.cwd() }]]);
     assert.strictEqual(m.ui.lists.length, 2); list = m.ui.lists[1];
-    assert.deepStrictEqual([list.shown, list.rows()[1]], [true, ['Codex greeting', 'Codex · 26m']]);
+    assert.deepStrictEqual([list.shown, list.rows()[3]], [true, ['Codex greeting', 'Codex · 26m']]);
     assert.strictEqual(v.lastTabs().tabs.length, 0, 'renaming opens nothing');
 
     // dismissed, or left empty: nothing is written
-    m.ui.inputs.push(undefined); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[2];
-    m.ui.inputs.push('   '); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[3];
+    m.ui.inputs.push(undefined); await list.press((i) => i.past && i.past.id === 'c-old'); list = m.ui.lists[2];
+    m.ui.inputs.push('   '); await list.press((i) => i.past && i.past.id === 'c-old'); list = m.ui.lists[3];
     assert.deepStrictEqual([m.store.renamed.length, m.ui.errors.length], [1, 0]);
     assert.deepStrictEqual([m.ui.asked[0].validateInput(' \n'), m.ui.asked[0].validateInput(' a ')], ['A name cannot be empty.', null]);
 
     // a record that cannot be written is said so
-    m.store.failRename = 'EACCES: permission denied'; m.ui.inputs.push('nope'); await list.press((i) => i.past.id === 'c-old'); list = m.ui.lists[4];
+    m.store.failRename = 'EACCES: permission denied'; m.ui.inputs.push('nope'); await list.press((i) => i.past && i.past.id === 'c-old'); list = m.ui.lists[4];
     assert.strictEqual(m.ui.errors.pop(), 'Perch: the session could not be renamed. EACCES: permission denied');
-    assert.strictEqual(list.rows()[0][0], 'Perch session name and loading'); m.store.failRename = null;
+    assert.strictEqual(list.rows()[2][0], 'Perch session name and loading'); m.store.failRename = null;
 
     // choosing one opens a tab on it, under its name; the agent starts on the first message, resuming that session
-    list.choose((i) => i.past.id === 'c-old');
+    list.choose((i) => i.past && i.past.id === 'c-old');
     assert.deepStrictEqual([list.shown, list.disposed], [false, true]);
     let t = v.lastTabs();
     assert.deepStrictEqual(t.tabs.map((x) => [x.kind, x.title, x.started]), [['claude', 'Perch session name and loading', false]]);
@@ -1124,15 +1139,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     // the list marks what is open, and choosing it goes to its tab instead of opening a second one
     v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
     list = await m.commands['perch.sessions']();
-    assert.deepStrictEqual(list.rows().map((r) => r[1]), ['Claude · 2m · open', 'Codex · 26m', 'Claude · 1mo']);
-    list.choose((i) => i.past.id === 'c-old');
+    assert.deepStrictEqual(list.rows().slice(2).map((r) => r[1]), ['Claude · 2m · open', 'Codex · 26m', 'Claude · 1mo']);
+    list.choose((i) => i.past && i.past.id === 'c-old');
     assert.deepStrictEqual([v.lastTabs().tabs.length, v.lastTabs().active], [2, c]);
 
     // renaming an open session from the list renames its tab too
     list = await m.commands['perch.sessions'](); m.ui.inputs.push('Naming and loading');
-    await list.press((i) => i.past.id === 'c-old');
+    await list.press((i) => i.past && i.past.id === 'c-old');
     assert.deepStrictEqual([v.tab(c).title, m.store.renamed.pop(), state().sessions[0].title, state().sessions[0].unsaved], ['Naming and loading', ['claude', 'c-old', 'Naming and loading', { dir: process.cwd() }], 'Naming and loading', false]);
-    assert.strictEqual(m.ui.lists.pop().rows()[0][0], 'Naming and loading');
+    assert.strictEqual(m.ui.lists.pop().rows()[2][0], 'Naming and loading');
 
     // the active tab by command, and any sidebar tab by a double-click on it
     m.ui.inputs.push('Again'); await m.commands['perch.renameTab']();
@@ -1170,14 +1185,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
     // an editor tab: the name is the tab's title
     const e = install(undefined, { past, config: { newTabs: 'editor' } }); await flush();
-    list = await e.commands['perch.sessions'](); list.choose((i) => i.past.id === 'x-old');
+    list = await e.commands['perch.sessions'](); list.choose((i) => i.past && i.past.id === 'x-old');
     const panel = e.ui.panels[0];
     assert.deepStrictEqual([e.ui.panels.length, panel.title], [1, 'hello']);
     panel.fire({ type: 'ready' }); await flush();
     assert.deepStrictEqual(panel.lastTabs().tabs.map((q) => [q.kind, q.title]), [['codex', 'hello']]);
     e.ui.inputs.push('Greeting'); await e.commands['perch.renameTab']();
     assert.deepStrictEqual([panel.title, panel.lastTabs().tabs[0].title, e.store.renamed], ['Greeting', 'Greeting', [['codex', 'x-old', 'Greeting', { dir: process.cwd() }]]]);
-    list = await e.commands['perch.sessions'](); list.choose((i) => i.past.id === 'x-old');
+    list = await e.commands['perch.sessions'](); list.choose((i) => i.past && i.past.id === 'x-old');
     assert.deepStrictEqual([e.ui.panels.length, panel.reveals], [1, 1], 'the open tab is brought forward');
     e.perch.dispose();
 
@@ -1188,7 +1203,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual((await n.commands['perch.sessions']()).placeholder, 'The sessions of Claude Code and Codex could not be read');
     n.store.failed = ['codex']; n.store.sessions = past.sessions.slice(0, 1);
     list = await n.commands['perch.sessions']();
-    assert.deepStrictEqual([list.title, list.rows().length], ['Perch sessions · those of Codex could not be read', 1]);
+    assert.deepStrictEqual([list.title, list.items.filter((i) => i.past).length], ['Perch sessions · those of Codex could not be read', 1]);
     n.perch.dispose();
   }
 
@@ -1201,7 +1216,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     const shown = (sid) => { const e = v.events(sid); return e.slice(e.map((x) => x.kind).lastIndexOf('clear') + 1).filter((x) => x.kind !== 'busy' && x.kind !== 'status'); };
 
-    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'c-old'); const c = v.lastTabs().active;
+    (await m.commands['perch.sessions']()).choose((i) => i.past && i.past.id === 'c-old'); const c = v.lastTabs().active;
     assert.deepStrictEqual(shown(c), [{ kind: 'note', text: 'resumed claude session c-old · earlier transcript is not shown, the agent still has it' }], 'until it has been read');
     await flush();
     assert.deepStrictEqual(m.store.loads, [['claude', 'c-old', { dir: process.cwd() }]]);
@@ -1213,15 +1228,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(v2.events(c).filter((x) => ['user', 'text', 'note', 'tool_use', 'tool_result'].includes(x.kind)).map((x) => x.text || x.name), ['how do i rename', 'Bash', 'src', 'Like this.', 'and again', 'answer to and again']);
 
     // a long one shows its end, and says so; one that cannot be read leaves the note as it was
-    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'x-old'); const x = v2.lastTabs().active; await flush();
+    (await m.commands['perch.sessions']()).choose((i) => i.past && i.past.id === 'x-old'); const x = v2.lastTabs().active; await flush();
     assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'text' || e.kind === 'note').slice(-2), [{ kind: 'note', text: '412 earlier entries are not shown, the agent still has them' }, { kind: 'text', text: 'Like this.' }], 'said before them, where they would have been');
-    (await m.commands['perch.sessions']()).choose((i) => i.past.id === 'x-bad'); const b = v2.lastTabs().active; await flush();
+    (await m.commands['perch.sessions']()).choose((i) => i.past && i.past.id === 'x-bad'); const b = v2.lastTabs().active; await flush();
     assert.deepStrictEqual(v2.events(b).filter((e) => e.kind === 'note'), [{ kind: 'note', text: 'resumed codex session x-bad · earlier transcript is not shown, the agent still has it' }]);
 
     // a message sent before the transcript has been read stays after it
     const m3 = install(undefined, { past }); await flush();
     const v3 = fakeView(); m3.registered['perch.main'].resolveWebviewView(v3.view); v3.fire({ type: 'ready' }); await flush();
-    (await m3.commands['perch.sessions']()).choose((i) => i.past.id === 'c-old'); const c3 = v3.lastTabs().active;
+    (await m3.commands['perch.sessions']()).choose((i) => i.past && i.past.id === 'c-old'); const c3 = v3.lastTabs().active;
     v3.fire({ type: 'send', sid: c3, text: 'too quick' }); await flush(); await flush();
     assert.deepStrictEqual(shown.call(null, c3).length >= 0 && v3.events(c3).slice(v3.events(c3).map((e) => e.kind).lastIndexOf('clear') + 1).filter((e) => ['user', 'text', 'note'].includes(e.kind)).map((e) => e.text), ['how do i rename', 'Like this.', 'too quick', 'answer to too quick']);
 
