@@ -1,8 +1,9 @@
 {
   "name": "perch-audio",
   "displayName": "Perch Audio",
+  "icon": "media/icon.png",
   "description": "Microphone capture and, on a machine with a GPU, speech-to-text for Perch dictation. Runs on your local machine, so it works when the workspace is remote.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -10,24 +11,56 @@
     "url": "https://github.com/seanahn/perch"
   },
   "homepage": "https://github.com/seanahn/perch/tree/main/audio",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
-  "extensionKind": ["ui"],
-  "activationEvents": ["onCommand:_perch.audio.available", "onCommand:_perch.audio.start", "onCommand:_perch.audio.engine", "onCommand:_perch.audio.unload"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onCommand:_perch.audio.available",
+    "onCommand:_perch.audio.start",
+    "onCommand:_perch.audio.engine",
+    "onCommand:_perch.audio.unload"
+  ],
   "main": "./src/extension.js",
   "contributes": {
     "commands": [
-      { "command": "perchAudio.listDevices", "title": "Perch Audio: Choose Microphone…" }
+      {
+        "command": "perchAudio.listDevices",
+        "title": "Perch Audio: Choose Microphone\u2026"
+      }
     ],
     "configuration": {
       "title": "Perch Audio",
       "properties": {
-        "perchAudio.device": { "type": "string", "default": "", "description": "The microphone to record from, by name. Empty uses the system default. Choose one with Perch Audio: Choose Microphone." },
-        "perchAudio.maxSeconds": { "type": "number", "default": 180, "minimum": 5, "maximum": 600, "description": "Recording stops by itself after this many seconds." },
-        "perchAudio.saveRecordings": { "type": "string", "default": "", "description": "A diagnostic. A directory on this computer; each recording is saved there as a WAV, with a transcripts.log of what was heard when the words are worked out here. Empty saves nothing." }
+        "perchAudio.device": {
+          "type": "string",
+          "default": "",
+          "description": "The microphone to record from, by name. Empty uses the system default. Choose one with Perch Audio: Choose Microphone."
+        },
+        "perchAudio.maxSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 5,
+          "maximum": 600,
+          "description": "Recording stops by itself after this many seconds."
+        },
+        "perchAudio.saveRecordings": {
+          "type": "string",
+          "default": "",
+          "description": "A diagnostic. A directory on this computer; each recording is saved there as a WAV, with a transcripts.log of what was heard when the words are worked out here. Empty saves nothing."
+        }
       }
     }
   },
-  "dependencies": { "@picovoice/pvrecorder-node": "^1.2.9" },
-  "scripts": { "test": "node test/recorder.test.js && node test/engine.test.js" }
+  "dependencies": {
+    "@picovoice/pvrecorder-node": "^1.2.9"
+  },
+  "scripts": {
+    "test": "node test/recorder.test.js && node test/engine.test.js"
+  }
 }
