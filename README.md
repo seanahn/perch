@@ -291,6 +291,11 @@ A Perch tab in the editor area takes the focus while you type, so the
 file attached is the one last focused, as long as it is still open on
 screen; the tag on your message says which.
 
+**Earlier messages.** The arrow keys walk the tab's earlier messages,
+as a shell does: Up from the first line of the box goes back, Down from
+the last line comes forward, and past the newest the draft you were
+writing returns.
+
 **Queueing.** Enter always sends. While the agent is working, the message
 is queued behind the current turn and marked so. Claude Code queues it
 itself; Codex takes one turn at a time, so perch holds the queue and feeds

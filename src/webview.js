@@ -374,7 +374,8 @@ ${glyphCss}
     const work = el('div', 'work'), what = el('span', 'what'), took = el('span', 'for'); work.hidden = true; work.setAttribute('role', 'status');
     work.append(el('span', 'sp'), what, took);
     root.append(log, work); $panes.append(root);
-    const p = { root, log, work, what, took, doing: '', asking: 0, live: null, liveText: '', tools: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
+    const p = { sent, hist: null, root, log, work, what, took, doing: '', asking: 0, live: null, liveText: '', tools: {}, draft: '', shots: [], kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -609,7 +610,21 @@ ${glyphCss}
     addShots(t.id, files);
   });
   $send.addEventListener('click', () => { const t = cur(); if (!t) return; if (t.busy) vscode.postMessage({ type: 'stop', sid: active }); else send(); });
+  /** The arrow keys walk the tab's earlier messages, as a shell does: up from the first line goes back, down from the last line comes forward, and past the newest the draft returns. */
+  function navHistory(dir) {
+    const t = cur(), p = t && panes.get(t.id); if (!p || !p.sent.length) return false;
+    const pos = $input.selectionStart, v = $input.value;
+    if (dir < 0 && v.slice(0, pos).includes('\\n')) return false;
+    if (dir > 0 && v.slice(pos).includes('\\n')) return false;
+    if (!p.hist) { if (dir > 0) return false; p.hist = { i: p.sent.length, draft: v }; }
+    const i = p.hist.i + dir;
+    if (i < 0) return true;
+    if (i >= p.sent.length) { $input.value = p.hist.draft; p.hist = null; } else { p.hist.i = i; $input.value = p.sent[i]; }
+    grow(); $input.setSelectionRange($input.value.length, $input.value.length);
+    return true;
+  }
   $input.addEventListener('keydown', (e) => {
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !menu && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && navHistory(e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return; }
     if (menu && menuOwner === 'slash' && (e.key === 'Enter' || e.key === 'Tab')) { const first = menu.querySelector('.it:not(.dis)'); if (first) { e.preventDefault(); first.click(); return; } }
     if (e.key === 'Escape' && menu) { e.preventDefault(); closeMenu(); return; }
     if (e.key === 'Escape' && dictating()) { e.preventDefault(); vscode.postMessage({ type: 'voiceCancel' }); return; }
@@ -617,6 +632,7 @@ ${glyphCss}
   });
   $input.addEventListener('input', () => {
     grow();
+    { const t = cur(), p = t && panes.get(t.id); if (p && p.hist) p.hist = null; }   // typing makes the text the draft again
     const t = cur(), m = /^\\/(\\S*)$/.exec($input.value);
     if (t && t.kind === 'claude' && m && commands.claude.length) openSlash(m[1], true);
     else if (menuOwner === 'slash' && menu && menu.dataset.typed) closeMenu();
@@ -721,7 +737,7 @@ ${glyphCss}
     if (m.kind === 'voice') { if (m.phase === 'idle') voice.delete(sid); else voice.set(sid, m); if (sid === active) syncComposer(); return; }
     switch (m.kind) {
       case 'user': {
-        endLive(p); const d = add(p, 'user' + (m.queued ? ' queued' : ''), '');
+        endLive(p); if (m.text) p.sent.push(m.text); const d = add(p, 'user' + (m.queued ? ' queued' : ''), '');
         const thumbs = Array.isArray(m.thumbs) ? m.thumbs.filter((t) => typeof t === 'string' && /^data:image\\/(png|jpeg|webp);base64,/.test(t)) : [];
         const unseen = (m.images || 0) - thumbs.length;    // images with no thumbnail are counted instead
         const tags = [m.queued ? 'queued' : '', unseen > 0 ? unseen + (unseen > 1 ? ' images' : ' image') : '', m.tag || ''].filter(Boolean);
@@ -757,7 +773,7 @@ ${glyphCss}
       case 'note': endLive(p); addLinked(p, 'status', m.text); break;
       case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); addLinked(p, 'error', m.text); break;
-      case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; break;
+      case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; p.sent.length = 0; p.hist = null; break;
       case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
       case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
     }

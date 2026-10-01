@@ -112,6 +112,27 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
 // ---- sending, queueing, stopping
 type('  '); key($('#input'), 'Enter'); assert.strictEqual(out.length, 0, 'a blank message is not sent');
 type('line one'); key($('#input'), 'Enter', { shiftKey: true }); assert.strictEqual(out.length, 0, 'shift+enter is a newline');
+{
+  // the arrow keys walk the tab's earlier messages
+  host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'first question', queued: false } });
+  host({ type: 'event', sid: 'a', ev: { kind: 'user', text: 'second one', queued: false } });
+  host({ type: 'event', sid: 'a', ev: { kind: 'user', text: '', queued: false, images: 1 } });   // an image alone is not a message to walk to
+  $('#input').value = 'a draft'; $('#input').setSelectionRange(7, 7);
+  key($('#input'), 'ArrowUp'); assert.strictEqual($('#input').value, 'second one', 'up: the last message');
+  key($('#input'), 'ArrowUp'); assert.strictEqual($('#input').value, 'first question');
+  for (let i = 0; i < 30; i++) key($('#input'), 'ArrowUp'); const oldest = $('#input').value;   // this tab had messages before these two
+  key($('#input'), 'ArrowUp'); assert.strictEqual($('#input').value, oldest, 'and no further than the oldest');
+  let steps = 0; while ($('#input').value !== 'second one' && steps++ < 30) key($('#input'), 'ArrowDown');
+  assert.strictEqual($('#input').value, 'second one', 'down comes forward');
+  key($('#input'), 'ArrowDown'); assert.strictEqual($('#input').value, 'a draft', 'past the newest, the draft returns');
+  key($('#input'), 'ArrowDown'); assert.strictEqual($('#input').value, 'a draft', 'down with nothing newer does nothing');
+  $('#input').value = 'two\nlines'; $('#input').setSelectionRange(9, 9);
+  key($('#input'), 'ArrowUp'); assert.strictEqual($('#input').value, 'two\nlines', 'up from the second line moves in the text, not in the history');
+  $('#input').setSelectionRange(1, 1); key($('#input'), 'ArrowDown'); assert.strictEqual($('#input').value, 'two\nlines', 'down from the first line likewise');
+  $('#input').setSelectionRange(0, 0); key($('#input'), 'ArrowUp'); assert.strictEqual($('#input').value, 'second one', 'from the first line, back it goes');
+  $('#input').value = 'line one'; $('#input').dispatchEvent(new window.Event('input', { bubbles: true }));   // back to the text the next test sends
+  assert.strictEqual(out.length, 0);
+}
 key($('#input'), 'Enter', { isComposing: true }); assert.strictEqual(out.length, 0, 'enter while composing text belongs to the input method');
 key($('#input'), 'Enter');
 assert.deepStrictEqual(out.pop(), { type: 'send', sid: 'a', text: 'line one' }); assert.strictEqual($('#input').value, '');
