@@ -10,25 +10,84 @@ process per tab, through the vendors' own SDKs. It is a shell around
 them, not an agent of its own. That is the whole design, and the reason
 is tokens.
 
+### The principle
+
+An agent's token use is a function of prompt caching, and prompt caching
+is a function of a byte-identical prompt prefix.
+
 An agent sends the whole conversation to the model at every step of a
-turn. What keeps that affordable is prompt caching: a step whose prompt
-prefix matches the last one is billed at a tenth of the rate. A cache hit
-needs the prefix byte-identical from step to step, which only the program
-that lays out the prompt can guarantee. Claude Code and Codex do; a
-harness that replaces them with its own loop, as Continue and similar
-tools do, gets its own caching, its own compaction, and API billing
-instead of your subscription.
+turn: system prompt, tool definitions, every message and tool result so
+far, then the new step. What keeps that affordable is prompt caching: the
+part of a call's prefix that matches a recent call is billed at a tenth of
+the input rate (writing the cache costs a quarter more). On a 100k-token
+conversation a cached step bills the equivalent of about 10k input
+tokens; a cold one about 125k. A cache hit needs the prefix byte-identical
+from step to step, and only the program that lays out the prompt can
+guarantee that. Claude Code and Codex do. A harness that replaces them
+with its own loop and its own prompt gets its own caching, its own
+compaction, and API billing instead of your subscription.
 
-So perch never builds a request. Each tab is the vendor's agent, with the
-vendor's prompt, caching, compaction, permissions, memory, `CLAUDE.md`,
-skills, hooks, and MCP servers, unchanged, on your existing login. A tab
-costs what a terminal session would; the earlier turns of a session stay
-cached across a window reload, because the tab resumes the same session.
-What perch adds on top (the sessions list, names, transcripts, usage
-gauges) is read from the agents' files and asks nothing of a model.
+```
+PERCH TAB   (the vendor's agent lays out the prompt; perch never touches it)
 
-The full reasoning, with measurements, is in
-[design.md](design.md), section 3.
+  turn 1   [system · tools · conversation so far] [new message]  → cache written
+  turn 2   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×
+  turn 3   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×
+
+HARNESS   (its own loop rebuilds the prompt every turn)
+
+  turn 1   [system · editor state A · @context · history] [message]  → cache written
+  turn 2   [system · editor state B · @context' · history] [message] → prefix changed: cache miss, 1×
+  turn 3   [system · editor state C · @context'' · history] [message] → cache miss, 1×
+```
+
+### Where the difference comes from
+
+1. **Prompt assembly.** A harness such as Continue, or an IDE such as
+   Cursor, runs its own agent loop over the vendor's model. To be useful
+   it writes the editor's state into the prompt (the open file, the
+   selection, @-mentioned files, the workspace tree), and that state
+   changes between turns, near the front of the prompt, where a change
+   invalidates everything after it. perch never builds a request. The
+   prompt an agent sends from a perch tab is the one it would send from a
+   terminal, so a tab's cache hits are the terminal's cache hits, and a
+   tab costs what a terminal session costs. IDE context in perch is
+   appended to the message, at the end, where it changes nothing that
+   came before.
+
+2. **Compaction and sub-agents.** A harness that keeps one growing chat
+   buffer re-sends every raw tool output on every turn until the window
+   is full. The vendors' agents compact on their own judgement, keep
+   `CLAUDE.md`, memory, skills, hooks, and MCP servers in play, and
+   (Claude Code especially) run searches and other side work in
+   sub-agents whose transcripts never enter the main conversation. A
+   perch tab inherits all of that unchanged, because it is that agent.
+
+3. **Sessions across reloads.** perch keeps no transcript of its own. A
+   tab remembers the agent's session id and, after a window reload or a
+   backend switch, resumes that session from the agent's own record
+   (`~/.claude/projects/`, `~/.codex/sessions/`), so the prompt prefix is
+   the same bytes as before. Within the cache's life (an hour on a
+   subscription, five minutes on the API) the earlier turns are still
+   cached; beyond it, the next turn re-warms the same prefix once, rather
+   than a reconstructed one. The sessions list, names, transcripts, and
+   usage gauges are all read from those files and ask nothing of a model.
+
+### Side by side
+
+| | perch | Cursor | Continue |
+| --- | --- | --- | --- |
+| Agent | the vendor's own: Claude Code, Codex, through their SDKs | Cursor's own loop and middleware, in a forked editor | Continue's own harness, in an extension |
+| Prompt | laid out by the vendor's agent; perch adds nothing | rebuilt by the IDE each turn, with editor state | rebuilt each turn from @-context providers |
+| Cache behaviour | the terminal's: a stable prefix, hits turn after turn | editor state and selections in the prefix break the match | dynamic context in the prefix breaks the match |
+| Cost basis | your existing subscriptions and logins; API / Bedrock when you switch | Cursor's plans and request credits, or an API key | your own API key |
+| Compaction, memory, MCP | the vendor's: `CLAUDE.md`, hooks, skills, MCP, sub-agents | Cursor's own indexing and context filters | Continue's client-side providers |
+| Cost of a long session | that of a terminal session | several times a terminal session, by the reports of people who have measured it | several times a terminal session |
+
+The multiples for harnesses are others' measurements, not perch's: what
+perch can show is that a tab's cache reads and costs are a terminal's,
+turn by turn, in its own footer. The full reasoning, with what has and
+has not been verified, is in [design.md](design.md), section 3.
 
 | Tab kind | Agent | How it runs | Auth |
 | --- | --- | --- | --- |
