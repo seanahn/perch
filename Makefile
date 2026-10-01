@@ -22,7 +22,7 @@ EXT_ID = seanahn.perch-$(VERSION)
 # links made under earlier versions, and under the publisher id perch had before it was published
 OLD_IDS = fennets.perch-0.1.0 fennets.perch-0.2.0 fennets.perch-0.3.0 fennets.perch-0.4.0 fennets.perch-0.5.0 fennets.perch-0.6.0 seanahn.perch-0.6.0 seanahn.perch-0.6.1 seanahn.perch-0.6.2 seanahn.perch-0.6.3 seanahn.perch-0.6.4 seanahn.perch-0.6.5 seanahn.perch-0.6.6 seanahn.perch-0.6.7 seanahn.perch-0.6.8 seanahn.perch-0.6.9 seanahn.perch-0.6.10 seanahn.perch-0.6.11 seanahn.perch-0.6.12 seanahn.perch-0.6.13 seanahn.perch-0.6.14 seanahn.perch-0.6.15 seanahn.perch-0.6.16 seanahn.perch-0.6.17 seanahn.perch-0.6.18 seanahn.perch-0.6.19 seanahn.perch-0.6.20 seanahn.perch-0.6.21 seanahn.perch-0.6.22 seanahn.perch-0.6.23 seanahn.perch-0.6.24 seanahn.perch-0.6.25 seanahn.perch-0.6.26 seanahn.perch-0.6.27 seanahn.perch-0.6.28
 AUDIO_ID = seanahn.perch-audio-$(shell node -p "require('./audio/package.json').version")
-OLD_AUDIO_IDS = fennets.perch-audio-0.1.0 seanahn.perch-audio-0.1.0 seanahn.perch-audio-0.2.0 seanahn.perch-audio-0.3.0 seanahn.perch-audio-0.3.1
+OLD_AUDIO_IDS = fennets.perch-audio-0.1.0 seanahn.perch-audio-0.1.0 seanahn.perch-audio-0.2.0 seanahn.perch-audio-0.3.0 seanahn.perch-audio-0.3.1 seanahn.perch-audio-0.3.2
 # Perch Audio records from the microphone, so it belongs where the user sits: the desktop's extensions, not a server's
 AUDIO_DIRS = /home/sahn/.vscode/extensions /home/sahn/.local/share/code-server/extensions
 EXT_DIRS = /home/sahn/.vscode/extensions /home/sahn/.local/share/code-server/extensions /home/sahn/.vscode-server/extensions
