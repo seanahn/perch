@@ -123,6 +123,12 @@ ${glyphCss}
   .result { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: right; }
   .perm { border: 1px solid var(--vscode-inputValidation-warningBorder); background: var(--vscode-inputValidation-warningBackground); }
   .perm .btns { display: flex; gap: 6px; margin-top: 6px; }
+  .perm .path { font-family: var(--vscode-editor-font-family); font-size: 11.5px; color: var(--vscode-descriptionForeground); margin: 2px 0 4px; word-break: break-all; }
+  .perm .what { color: var(--vscode-descriptionForeground); margin: 2px 0 4px; }
+  .perm pre { margin: 0 0 4px; padding: 6px 8px; border-radius: 4px; background: var(--vscode-textCodeBlock-background); font-family: var(--vscode-editor-font-family); font-size: 11.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; max-height: 24em; overflow: auto; }
+  .perm .diff .del { display: block; background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,.18)); }
+  .perm .diff .add { display: block; background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,.14)); }
+  .perm .diff .cut { display: block; color: var(--vscode-descriptionForeground); font-style: italic; }
   .perm button, .empty button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   .perm button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   /* a question from the agent: its choices as buttons, a line for an answer of your own, and the answers once given */
@@ -345,6 +351,26 @@ ${glyphCss}
     if (str(i.url)) return { title: name, body: str(i.url), mono: true };
     if (str(i.description) || str(i.prompt)) return { title: name + (str(i.description) ? ' · ' + str(i.description) : ''), body: str(i.prompt).slice(0, 300), mono: false };
     return { title: name, body: fmtIn(input), mono: true };
+  }
+  /**
+   * A permission request as a person reads it: for an edit, the file and the change as a diff; for a new file, the file and
+   * what goes in it; for a command, the command and what it is for; for anything else, the tool call's own view.
+   * @returns {{title: string, body: Node[]}}
+   */
+  function permView(tool, input) {
+    const i = input && typeof input === 'object' ? input : {};
+    const str = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(' ') : '');
+    const base = (f) => str(f).split('/').pop();
+    const MAX = 40;
+    const lines = (text, cls) => { const all = String(text || '').replace(/\\n$/, '').split('\\n'); const shown = all.slice(0, MAX); const out = shown.map((l) => el('span', cls, (cls === 'del' ? '- ' : '+ ') + l)); if (all.length > MAX) out.push(el('span', 'cut', '… ' + (all.length - MAX) + ' more lines')); return out; };
+    const diff = (oldText, newText) => { const d = el('pre', 'diff'); d.append(...lines(oldText, 'del'), ...lines(newText, 'add')); return d; };
+    const block = (text) => { const b = el('pre', ''); const all = String(text || '').split('\\n'); b.textContent = all.slice(0, MAX).join('\\n') + (all.length > MAX ? '\\n… ' + (all.length - MAX) + ' more lines' : ''); return b; };
+    if (tool === 'Edit' && (str(i.file_path) || i.old_string !== undefined)) return { title: tool + ' · ' + base(i.file_path), body: [el('div', 'path', str(i.file_path)), diff(i.old_string, i.new_string)] };
+    if (tool === 'MultiEdit' && Array.isArray(i.edits)) return { title: tool + ' · ' + base(i.file_path), body: [el('div', 'path', str(i.file_path)), ...i.edits.map((e) => diff(e && e.old_string, e && e.new_string))] };
+    if ((tool === 'Write' || tool === 'NotebookEdit') && (str(i.file_path) || str(i.notebook_path))) return { title: tool + ' · ' + base(i.file_path || i.notebook_path), body: [el('div', 'path', str(i.file_path || i.notebook_path)), block(i.content !== undefined ? i.content : i.new_source)] };
+    if (str(i.command)) return { title: tool, body: [...(str(i.description) ? [el('div', 'what', str(i.description))] : []), block(str(i.command))] };
+    const tv = toolView(tool, input);
+    return { title: tv.title, body: [el('div', 'in' + (tv.mono ? ' mono' : ''), tv.body)] };
   }
   /** What a tool call's copy button copies: the command itself when there is one, otherwise the input as shown. */
   function commandOf(input) { if (input && typeof input.command === 'string') return input.command; if (input && Array.isArray(input.command)) return input.command.join(' '); return fmtIn(input); }
@@ -757,7 +783,7 @@ ${glyphCss}
         break;
       }
       case 'permission': {
-        endLive(p); const d = add(p, 'perm', ''); const head = el('div'); head.append(el('b', null, 'Allow '), el('span', null, m.tool), '?');
+        endLive(p); const d = add(p, 'perm', ''); const pv = permView(m.tool, m.input); const head = el('div'); head.append(el('b', null, 'Allow '), el('span', null, pv.title), '?');
         const btns = el('div', 'btns');
         for (const [dec, label, cls] of [['allow', 'Allow', 'primary'], ['always', 'Always', ''], ['deny', 'Deny', '']]) {
           if (dec === 'always' && !m.hasSuggestions) continue;
@@ -765,7 +791,7 @@ ${glyphCss}
           b.addEventListener('click', () => { vscode.postMessage({ type: 'permission', sid, id: m.id, decision: dec }); d.className = 'msg status'; d.textContent = m.tool + ': ' + dec; p.asking = Math.max(0, p.asking - 1); syncWork(sid); });
           btns.append(b);
         }
-        d.append(head, el('div', 'in', fmtIn(m.input)), btns); p.stick = true; break; }
+        d.append(head, ...pv.body, btns); p.stick = true; break; }
       case 'question': { endLive(p); asking(add(p, 'ask', ''), m, sid, p); p.stick = true; break; }
       case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
       case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' + (cur() && cur().backend === 'subscription' ? ' at API rates' : '') : ''));   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip

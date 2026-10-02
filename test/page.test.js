@@ -411,6 +411,29 @@ assert.deepStrictEqual([...paneA.querySelectorAll('.perm button')].map((b) => b.
   assert.strictEqual(paneA.querySelectorAll('.tool').length, 0, 'a question is not shown as a tool call as well');
 }
 
+// ---- a permission request reads as what it is: a diff for an edit, the file for a write, the command for a shell
+{
+  const perm = (tool, input) => { ev('a', { kind: 'permission', id: 'p' + Math.random(), tool, input, hasSuggestions: false }); return [...paneA.querySelectorAll('.perm')].pop(); };
+  const e = perm('Edit', { file_path: '/home/jovyan/c3securitytools/docs/notes/604-conmon-evidence-mapping.md', old_string: 'Open deployment decisions: review-storage bucket\nand owner', new_string: 'Open deployment decisions (settled):\nbucket and owner\nnamespace' });
+  assert.strictEqual(e.querySelector('div').textContent, 'Allow Edit · 604-conmon-evidence-mapping.md?');
+  assert.strictEqual(e.querySelector('.path').textContent, '/home/jovyan/c3securitytools/docs/notes/604-conmon-evidence-mapping.md');
+  assert.deepStrictEqual([...e.querySelectorAll('.diff .del')].map((n) => n.textContent), ['- Open deployment decisions: review-storage bucket', '- and owner']);
+  assert.deepStrictEqual([...e.querySelectorAll('.diff .add')].map((n) => n.textContent), ['+ Open deployment decisions (settled):', '+ bucket and owner', '+ namespace']);
+  assert.strictEqual(e.querySelectorAll('button').length, 2, 'allow and deny; always only when the agent offers it');
+  const big = perm('Edit', { file_path: '/x/a.py', old_string: Array.from({ length: 50 }, (_, k) => 'old ' + k).join('\n'), new_string: 'new' });
+  assert.deepStrictEqual([big.querySelectorAll('.diff .del').length, big.querySelector('.diff .cut').textContent], [40, '… 10 more lines'], 'a long change is cut, and says by how much');
+  const w = perm('Write', { file_path: '/x/new.txt', content: 'line 1\nline 2' });
+  assert.deepStrictEqual([w.querySelector('div').textContent, w.querySelector('.path').textContent, w.querySelector('pre').textContent], ['Allow Write · new.txt?', '/x/new.txt', 'line 1\nline 2']);
+  const b = perm('Bash', { command: 'make test', description: 'Run the tests' });
+  assert.deepStrictEqual([b.querySelector('div').textContent, b.querySelector('.what').textContent, b.querySelector('pre').textContent], ['Allow Bash?', 'Run the tests', 'make test']);
+  const r = perm('Read', { file_path: '/x/y.md' });
+  assert.deepStrictEqual([r.querySelector('div').textContent, r.querySelector('.in').textContent], ['Allow Read?', '/x/y.md']);
+  const m = perm('MultiEdit', { file_path: '/x/z.js', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: 'd' }] });
+  assert.deepStrictEqual([m.querySelectorAll('.diff').length, [...m.querySelectorAll('.diff .add')].map((n) => n.textContent)], [2, ['+ b', '+ d']]);
+  for (const x of [e, big, w, b, r, m]) x.querySelector('button').click();   // answered, so what follows is not waiting on them
+  out.splice(0);
+}
+
 // ---- tool call and result pair up; result line shows cache usage
 ev('a', { kind: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/y' } });
 ev('a', { kind: 'text', text: 'between' });

@@ -243,7 +243,10 @@ is copied from elsewhere, so a fresh remote has neither.
 ## Permissions
 
 Claude: the SDK calls back on every tool use and perch shows Allow /
-Always / Deny. The default mode for new tabs is a setting
+Always / Deny. The request reads as what it is: for an edit, the file
+and the change as a diff, removed lines then added; for a new file, the
+file and what goes in it; for a command, the command and what it is for.
+The default mode for new tabs is a setting
 (`perch.claude.permissionMode`) and each tab can switch live.
 
 Codex: the SDK runs `codex exec`, which is non-interactive. Approvals
