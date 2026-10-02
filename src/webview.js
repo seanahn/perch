@@ -242,8 +242,6 @@ ${glyphCss}
   #m-claude, #m-codex { flex: none; display: inline-flex; }
   #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; cursor: pointer; }
   #meter .plan:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
-  #meter .where { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
-  #meter .where svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
   #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
@@ -276,14 +274,14 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-where" class="where" hidden></span><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
   const $tabs = $('tabs'), $add = $('add'), $panes = $('panes'), $empty = $('empty');
   const $composer = $('composer'), $input = $('input'), $send = $('send');
-  const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $tMic = $('t-mic'), $sep = document.querySelector('#tools .sep'), $where = $('m-where');
+  const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $tMic = $('t-mic'), $sep = document.querySelector('#tools .sep');
   const panes = new Map();   // sid -> pane state
   const commands = { claude: [], codex: [] };
   let tabs = [], active = null, menu = null, menuOwner = null;
@@ -301,7 +299,6 @@ ${glyphCss}
     shield: '<svg viewBox="0 0 16 16"><path d="M8 1.8l5 1.8v4.1c0 3-2 5.2-5 6.5-3-1.3-5-3.5-5-6.5V3.600z"/><path d="M8 5.200v3.300M8 10.800v.100"/></svg>',
     chev: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.500l3 3 3-3"/></svg>',
     cursor: '<svg viewBox="0 0 16 16"><path d="M6.5 6.500l2.7 7 1.1-3.1 3.1-1.100z"/><path d="M4.2 1.800l.600 1.700M1.8 4.200l1.7.600M1.7 8.300l1.6-.700M8.3 1.700l-.700 1.6"/></svg>',
-    laptop: '<svg viewBox="0 0 16 16"><rect x="3" y="3.5" width="10" height="7" rx="1"/><path d="M1.5 12.500h13"/></svg>',
     ring: '<svg viewBox="0 0 16 16"><circle class="track" cx="8" cy="8" r="6" fill="none"/><circle class="fill" cx="8" cy="8" r="6" fill="none" stroke-linecap="round"/></svg>',
   };
   const MODES = {
@@ -312,7 +309,6 @@ ${glyphCss}
   $tAdd.innerHTML = SVG.plus; $tSlash.innerHTML = SVG.slash; $tCtx.innerHTML = SVG.ring; $tModel.querySelector('.chev').innerHTML = SVG.chev;
   $tMic.querySelector('.ic').innerHTML = SVG.mic;
   $tIde.innerHTML = SVG.cursor; $tIde.append(el0('span', 'IDE context'));
-  $where.innerHTML = SVG.laptop; $where.append(el0('span', 'Work locally')); $where.title = 'Perch runs Codex on this machine, through the Codex SDK. Cloud tasks are not available here.';
   function el0(tag, text) { const n = document.createElement(tag); n.textContent = text; return n; }
   const RING = 2 * Math.PI * 6;
 
@@ -879,7 +875,7 @@ ${glyphCss}
     $meter.hidden = !meter;
     if (!meter) return;
     const claude = meterKind === 'claude';
-    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false; $where.hidden = claude;
+    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
     // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
     onGateway = claude && !!t.gateway;

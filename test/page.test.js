@@ -190,8 +190,7 @@ host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTit
 assert(!shown($('#meter')), 'Claude\'s reading is not shown under a Codex tab');
 const CODEX = { vendor: 'Codex', plan: 'plus', asOf: true, level: 'ok', action: 'refresh', fetchedAt: 1790708709271, lines: ['Codex usage, percent remaining', 'row'], text: '2.3h 96% 6.9d 99%', segments: [{ text: '2.3h 96%', level: 'ok', title: '5h session: 96% remaining' }, { text: '6.9d 99%', level: 'ok', title: 'Weekly: 99% remaining' }] };
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
-assert(shown($('#meter')) && shown($('#m-where')), 'beneath a Codex tab: where the work runs, and the ChatGPT plan\'s usage');
-assert.strictEqual($('#m-where').textContent, 'Work locally'); assert(/runs Codex on this machine/.test($('#m-where').title));
+assert(shown($('#meter')) && !$('#m-where'), 'beneath a Codex tab: the ChatGPT plan\'s usage; no "Work locally" label, since there is nowhere else to work');
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
 assert(shown($('#m-codex')) && !shown($('#m-claude')), 'the ChatGPT glyph; no Claude glyph, and the backend switch shows Codex\'s backend');
 assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
@@ -213,7 +212,7 @@ assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), s
 assert.strictEqual($('#m-usage').title, 'Codex usage unavailable: no Codex session on this machine has reported usage yet.\nClick to refresh.');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
-assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan')), shown($('#m-where'))], [['26m 85%'], true, true, false, false, false], 'switching to a Claude tab switches the footer');
+assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan'))], [['26m 85%'], true, true, false, false], 'switching to a Claude tab switches the footer');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '25m 84%', level: 'ok', title: 'claude 5h' }] } });
 host({ type: 'tabs', tabs: [A, B], active: 'b' });
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'a Claude update that does not mention Codex leaves the Codex reading in place');
@@ -527,7 +526,7 @@ assert(!shown($m), 'hidden while the host has no reading');
 const seg = (text, level, title) => ({ text, level, title });
 const METER = { mode: 'subscription', backend: 'subscription', backendLabel: 'sub', backendName: 'subscription (login)', backendWarn: false, backendTitle: 'Claude backend: subscription (login). Click to switch.', level: 'warn', action: 'refresh', fetchedAt: 1790708709271, lines: ['Claude usage, percent remaining', 'row'], text: '1.0h 91% 6.5d 20%', segments: [seg('1.0h 91%', 'ok', '5h session: 91% remaining'), seg('6.5d 20%', 'warn', 'Weekly: 20% remaining')] };
 host({ type: 'meter', meter: METER });
-assert(shown($m)); assert(!shown($('#m-where')), 'no "Work locally" under a Claude tab');
+assert(shown($m));
 assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn')], ['sub', METER.backendTitle, false]);
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
 assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));

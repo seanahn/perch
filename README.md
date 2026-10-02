@@ -335,8 +335,9 @@ Claude Code and a Codex tab like Codex.
 
 **Codex tab**: **+**, then the sandbox behind a shield (Read only, Workspace,
 Full access, the last in amber), the model with its effort, **IDE context**,
-and a round send button. "Work locally" sits beneath, because perch runs
-Codex on this machine through the SDK.
+and a round send button. Codex runs on this machine through the SDK;
+Codex Cloud tasks are not offered (the SDK has no way to run a thread
+there), so there is no "Work locally" chooser as in the Codex extension.
 
 **IDE context**, on both kinds of tab, is on by default for new tabs
 (`perch.ideContext`) and remembered per tab. The toggle is green when on
@@ -397,7 +398,7 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 
 The footer follows the active tab.
 
-**Under a Codex tab**: "Work locally", a **backend switch** (`ChatGPT` or
+**Under a Codex tab**: a **backend switch** (`ChatGPT` or
 `API`), your ChatGPT plan, and the plan's usage: percent remaining and
 time to reset for the five-hour window and the week. The switch moves
 Codex between your ChatGPT login and an OpenAI API key: the first switch

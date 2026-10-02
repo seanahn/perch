@@ -587,8 +587,11 @@ It takes its vendor's look through a class on the container and CSS
 ### Codex tab
 
 **+**, the sandbox behind a shield (Full access in amber), the model with
-its effort and a chevron, IDE context, the microphone, a round send
-button, and "Work locally" beneath.
+its effort and a chevron, IDE context, the microphone, and a round send
+button. The Codex extension's "Work locally" chooser is not copied: the
+SDK runs local threads only (no cloud option), and a label styled like
+the vendor's chooser read as a broken switch; it was taken out on
+2026-10-02.
 
 ### The cache clock
 
