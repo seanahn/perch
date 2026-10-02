@@ -500,6 +500,19 @@ ev('a', { kind: 'result', ok: true, duration_ms: 2900, usage: { input: 13822, ca
   host({ type: 'tabs', tabs: [A, B], active: 'a' });
 }
 assert(/done · 2\.9s · in 13822 · cached 7680 · out 11/.test(paneA.querySelector('.result').textContent));
+// through a gateway, the result line says which models answered the turn's requests
+ev('a', { kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache_read: 0, output: 3 }, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 2 }, { model: 'xai/grok-4.6', short: 'grok-4.6', n: 1 }] });
+{ const r = $$('#panes .pane .result').filter((n) => /via/.test(n.textContent)).pop();
+  assert(/done · 1\.2s · in 10 · cached 0 · out 3 · via gpt-6-luna ×2, grok-4\.6$/.test(r.textContent), 'short names, with a count past one');
+  assert.strictEqual(r.title, 'Answered through the gateway by global.openai.gpt-6-luna (2 requests), xai/grok-4.6, as the gateway reported. A gateway\'s own billing is not Anthropic\'s list price.'); }
+// with the gateway's own figure, that is the cost shown, and Claude Code's estimate moves to the tooltip
+ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.3, costTurn: 0.045, gatewayCost: 0.002096, gatewayCostSoFar: 0.0123, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
+{ const r = $$('#panes .pane .result').pop();
+  assert(/done · 0\.8s · in 10 · cached 0 · out 3 · \$0\.0021 this turn · via gpt-6-luna$/.test(r.textContent), 'the gateway\'s figure, to a fraction of a cent; no ≈, no list-price guess');
+  assert.strictEqual(r.title, 'The gateway\'s own figure for this turn, summed over its requests as the gateway reported each; the session so far $0.012 by the same reckoning. Claude Code\'s estimate at Anthropic\'s list prices, ≈$0.045, does not apply to a gateway\'s names. Answered through the gateway by global.openai.gpt-6-luna, as the gateway reported.'); }
+host({ type: 'tabs', tabs: [with_(A, { gateway: true, backend: 'gateway', started: true, via: 'xai/grok-4.6' }), B], active: 'a' });
+assert(/Last answered by xai\/grok-4\.6\. /.test($('#t-model').title), 'the model button names what answered last');
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
 
 // ---- footer: Claude backend and usage
 const $m = $('#meter'), $mb = $('#m-backend'), $mu = $('#m-usage');
@@ -513,7 +526,14 @@ assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
 assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
 assert.strictEqual($('#m-claude .k').className, 'k glyph claude', 'marked as Claude'); assert(shown($('#m-claude')) && !shown($('#m-codex')) && !shown($('#m-plan')));
-$mb.click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle', vendor: 'claude' });
+// under a Claude tab the backend button is a menu: the window's two backends, and the gateway for this tab
+$mb.click();
+assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', true], ['API / Bedrock', false], ['LLM gateway', false]], 'the window\'s backend is checked');
+assert(/^This tab only: Claude Code runs with the variables in the gateway file, which does not exist yet\.$/.test(menuItems()[2].desc), 'with no gateway file, the choice says so');
+pickItem('LLM gateway'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'gateway' });
+assert.strictEqual($('#menu'), null, 'the menu closes on a choice');
+$mb.click(); pickItem('API / Bedrock'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'api' });
+$mb.click(); pickItem('subscription (login)'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'subscription' });
 $mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'claude' });
 host({ type: 'meter', meter: Object.assign({}, METER, { stale: true, lines: METER.lines.concat('Showing the last reading: the usage endpoint is rate limiting requests.') }) });
 assert($mu.classList.contains('stale')); assert(/^5h session: 91% remaining\nShowing the last reading: .*rate limiting requests\.\nUpdated /.test($mu.children[0].title), 'a kept reading says it is old, and why');
@@ -527,6 +547,35 @@ assert.strictEqual($mu.title, 'Claude usage unavailable: not logged in.\nClick t
 $mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterLogin' }, 'with no login, the gauge logs in instead of refreshing');
 host({ type: 'meter', meter: null }); assert(!shown($m));
 host({ type: 'meter', meter: METER });
+
+// ---- a tab on the gateway: the footer shows the tab's backend, not the window's, and the window's usage is not its own
+const GW = { file: '/home/me/.config/gateway-claude/env', exists: false, ok: false };
+host({ type: 'tabs', tabs: [with_(A, { gateway: true, gatewayWarn: true }), B], active: 'a', gateway: GW });
+assert.deepStrictEqual([$mb.textContent, $mb.classList.contains('warn')], ['gw ⚠', true], 'on the gateway, flagged while its file is missing or incomplete');
+assert.strictEqual($mb.title, 'Claude backend for this tab: the gateway, with the variables in /home/me/.config/gateway-claude/env. That file is missing or incomplete; the next message says what to do. Click to change.');
+assert.deepStrictEqual([...$mu.children].map((n) => n.textContent), ['—'], 'the window\'s limits are not this tab\'s');
+assert.strictEqual($mu.title, 'Usage through the gateway is not reported here. The line under each answer shows its tokens.');
+{ const n = out.length; $mu.click(); assert.strictEqual(out.length, n, 'nothing to refresh or log in to'); }
+$mb.click();
+assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', false], ['API / Bedrock', false], ['LLM gateway', true]]);
+assert.strictEqual(menuItems()[2].desc, 'This tab only: Claude Code runs with the variables in /home/me/.config/gateway-claude/env, which does not exist yet.');
+pickItem('subscription (login)'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'subscription' });
+host({ type: 'tabs', tabs: [with_(A, { gateway: true, gatewayWarn: false, backend: 'gateway', started: true }), B], active: 'a', gateway: Object.assign({}, GW, { exists: true, ok: true }) });
+assert.deepStrictEqual([$mb.textContent, $mb.classList.contains('warn')], ['gw', false], 'in order once the file is');
+assert.strictEqual($mb.title, 'Claude backend for this tab: the gateway, with the variables in /home/me/.config/gateway-claude/env. Click to change.');
+assert(/Backend: LLM gateway\. /.test($('#t-model').title), 'the model button names it too');
+$mb.click(); assert.strictEqual(menuItems()[2].desc, 'This tab only: Claude Code runs with the variables in /home/me/.config/gateway-claude/env.'); key($('#input'), 'Escape'); assert.strictEqual($('#menu'), null);
+// the + menu offers the two kinds, file or no file: the gateway is a backend of a Claude tab, chosen in its footer menu
+$('#add').click(); assert.deepStrictEqual($$('#menu .row').map((r) => r.textContent), ['New Claude tab', 'New Codex tab']);
+$$('#menu .row')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'codex' });
+host({ type: 'tabs', tabs: [A, B], active: 'a', gateway: GW });
+$('#add').click(); assert.deepStrictEqual($$('#menu .row').map((r) => r.textContent), ['New Claude tab', 'New Codex tab']);
+$$('#menu .row')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' }, 'a plain tab asks for no gateway, as before');
+assert.deepStrictEqual([$mb.textContent, [...$mu.children].map((n) => n.textContent)], ['sub', ['1.0h 91%', '6.5d 20%']], 'off the gateway, the footer is the window\'s again');
+// under a Codex tab the button stays a switch
+host({ type: 'tabs', tabs: [A, B], active: 'b', gateway: GW }); host({ type: 'meter', meter: METER, codex: { vendor: 'Codex', backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 't', level: 'ok', action: 'refresh', lines: [], segments: [], plan: 'plus' } });
+$mb.click(); assert.deepStrictEqual([out.pop(), $('#menu')], [{ type: 'meterToggle', vendor: 'codex' }, null]);
+host({ type: 'tabs', tabs: [A, B], active: 'a', gateway: GW }); host({ type: 'meter', meter: METER });
 
 // ---- new-tab menu and close
 $('#add').click();

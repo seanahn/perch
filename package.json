@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.37",
+  "version": "0.6.38",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -58,6 +58,11 @@
       {
         "command": "perch.newClaude",
         "title": "Perch: New Claude Tab",
+        "icon": "$(add)"
+      },
+      {
+        "command": "perch.newClaudeGateway",
+        "title": "Perch: New Claude Tab on the Gateway",
         "icon": "$(add)"
       },
       {
@@ -188,6 +193,11 @@
           "group": "1_new@1"
         },
         {
+          "command": "perch.newClaudeGateway",
+          "when": "view == perch.main && perch.gateway",
+          "group": "1_new@11"
+        },
+        {
           "command": "perch.newCodex",
           "when": "view == perch.main",
           "group": "1_new@2"
@@ -248,6 +258,11 @@
           "command": "perch.newClaude",
           "when": "activeWebviewPanelId == 'perch.session'",
           "group": "1_new@1"
+        },
+        {
+          "command": "perch.newClaudeGateway",
+          "when": "activeWebviewPanelId == 'perch.session' && perch.gateway",
+          "group": "1_new@11"
         },
         {
           "command": "perch.newCodex",
@@ -328,6 +343,11 @@
           "type": "string",
           "default": "",
           "description": "Path to a claude program to run. Empty uses the one that comes with the Claude Code extension."
+        },
+        "perch.claude.gatewayEnv": {
+          "type": "string",
+          "default": "~/.config/gateway-claude/env",
+          "description": "A file describing a gateway Claude Code can be run through: export KEY=VALUE lines, as a shell reads them, with ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. A Claude tab opened on the gateway runs with these added to its environment; nothing is written to Claude Code's settings. When the file exists, + offers a tab on the gateway."
         },
         "perch.codex.executable": {
           "type": "string",
@@ -489,7 +509,7 @@
     "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/gateway.test.js && node test/relay.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

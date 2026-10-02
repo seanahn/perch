@@ -378,6 +378,7 @@ ${glyphCss}
   function el(tag, cls, text) { const d = document.createElement(tag); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
   function fmtIn(v) { try { const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1); return s.length > 600 ? s.slice(0, 600) + '…' : s; } catch (_) { return String(v); } }
   const usd = (n) => (Number(n) >= 1 ? Number(n).toFixed(2) : Number(n).toFixed(3));   // a turn is often cents
+  const gwUsd = (n) => (Number(n) >= 1 ? Number(n).toFixed(2) : Number(n) >= 0.01 ? Number(n).toFixed(3) : Number(n).toFixed(4));   // a gateway's figure for a cheap model is a fraction of a cent
   function fmtTok(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
   const cur = () => tabs.find((t) => t.id === active) || null;
 
@@ -441,7 +442,7 @@ ${glyphCss}
     $tabs.querySelectorAll('.tab').forEach((n) => n.remove());
     for (const t of tabs) {
       const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (t.attention ? ' attn' : ''));
-      d.title = t.title + ' · ' + t.kind + ' · double-click to rename';
+      d.title = t.title + ' · ' + t.kind + (t.gateway ? ' · LLM gateway' : '') + ' · double-click to rename';
       const k = badge(t.kind), tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
       x.title = 'Close tab';
       x.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'close', sid: t.id }); });
@@ -495,7 +496,7 @@ ${glyphCss}
     const hasEffort = (t.efforts || []).length > 1, effort = hasEffort ? cap(resolved(t.efforts, t.effort)) : '';
     $tModel.querySelector('.m').textContent = model;
     $tModel.querySelector('.e').textContent = effort;
-    $tModel.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : 'subscription') + '. ' : '')
+    $tModel.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : t.backend === 'gateway' ? 'LLM gateway' : 'subscription') + '. ' : '') + (t.via ? 'Last answered by ' + t.via + '. ' : '')
       + 'Model and effort. Changes apply from the next message.';
 
     const mode = MODES[t.mode] || [t.mode, ''];
@@ -741,9 +742,11 @@ ${glyphCss}
   $add.addEventListener('click', (e) => {
     e.stopPropagation();
     openMenu('add', $add, (m) => {
-      for (const [kind, label] of [['claude', 'New Claude tab'], ['codex', 'New Codex tab']]) {
+      // a tab on the gateway is offered once there is a gateway file; before that the choice would only lead to a message
+      const kinds = [['claude', 'New Claude tab', false], ['codex', 'New Codex tab', false]];
+      for (const [kind, label, gateway] of kinds) {
         const row = el('div', 'row'); row.append(badge(kind), label);
-        row.addEventListener('click', (ev) => { ev.stopPropagation(); closeMenu(); vscode.postMessage({ type: 'new', kind }); });
+        row.addEventListener('click', (ev) => { ev.stopPropagation(); closeMenu(); vscode.postMessage(gateway ? { type: 'new', kind, gateway: true } : { type: 'new', kind }); });
         m.append(row);
       }
     });
@@ -794,8 +797,17 @@ ${glyphCss}
         d.append(head, ...pv.body, btns); p.stick = true; break; }
       case 'question': { endLive(p); asking(add(p, 'ask', ''), m, sid, p); p.stick = true; break; }
       case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
-      case 'result': { endLive(p); const u = m.usage || {}; const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + (m.costTurn !== undefined ? ' · \u2248$' + usd(m.costTurn) + ' this turn' + (cur() && cur().backend === 'subscription' ? ' at API rates' : '') : ''));   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
-        if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far \u2248$' + usd(m.cost) + '.' : 'The whole conversation so far \u2248$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (cur() && cur().backend === 'subscription' ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : ''); break; }
+      case 'result': { endLive(p); const u = m.usage || {};
+        // through a gateway, which model answered: a turn is several requests, and a routed name may send each anywhere
+        const via = Array.isArray(m.via) && m.via.length ? ' · via ' + m.via.map((v) => (v.short || v.model) + (v.n > 1 ? ' ×' + v.n : '')).join(', ') : '';
+        // the turn's cost: the gateway's own figure when there is one (summed over the turn's requests), else Claude Code's estimate at list prices
+        const gw = typeof m.gatewayCost === 'number', sub = cur() && cur().backend === 'subscription';
+        const cost = gw ? ' · $' + gwUsd(m.gatewayCost) + ' this turn' : m.costTurn !== undefined ? ' · ≈$' + usd(m.costTurn) + ' this turn' + (sub ? ' at API rates' : '') : '';
+        const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + cost + via);   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
+        if (gw) d.title = 'The gateway\\'s own figure for this turn, summed over its requests as the gateway reported each; the session so far $' + gwUsd(m.gatewayCostSoFar || m.gatewayCost) + ' by the same reckoning.' + (m.costTurn !== undefined ? ' Claude Code\\'s estimate at Anthropic\\'s list prices, ≈$' + usd(m.costTurn) + ', does not apply to a gateway\\'s names.' : '');
+        else if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far ≈$' + usd(m.cost) + '.' : 'The whole conversation so far ≈$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (sub ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : '');
+        if (via) d.title = (d.title ? d.title + ' ' : '') + 'Answered through the gateway by ' + m.via.map((v) => v.model + (v.n > 1 ? ' (' + v.n + ' requests)' : '')).join(', ') + ', as the gateway reported.' + (gw ? '' : ' A gateway\\'s own billing is not Anthropic\\'s list price.');
+        break; }
       case 'note': endLive(p); addLinked(p, 'status', m.text); break;
       case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); addLinked(p, 'error', m.text); break;
@@ -855,7 +867,9 @@ ${glyphCss}
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
   const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan');
   const meters = { claude: null, codex: null };
-  let meter = null, meterKind = null;
+  let meter = null, meterKind = null, onGateway = false;
+  // the gateway, as the host last said: whether there is a file to offer a tab on, and whether it is in order
+  let gatewayInfo = { file: '', exists: false, ok: false };
   function applyMeter() {
     const t = cur();
     meterKind = t ? t.kind : null;
@@ -865,7 +879,17 @@ ${glyphCss}
     const claude = meterKind === 'claude';
     $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false; $where.hidden = claude;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
-    // the backend: Claude's subscription or API / Bedrock; Codex's ChatGPT login or API key
+    // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
+    onGateway = claude && !!t.gateway;
+    if (onGateway) {
+      $mb.textContent = 'gw' + (t.gatewayWarn ? ' \u26A0' : '');
+      $mb.className = 'mb' + (t.gatewayWarn ? ' warn' : '');
+      $mb.title = 'Claude backend for this tab: the gateway, with the variables in ' + (gatewayInfo.file || 'the gateway file') + '. ' + (t.gatewayWarn ? 'That file is missing or incomplete; the next message says what to do. ' : '') + 'Click to change.';
+      $mu.textContent = ''; $mu.className = 'mu none';
+      $mu.append(el('span', 'seg none', '\u2014'));
+      $mu.title = 'Usage through the gateway is not reported here. The line under each answer shows its tokens.';
+      return;
+    }
     $mb.textContent = (meter.backendLabel || '') + (meter.backendWarn ? ' \u26A0' : '');
     $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
     $mb.title = meter.backendTitle || '';
@@ -880,17 +904,30 @@ ${glyphCss}
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
-  $mb.addEventListener('click', () => vscode.postMessage({ type: 'meterToggle', vendor: meterKind }));   // the backend of the footer shown
+  // Codex has two backends, so its button is a switch. Claude has the window's two and, for this tab, the gateway: a menu.
+  $mb.addEventListener('click', (e) => {
+    const t = cur();
+    if (meterKind !== 'claude' || !t) { vscode.postMessage({ type: 'meterToggle', vendor: meterKind }); return; }
+    e.stopPropagation();
+    openMenu('backend', $mb, (m) => {
+      const windowBackend = meter ? meter.backend : 'subscription';
+      const pick = (value) => () => vscode.postMessage({ type: 'setBackend', sid: t.id, value });
+      m.append(el('div', 'h', 'Claude backend'));
+      m.append(item('subscription (login)', { radio: true, checked: !t.gateway && windowBackend === 'subscription', desc: 'Every tab. Writes CLAUDE_CODE_USE_BEDROCK in ~/.claude/settings.json.', pick: pick('subscription') }));
+      m.append(item('API / Bedrock', { radio: true, checked: !t.gateway && windowBackend === 'api', desc: 'Every tab, with credentials of Claude Code\\'s own. Writes the same setting.', pick: pick('api') }));
+      m.append(item('LLM gateway', { radio: true, checked: !!t.gateway, desc: 'This tab only: Claude Code runs with the variables in ' + (gatewayInfo.file || 'the gateway file') + (gatewayInfo.exists ? '' : ', which does not exist yet') + '.', pick: pick('gateway') }));
+    });
+  });
   $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
   // the vendor's mark opens the vendor's site
   $mClaude.title = 'Open claude.ai'; $mCodex.title = 'Open chatgpt.com';
   $mClaude.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://claude.ai/' }));
   $mCodex.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/' }));
-  $mu.addEventListener('click', () => vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }));
+  $mu.addEventListener('click', () => { if (onGateway) return; vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }); });
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
-    if (m.type === 'tabs') applyTabs(m.tabs, m.active, m.single);
+    if (m.type === 'tabs') { if (m.gateway) gatewayInfo = m.gateway; applyTabs(m.tabs, m.active, m.single); }
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }

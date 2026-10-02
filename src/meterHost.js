@@ -47,8 +47,9 @@ class MeterHost {
     return m === 'cost' ? 'cost' : 'subscription';
   }
   backend() { return this.meter.bedrockConfigured() ? 'api' : 'subscription'; }
-  /** Minutes the prompt cache stays warm, for a tab on the given backend (or the backend a new tab would get). */
-  cacheMinutes(backend) { try { return this.meter.promptCacheMinutes(backend || this.backend()); } catch (_) { return 60; } }
+  /** Minutes the prompt cache stays warm, for a tab on the given backend (or the backend a new tab would get); `extra`
+   * is what the tab's process is given beyond this one's environment, such as a gateway file's variables. */
+  cacheMinutes(backend, extra) { try { return this.meter.promptCacheMinutes(backend || this.backend(), extra); } catch (_) { return 60; } }
 
   state() {
     const api = this.meter.bedrockConfigured();

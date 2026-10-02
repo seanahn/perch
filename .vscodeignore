@@ -5,6 +5,7 @@ test/**
 *.vsix
 Makefile
 design.md
+c3-gateway.md
 package-lock.json
 audio/**
 voice/__pycache__/**

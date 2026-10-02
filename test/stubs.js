@@ -49,6 +49,8 @@ class FakeAgent {
     this.emit({ kind: 'session', id: (this.o.resume || 'sess-' + created.indexOf(this)) });
     this.emit({ kind: 'status', text: 'ready · fake' });
     if (this.claude) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
+    // through a gateway, the relay reports each response's model: a turn here is three requests, two to one model and one to another
+    if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) this.emit({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'nexus-auto', fallbacks: 0, cost: 0.0001, callId: 'c' });
     if (/^hold/.test(t)) { this.held = t; return; }
     this.answer(t);
   }
@@ -56,6 +58,7 @@ class FakeAgent {
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
     if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: 'claude-' + (this.o.model || 'opus') + '-resolved' }); }
+    if (this.claude && this.o.gateway) this.emit({ kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache_read: 0, output: 3 } });   // the turn's result, which carries what answered; only agents on a gateway send one here, so no other test's event sequence changes
     this.held = null;
     if (this.waiting.length) { this.begin(this.waiting.shift()); return; }
     this.running = false;
@@ -118,10 +121,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
     fetchUsage: async () => { box.fetches++; return box.usage; },
     computeCostStats: () => { if (box.cost instanceof Error) throw box.cost; return box.cost; },
-    promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'api' ? 5 : 60)),
+    promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
+  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -163,7 +166,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
@@ -184,7 +187,8 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       onDidChangeActiveTextEditor: (f) => { ui.listeners.editor.push(f); return { dispose() {} }; },
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
-    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); ui.executed.push(id); } },
+    // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for
+    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); } },
     env: { clipboard: { writeText: async (t) => { ui.copied.push(t); } }, remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
     extensions: {

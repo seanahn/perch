@@ -9,6 +9,8 @@ const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
 const { resolveProgram } = require('./binaries');
 const codexAuth = require('./codexAuth');
+const Gateway = require('./gateway');
+const { shortModel } = require('./relay');
 const { listSessions, renameSession, loadTranscript, cleanTitle, ago } = require('./sessionStore');
 
 const MODES = {
@@ -22,6 +24,7 @@ const EFFORTS = {
   codex: ['', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 const STATE_KEY = 'perch.sessions.v1';
+const GATEWAY_DEFAULT_KEY = 'perch.claude.newTabsOnGateway';   // true once the gateway was chosen for a tab, until the subscription or API / Bedrock is; new Claude tabs follow it
 const UNSANDBOXED_KEY = 'perch.codex.unsandboxed';   // { hostname: true } for machines where Codex's sandbox cannot start
 const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
 // how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
@@ -168,7 +171,7 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept }) {
+  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -180,6 +183,11 @@ class Session {
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
     this.backend = '';               // claude only: the backend this tab's agent started on
+    this.gateway = kind === 'claude' && !!gateway;   // claude only: this tab runs through the gateway (src/gateway.js), whatever the window's backend
+    this.via = {};                   // gateway only: the models that answered this turn's requests, by name, with how many each
+    this.lastVia = '';               // gateway only: the model that answered most recently, for the tooltip
+    this.viaCost = null;             // gateway only: the gateway's own figure for this turn so far, summed over its requests; null until one is reported
+    this.gatewayCost = typeof gatewayCost === 'number' ? gatewayCost : 0;   // gateway only: the gateway's figure for the whole session, saved with the tab
     this.context = null;             // claude only: { percent, used, max } of the context window
     this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
     this.costSoFar = typeof costSoFar === 'number' ? costSoFar : null;   // claude only: the session's cost at API rates, as last reported, so each turn's own cost can be told
@@ -220,7 +228,8 @@ class Session {
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
 
   // ---- what this tab may choose, given the agent's catalog and the selected model
-  catalog() { return this.view.catalog[this.kind] || null; }
+  /** On the gateway the choices are the file's names (src/gateway.js), not Claude Code's catalog. */
+  catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[this.kind] || null; }
   selectedModel() {
     const cat = this.catalog(); if (!cat) return null;
     return this.model ? (cat.models.find((m) => m.value === this.model) || null) : cat.defaultModel;
@@ -242,7 +251,7 @@ class Session {
   }
   modelOptions() {
     const cat = this.catalog(); const d = cat && cat.defaultModel;
-    const opts = [{ value: '', label: 'default' + (d && d.label ? ' · ' + d.label : ''), title: 'The model the agent picks by default' }];
+    const opts = [{ value: '', label: 'default' + (d && d.label ? ' · ' + d.label : ''), title: d && d.description ? d.description : 'The model the agent picks by default' }];
     for (const v of this.allowedModels().slice(1)) { const m = cat && cat.models.find((x) => x.value === v); opts.push({ value: v, label: m ? m.label : v, title: m ? m.description : 'not in the agent\'s model list' }); }
     return opts;
   }
@@ -272,9 +281,23 @@ class Session {
         if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
         return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
+      case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn
+        if (typeof ev.cost === 'number' && Number.isFinite(ev.cost)) this.viaCost = (this.viaCost || 0) + ev.cost;
+        if (!ev.model) return;
+        this.via[ev.model] = (this.via[ev.model] || 0) + 1;
+        if (this.lastVia !== ev.model) { this.lastVia = ev.model; this.view.sendTabs(); }
+        return;
       case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
       case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
-      case 'result': if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); } break;
+      case 'result': {
+        if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); }
+        const via = Object.entries(this.via).map(([model, n]) => ({ model, short: shortModel(model), n }));
+        if (via.length) ev.via = via;   // what answered this turn, for the line under the answer; kept with the transcript
+        this.via = {};
+        // the gateway's own figure for the turn, in place of Claude Code's estimate, which prices a gateway's names by guess
+        if (this.viaCost !== null) { this.gatewayCost += this.viaCost; ev.gatewayCost = this.viaCost; ev.gatewayCostSoFar = this.gatewayCost; this.viaCost = null; this.view.persist(); }
+        break;
+      }
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
       case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
       case 'clear': this.history = []; this.resumed = null; break;
@@ -301,7 +324,9 @@ class Session {
     const prog = program(this.kind);
     if (prog.from === 'none') this.post({ kind: 'error', text: MISSING[this.kind] });
     if (this.kind === 'claude') {
-      this.backend = this.view.meter ? this.view.meter.backend() : '';     // fixed for the life of the agent process
+      // fixed for the life of the agent process: a process cannot change how it authenticated
+      this.backend = this.gateway ? 'gateway' : this.view.meter ? this.view.meter.backend() : '';
+      const gw = this.gateway ? this.view.gateway() : null;
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
@@ -309,6 +334,8 @@ class Session {
         effort: this.effort || undefined,
         executable: prog.path || undefined,
         costBefore: this.costSoFar === null ? undefined : this.costSoFar,
+        env: gw ? Gateway.gatewayEnv(gw.vars) : undefined,
+        gateway: gw ? { target: gw.vars.ANTHROPIC_BASE_URL } : undefined,   // through the relay, which sees which model answers
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
@@ -341,8 +368,19 @@ class Session {
       if (before < MANY_IMAGES && after >= MANY_IMAGES) this.post({ kind: 'note', text: `This conversation now carries ${after} images. Past ${MANY_IMAGES}, the API refuses a conversation holding any image 2000 px or wider, which images from earlier versions of perch or from Claude Code's own reading may be. If a turn then fails with "an image could not be processed", /compact lets the earlier images go.` });
     }
     if (!text.trim() && !images.length) return;
+    // Claude on the gateway with no gateway to reach: the file is missing or incomplete, or the window is on API / Bedrock,
+    // which Claude Code's settings apply over a process's environment. Hold the message, say what to do.
+    if (this.kind === 'claude' && !this.agent && this.gateway && this.view.meter) {
+      const gw = this.view.gateway(), bedrock = this.view.meter.backend() === 'api';
+      if (!gw.ok || bedrock) {
+        this.post({ kind: 'note', text: bedrock ? 'This tab is on the LLM gateway, but Claude is set to API / Bedrock in ~/.claude/settings.json, which wins over the gateway\'s environment. Switch Claude to the subscription, or take this tab off the gateway, then send the message again.' : `This tab is on the gateway, but ${Gateway.describe(gw)} Fill it in, or take this tab off the gateway, then send the message again.` });
+        this.view.deliver(this.id, text);
+        this.view.gatewayHelp(this, gw, bedrock);
+        return;
+      }
+    }
     // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
-    if (this.kind === 'claude' && !this.agent && this.view.meter && !this.view.meter.canRun()) {
+    if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun()) {
       const api = this.view.meter.backend() === 'api';
       this.post({ kind: 'note', text: api ? `Claude is set to API / Bedrock on ${require('os').hostname()}, and no credentials for it were found there. Set them up, or use your subscription, then send the message again.` : `Claude is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
       this.view.deliver(this.id, text);
@@ -373,6 +411,24 @@ class Session {
   }
 
   setIde(on) { this.ide = !!on; this.view.persist(); }
+
+  /**
+   * Put this tab on the gateway, or take it off, for its next process. A running process cannot change how it authenticates,
+   * so it ends (after the current turn, if one is running) and the next message resumes the session, as a backend switch does.
+   */
+  setGateway(on) {
+    on = this.kind === 'claude' && !!on;
+    if (on === this.gateway) return;
+    this.gateway = on;
+    // a model of Claude Code's catalog means nothing to the gateway: back to the file's default, which the pill then shows
+    if (on && this.model && !['opus', 'sonnet', 'haiku'].includes(this.model)) { this.model = ''; this.effort = ''; }
+    this.view.persist();
+    this.view.sendTabs();                // the choice shows at once, whether or not the process has moved yet
+    const to = on ? 'the LLM gateway' : this.view.meter ? this.view.meter.state().backendName : 'the window\'s backend';
+    if (!this.agent) return;
+    if (this.busy) { this.restartWhenIdle = true; this.post({ kind: 'note', text: `This tab moves to ${to} after the current turn; the conversation continues, the prompt cache starts over.` }); }
+    else { this.restart(); this.post({ kind: 'note', text: `This tab is on ${to} from the next message; the conversation continues, the prompt cache starts over.` }); }
+  }
 
   /** @param {Record<string,string>} [answers]  for a question: each question's answer, by the question's text */
   answerPermission(id, decision, answers) {
@@ -422,7 +478,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = '';
+    this.agent.dispose(); this.agent = null; this.backend = ''; this.via = {}; this.viaCost = null;
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
     this.busy = false; this.busySince = 0; this.attention = false;
@@ -444,14 +500,17 @@ class Session {
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
       backend: this.agent ? this.backend : '',
+      gateway: this.gateway,
+      gatewayWarn: this.gateway && !this.view.gateway().ok,   // the file is missing or incomplete: the first message will say so
+      via: this.gateway ? this.lastVia : '',                   // the model that last answered through the gateway
       queued: this.queue.length,
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
-      cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : ''), since: this.respondedAt } : null,
+      cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : '', this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -512,9 +571,10 @@ class PerchView {
     }
     if (why !== 'backend') return;
     // models differ by backend, and a running process cannot change how it authenticated: so the process ends and the
-    // session goes on, resumed by the next message on the new backend, as after a window reload
+    // session goes on, resumed by the next message on the new backend, as after a window reload. A tab on the gateway
+    // has its own backend and is left alone.
     this.loadCatalogs(true);
-    for (const s of this.sessions) if (s.kind === 'claude' && s.agent && s.backend && s.backend !== state.backend) {
+    for (const s of this.sessions) if (s.kind === 'claude' && !s.gateway && s.agent && s.backend && s.backend !== state.backend) {
       if (s.busy) { s.restartWhenIdle = true; s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab moves to it after the current turn; the conversation continues, the prompt cache starts over.` }); }
       else { s.restart(); s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab continues on it from the next message; the prompt cache starts over.` }); }
     }
@@ -572,6 +632,60 @@ class PerchView {
       await this.meter.login();
       if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.');
     } finally { this.claudeLoginOpen = false; }
+  }
+
+  // ---- the gateway: an Anthropic-compatible endpoint a Claude tab can be put on, described by a file of the user's
+  /** Where the gateway's file is, by the setting or the default. */
+  gatewayPath() { return Gateway.gatewayFile(cfg('claude.gatewayEnv')); }
+  /** The gateway as its file describes it now. Read each time: the file is small, and the user may be editing it. */
+  gateway() { return Gateway.readGateway(this.gatewayPath()); }
+  /** What a page needs to know of the gateway, with the tabs: whether to offer it, and whether it is in order. */
+  gatewayInfo() { const gw = this.gateway(); return { file: gw.file, exists: gw.exists, ok: gw.ok }; }
+  /** Tells VS Code whether there is a gateway file, so the menus offer a tab on it only then. */
+  syncGatewayContext() {
+    const exists = this.gateway().exists;
+    if (exists === this.gatewayShown) return;
+    this.gatewayShown = exists;
+    Promise.resolve(vscode.commands.executeCommand('setContext', 'perch.gateway', exists)).catch(() => { /* an older VS Code */ });
+  }
+
+  /** The gateway's file, made from the template when there is none, so there is something to fill in. Owner-readable only. */
+  async openGatewayFile() {
+    const p = this.gatewayPath();
+    try { require('fs').accessSync(p); } catch (_) { try { Gateway.createTemplate(p); } catch (e) { vscode.window.showErrorMessage('Perch: could not create ' + p + '. ' + e.message); return; } }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(p)));
+  }
+
+  /**
+   * A tab on the gateway cannot reach it: the file is missing or incomplete, or Claude is on API / Bedrock, which Claude Code's
+   * settings apply over a process's environment. Offer the way on: the file, the subscription, or this tab off the gateway.
+   */
+  async gatewayHelp(s, gw, bedrock) {
+    if (this.gatewayOpen) return;
+    this.gatewayOpen = true;
+    try {
+      const off = 'Leave the Gateway';
+      const pick = bedrock
+        ? await vscode.window.showWarningMessage('This tab is on the LLM gateway, but Claude is set to API / Bedrock in ~/.claude/settings.json. Claude Code applies its settings over a process\'s environment, so the gateway\'s ANTHROPIC_BASE_URL would not be used. Switch Claude to the subscription (login), or take this tab off the gateway.', 'Use Subscription', off)
+        : await vscode.window.showWarningMessage(`This tab is on the LLM gateway, but ${Gateway.describe(gw)} Perch gives a tab on the gateway the variables in that file (export KEY=VALUE lines, as a shell reads them): ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. Nothing is written to Claude Code's settings.`, 'Open the File', off);
+      if (pick === off) { if (!s.disposed) s.setGateway(false); }
+      else if (pick === 'Use Subscription') await this.meter.toggleBackend();
+      else if (pick === 'Open the File') await this.openGatewayFile();
+    } finally { this.gatewayOpen = false; }
+  }
+
+  /**
+   * The backend of one Claude tab, from the footer's menu. The gateway is the tab's own; subscription and API / Bedrock are
+   * the window's, set with the switch every tab follows, and take the tab off the gateway if it was on it.
+   */
+  setBackend(s, value) {
+    if (!s || s.kind !== 'claude') return;
+    // the choice sticks: the next new Claude tab starts where this one was put (subscription and API / Bedrock stick through Claude Code's own setting)
+    if (value === 'gateway' || value === 'subscription' || value === 'api') this.context.globalState.update(GATEWAY_DEFAULT_KEY, value === 'gateway');
+    if (value === 'gateway') { s.setGateway(true); return; }
+    if (value !== 'subscription' && value !== 'api') return;
+    if (s.gateway) s.setGateway(false);
+    if (this.meter.backend() !== value) this.meter.toggleBackend();
   }
 
   /** Claude Code's settings file, made with an empty env block when there is none, so there is something to fill in. */
@@ -774,11 +888,12 @@ class PerchView {
   }
   sendEvent(sid, ev) { const f = this.surface(this.get(sid)); if (f && f.ready) f.webview.postMessage({ type: 'event', sid, ev }); }
   sendTabs() {
-    if (this.sidebar.ready && this.sidebar.view) this.sidebar.view.webview.postMessage({ type: 'tabs', tabs: this.sessions.filter((s) => s.location === 'sidebar').map((s) => s.toTab()), active: this.activeId });
+    const gw = this.gatewayInfo(); this.syncGatewayContext();
+    if (this.sidebar.ready && this.sidebar.view) this.sidebar.view.webview.postMessage({ type: 'tabs', tabs: this.sessions.filter((s) => s.location === 'sidebar').map((s) => s.toTab()), active: this.activeId, gateway: gw });
     for (const [sid, e] of this.panels) {
       const s = this.get(sid); if (!s) continue;
       const title = this.panelTitle(s); if (e.panel.title !== title) e.panel.title = title;
-      if (e.ready) e.panel.webview.postMessage({ type: 'tabs', tabs: [s.toTab()], active: sid, single: true });
+      if (e.ready) e.panel.webview.postMessage({ type: 'tabs', tabs: [s.toTab()], active: sid, single: true, gateway: gw });
     }
   }
   replay(s) {
@@ -818,6 +933,7 @@ class PerchView {
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
       case 'attach': this.attach(msg.sid); return;
       case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
+      case 'setBackend': this.setBackend(s, msg.value); return;
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
       case 'meterToggle': if (msg.vendor === 'codex') this.meter.toggleCodexBackend(); else this.meter.toggleBackend(); return;
       case 'meterLogin': this.meter.login(); return;
@@ -825,7 +941,7 @@ class PerchView {
       case 'voiceStop': if (s) this.voice.stop(s.id); return;
       case 'voiceCancel': this.voice.cancel(); return;
       case 'activate': this.activate(msg.sid); return;
-      case 'new': this.addSession(msg.kind); return;
+      case 'new': this.addSession(msg.kind, msg.gateway === undefined ? {} : { gateway: !!msg.gateway }); return;   // no flag: the default for new tabs decides
       case 'close': this.closeSession(msg.sid); return;
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
@@ -837,15 +953,17 @@ class PerchView {
   }
 
   // ---- session management
-  /** @param {object} [o]  `resume` opens the tab on a session the agent has already recorded, under the name it has there */
-  addSession(kind, { fill, location, resume, title } = {}) {
+  /** @param {object} [o]  `resume` opens the tab on a session the agent has already recorded, under the name it has there;
+   *  `gateway` puts a Claude tab on the gateway */
+  addSession(kind, { fill, location, resume, title, gateway } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
+    if (gateway === undefined && kind === 'claude' && !resume) gateway = this.context.globalState.get(GATEWAY_DEFAULT_KEY) === true;   // where the last Claude tab was put
     const vendor = kind === 'claude' ? 'Claude' : 'Codex';
     // a machine where Codex's sandbox cannot start (codexNoSandbox): new Codex tabs run without one, and say so
     const mode = kind === 'codex' && this.codexUnsandboxedHere() ? 'danger-full-access' : undefined;
     const s = new Session(this, resume
-      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where() }
-      : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where() });
+      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where(), gateway }
+      : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where(), gateway });
     this.sessions.push(s);
     if (mode) s.history.push({ kind: 'note', text: `Codex runs without a sandbox on ${require('os').hostname()}: the kernel forbids the user namespaces its sandbox needs.` });
     if (fill) s.prefill = fill;
@@ -857,9 +975,16 @@ class PerchView {
     return s;
   }
 
+  /** The kinds of tab on offer: one of each agent. A Claude tab moves onto the gateway from its backend menu. */
+  freshKinds() {
+    const list = [{ kind: 'claude', label: 'Claude', tab: 'Claude tab', description: 'New Claude Code tab' }];
+    list.push({ kind: 'codex', label: 'Codex', tab: 'Codex tab', description: 'New Codex tab' });
+    return list;
+  }
+
   async pickNew() {
-    const pick = await vscode.window.showQuickPick([{ label: 'Claude', description: 'New Claude Code tab', kind: 'claude' }, { label: 'Codex', description: 'New Codex tab', kind: 'codex' }], { placeHolder: 'New Perch tab' });
-    return pick ? this.addSession(pick.kind) : null;
+    const pick = await vscode.window.showQuickPick(this.freshKinds().map((k) => ({ label: k.label, description: k.description, kind: k.kind, gateway: k.gateway })), { placeHolder: 'New Perch tab' });
+    return pick ? this.addSession(pick.kind, { gateway: pick.gateway }) : null;
   }
 
   closeSession(id) {
@@ -953,7 +1078,7 @@ class PerchView {
   async pickSession() {
     const qp = vscode.window.createQuickPick();
     qp.title = 'Perch sessions'; qp.placeholder = 'Search sessions…'; qp.matchOnDescription = true; qp.busy = true;
-    qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it && it.fresh) this.addSession(it.fresh); else if (it) this.resumeSession(it.past); });
+    qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it && it.fresh) this.addSession(it.fresh, { gateway: it.gateway }); else if (it) this.resumeSession(it.past); });
     // the box that asks for the name takes the list's place, so the list is opened again afterwards, with the new name in it
     qp.onDidTriggerItemButton(async (e) => { qp.hide(); await this.renamePast(e.item.past); await this.pickSession(); });
     qp.onDidHide(() => qp.dispose());
@@ -961,7 +1086,7 @@ class PerchView {
     const { sessions, failed } = await listSessions({ dir: cwd(), limit: 200 });
     const rename = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Rename session' };
     // a new tab is also a way in, so the list begins with one of each kind, whatever is typed
-    const fresh = [{ label: '$(add) New Claude tab', fresh: 'claude', alwaysShow: true }, { label: '$(add) New Codex tab', fresh: 'codex', alwaysShow: true }];
+    const fresh = this.freshKinds().map((k) => ({ label: `$(add) New ${k.tab}`, fresh: k.kind, gateway: k.gateway, alwaysShow: true }));
     qp.items = fresh.concat(sessions.map((p) => {
       const open = this.sessions.find((s) => s.kind === p.kind && s.agentSessionId === p.id);
       const past = open && open.unsaved ? Object.assign({}, p, { title: open.title }) : p;
@@ -1020,12 +1145,11 @@ class PerchView {
     if (!text) { vscode.window.showInformationMessage('The active Perch tab has no answer to hand off yet.'); return; }
     const items = [
       ...this.sessions.filter((s) => s.id !== from.id).map((s) => ({ label: s.title, description: s.kind, sid: s.id })),
-      { label: 'New Claude tab', description: 'claude', kind: 'claude' },
-      { label: 'New Codex tab', description: 'codex', kind: 'codex' },
+      ...this.freshKinds().map((k) => ({ label: `New ${k.tab}`, description: k.kind, kind: k.kind, gateway: k.gateway })),
     ];
     const pick = await vscode.window.showQuickPick(items, { placeHolder: `Send the last answer from "${from.title}" to…` });
     if (!pick) return;
-    if (!pick.sid) { this.addSession(pick.kind, { fill: text, location: from.location }); return; }
+    if (!pick.sid) { this.addSession(pick.kind, { fill: text, location: from.location, gateway: pick.gateway }); return; }
     const to = this.get(pick.sid);
     this.activate(pick.sid);
     const f = this.surface(to);
@@ -1052,6 +1176,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.new', () => perch.pickNew()),
     vscode.commands.registerCommand('perch.open', () => perch.open()),
     vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
+    vscode.commands.registerCommand('perch.newClaudeGateway', () => perch.addSession('claude', { gateway: true })),
     vscode.commands.registerCommand('perch.newCodex', () => perch.addSession('codex')),
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),

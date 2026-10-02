@@ -82,14 +82,17 @@ const stashOf = (init) => { const m = Object.assign({}, init); return { get: (k)
   // ---- how long the prompt cache stays warm
   {
     const home = mk(); const mins = (env, backend) => M.createMeter({ home, env }).promptCacheMinutes(backend);
-    assert.deepStrictEqual([mins({}), mins({}, 'subscription'), mins({}, 'api')], [60, 60, 5], 'an hour on a subscription, five minutes on API or Bedrock');
+    assert.deepStrictEqual([mins({}), mins({}, 'subscription'), mins({}, 'api'), mins({}, 'gateway')], [60, 60, 5, 5], 'an hour on a subscription, five minutes on API, Bedrock, or a gateway');
     assert.strictEqual(mins({ CLAUDE_CODE_USE_BEDROCK: '1' }), 5, 'with no backend given, the one a new session would get');
-    write(home, '.claude/settings.json', { promptCacheTtl: '5m' });
-    assert.deepStrictEqual([mins({}, 'subscription'), mins({ CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' }, 'api')], [5, 60], 'an explicit choice wins, the environment over the settings file');
-    write(home, '.claude/settings.json', { promptCacheTtl: 'forever', env: { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' } });
-    assert.strictEqual(mins({}, 'api'), 60, 'the settings env block counts; an unknown value is ignored');
-    write(home, '.claude/settings.local.json', { promptCacheTtl: '5m' });
-    assert.strictEqual(mins({}, 'subscription'), 5, 'settings.local.json overrides settings.json');
+    assert.deepStrictEqual([mins({ ENABLE_PROMPT_CACHING_1H: '1' }, 'api'), mins({ ENABLE_PROMPT_CACHING_1H: 'true' }, 'gateway'), mins({ ENABLE_PROMPT_CACHING_1H: '0' }, 'gateway')], [60, 60, 5], 'ENABLE_PROMPT_CACHING_1H forces the hour; Claude Code\'s truthy spellings');
+    assert.strictEqual(mins({ FORCE_PROMPT_CACHING_5M: '1', ENABLE_PROMPT_CACHING_1H: '1' }, 'subscription'), 5, 'FORCE_PROMPT_CACHING_5M wins over everything');
+    assert.deepStrictEqual([mins({ ENABLE_PROMPT_CACHING_1H_BEDROCK: '1' }, 'api'), mins({ CLAUDE_CODE_USE_BEDROCK: '1', ENABLE_PROMPT_CACHING_1H_BEDROCK: '1' }, 'api')], [5, 60], 'the Bedrock flag counts only on Bedrock');
+    assert.strictEqual(M.createMeter({ home, env: {} }).promptCacheMinutes('gateway', { ENABLE_PROMPT_CACHING_1H: '1' }), 60, 'a gateway file\'s variables count for a gateway tab');
+    assert.strictEqual(mins({ CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' }, 'api'), 5, 'a variable Claude Code does not read is ignored');
+    write(home, '.claude/settings.json', { env: { ENABLE_PROMPT_CACHING_1H: '1' } });
+    assert.strictEqual(mins({}, 'api'), 60, 'the settings env block counts');
+    write(home, '.claude/settings.local.json', { env: { FORCE_PROMPT_CACHING_5M: '1' } });
+    assert.strictEqual(mins({ ENABLE_PROMPT_CACHING_1H: '1' }, 'subscription'), 5, 'settings.local.json over settings.json over the environment, as Claude Code applies them');
     fs.rmSync(home, { recursive: true, force: true });
   }
 

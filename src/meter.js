@@ -331,18 +331,24 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
   }
 
   /**
-   * How long Claude Code keeps the prompt cache warm for the main conversation, in minutes. An explicit choice wins
-   * (the environment variable over the settings file); otherwise one hour on a subscription and five minutes on
-   * API, Bedrock, Vertex, or Foundry.
+   * How long Claude Code keeps the prompt cache warm for the main conversation, in minutes: Claude Code's own rule
+   * (read from the 2.1.119 binary). FORCE_PROMPT_CACHING_5M forces five minutes; ENABLE_PROMPT_CACHING_1H forces the
+   * hour (on Bedrock, ENABLE_PROMPT_CACHING_1H_BEDROCK); otherwise the hour is given only to a claude.ai login, which
+   * an API key or an ANTHROPIC_AUTH_TOKEN (a gateway) is not, and the rest get five minutes. The variables are read
+   * the way Claude Code sees them: settings.local.json's env block over settings.json's over `extra` (a gateway
+   * file's variables, which a tab's process is given) over this process's environment. Overage, which also drops a
+   * subscription to five minutes, is not known here.
    */
-  function promptCacheMinutes(backend) {
-    const pick = (v) => (v === '1h' ? 60 : v === '5m' ? 5 : 0);
-    let m = pick(env.CLAUDE_CODE_PROMPT_CACHE_TTL);
-    if (m) return m;
-    for (const f of ['settings.local.json', 'settings.json']) {
-      try { const j = JSON.parse(fs.readFileSync(path.join(claudeDir, f), 'utf8')); m = pick(j && j.promptCacheTtl) || pick(j && j.env && j.env.CLAUDE_CODE_PROMPT_CACHE_TTL); if (m) return m; } catch (_) { /* missing or unparsable */ }
+  function promptCacheMinutes(backend, extra) {
+    const on = (v) => v !== undefined && v !== null && ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase().trim());
+    const seen = Object.assign({}, env, extra || {});
+    for (const f of ['settings.json', 'settings.local.json']) {
+      try { const j = JSON.parse(fs.readFileSync(path.join(claudeDir, f), 'utf8')); if (j && j.env && typeof j.env === 'object') Object.assign(seen, j.env); } catch (_) { /* missing or unparsable */ }
     }
-    return (backend || (bedrockConfigured() ? 'api' : 'subscription')) === 'api' ? 5 : 60;
+    if (on(seen.FORCE_PROMPT_CACHING_5M)) return 5;
+    if (on(seen.ENABLE_PROMPT_CACHING_1H)) return 60;
+    if (on(seen.CLAUDE_CODE_USE_BEDROCK) && on(seen.ENABLE_PROMPT_CACHING_1H_BEDROCK)) return 60;
+    return (backend || (bedrockConfigured() ? 'api' : 'subscription')) === 'subscription' ? 60 : 5;
   }
 
   /** Rough check for API/Bedrock credentials: an Anthropic API key, a Bedrock bearer token, or any AWS credential source. */

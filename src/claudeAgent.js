@@ -4,6 +4,7 @@
 // turn shares the same prompt cache and context.
 
 const { randomUUID } = require('crypto');
+const { Relay } = require('./relay');
 
 class AsyncQueue {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -32,6 +33,8 @@ class AsyncQueue {
  * @param {string} [opts.resume]                      session id to resume
  * @param {string} [opts.executable]                  path to claude CLI
  * @param {number} [opts.costBefore]                   the session's cost so far, as last reported, so the first turn's own cost is known
+ * @param {Record<string,string>} [opts.env]           variables added to the process's environment: a gateway's ANTHROPIC_BASE_URL and token
+ * @param {{target: string}} [opts.gateway]            run the process through a relay to this base URL, so each response's model is seen (events of kind `relay`)
  */
 class ClaudeAgent {
   constructor(opts) {
@@ -54,14 +57,20 @@ class ClaudeAgent {
     try { sdk = await import('@anthropic-ai/claude-agent-sdk'); }
     catch (err) { this.emit({ kind: 'error', text: 'Claude Agent SDK not installed: ' + err.message + '. Run `make deps` in /git/perch.' }); return; }
 
+    // Claude Code's word on whether a turn is running (session_state_changed, read by _state) is only sent to a host
+    // that asks for it. Without the flag the SDK has the CLI send it marked host-only, and swallows it.
+    const env = Object.assign({}, process.env, this.opts.env || {}, { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' });
+    if (this.opts.gateway) {
+      // through the relay, which forwards to the gateway and reads which model each response came from
+      try { this.relay = new Relay({ target: this.opts.gateway.target, onCall: (c) => this.emit(Object.assign({ kind: 'relay' }, c)) }); await this.relay.start(); env.ANTHROPIC_BASE_URL = this.relay.url(); }
+      catch (err) { this.emit({ kind: 'error', text: 'the gateway relay could not start: ' + String(err && err.message || err) }); this.emit({ kind: 'busy', busy: false }); return; }
+    }
     const options = {
       cwd: this.opts.cwd,
       permissionMode: this.opts.permissionMode || 'default',
       includePartialMessages: true,
       abortController: this.abort,
-      // Claude Code's word on whether a turn is running (session_state_changed, read by _state) is only sent to a host
-      // that asks for it. Without the flag the SDK has the CLI send it marked host-only, and swallows it.
-      env: Object.assign({}, process.env, { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }),
+      env,
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();
@@ -95,6 +104,7 @@ class ClaudeAgent {
       if (!this.abort.signal.aborted) this.emit({ kind: 'error', text: String(err && err.message || err) });
     } finally {
       this.running = false; this.pending = 0;
+      if (this.relay) { this.relay.stop(); this.relay = null; }
       this.emit({ kind: 'busy', busy: false });
     }
   }
@@ -204,7 +214,7 @@ class ClaudeAgent {
   /** Live: applies from the next request. An empty value returns to Claude Code's default model. */
   async setModel(model) { if (this.query) { try { await this.query.setModel(model || undefined); } catch (err) { this.emit({ kind: 'error', text: 'could not set model: ' + String(err.message || err) }); } } }
 
-  dispose() { this.queue.close(); this.abort.abort(); }
+  dispose() { this.queue.close(); this.abort.abort(); if (this.relay) { this.relay.stop(); this.relay = null; } }
 }
 
 module.exports = { ClaudeAgent, AsyncQueue };

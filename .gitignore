@@ -7,3 +7,4 @@ __pycache__/
 # copies made by 'make audio-engine' from src/voice.js and voice/
 audio/src/engine.js
 audio/voice/
+c3-gateway.md

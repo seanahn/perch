@@ -131,7 +131,11 @@ and each resumes its session.
 Press **+** to open a Claude or a Codex tab: in the editor title bar, or in
 the sidebar view's tab bar. Each tab is its own session
 with its own agent process, context, mode, draft, and transcript. Open as
-many as you like of either kind. Paste an image into the message box to
+many as you like of either kind. When a gateway file exists (see
+[Logins](#logins)), a Claude tab can be put on an **LLM gateway**: a
+tab whose Claude Code reaches an Anthropic-compatible endpoint of your
+own, such as a company's LLM proxy, while the other tabs stay on your
+login. Paste an image into the message box to
 attach it: up to eight to a message, each scaled down to at most 1568 px
 on its long side, the most the API keeps as is. A tab is titled from its first message,
 or by you (see below).
@@ -227,6 +231,46 @@ is copied from elsewhere, so a fresh remote has neither.
   `ANTHROPIC_MODEL`, and the small/fast model if you use one). With none
   of that in place the first message is held back and the offer opens
   that file, or switches back to the subscription.
+- **LLM gateway**: a Claude tab can be put on a gateway, an
+  Anthropic-compatible endpoint reached with `ANTHROPIC_BASE_URL` and a
+  token, as a company's LLM proxy is. The variables live in a file of
+  yours, `~/.config/gateway-claude/env` by default
+  (`perch.claude.gatewayEnv`), written as a shell reads it: `export
+  ANTHROPIC_BASE_URL=…`, `export ANTHROPIC_AUTH_TOKEN=…` (or
+  `ANTHROPIC_API_KEY`), and any model names (`ANTHROPIC_MODEL`,
+  `ANTHROPIC_DEFAULT_OPUS_MODEL`, …). The same file can drive a terminal
+  launcher. A tab on the gateway runs its Claude Code process with those
+  variables added to its environment, and that is all: nothing is
+  written to `~/.claude/settings.json`, the token is never in a file of
+  Perch's, and the session, its record, your `CLAUDE.md`, memory, and MCP
+  servers are the same as any other tab's. Put a tab on it from the
+  footer's backend menu under any Claude tab, where the entry reads
+  **LLM gateway** (or with `Perch: New Claude Tab on the Gateway`);
+  once chosen, new Claude tabs start there until a tab is put back on the
+  subscription or API / Bedrock. The template also sets
+  `ENABLE_PROMPT_CACHING_1H=1`: on a token Claude Code would keep the
+  prompt cache for five minutes, after which a turn re-sends the whole
+  conversation at the cache-write rate; the hour costs more per write and
+  less by the first pause over five minutes. Remove the line if the gateway
+  rejects the request. The first message to a tab whose file is
+  missing or incomplete is held back, and the offer opens the file (made
+  from a template, readable by you alone) or takes the tab off the
+  gateway. A window on API / Bedrock has to be switched to the
+  subscription first: Claude Code applies its settings over a process's
+  environment, so the gateway's URL would not be used; the tab says so.
+  A tab on the gateway runs its process through a small relay of
+  Perch's on the loopback interface, which forwards each request to the
+  gateway unchanged and reads the header in which a LiteLLM gateway
+  names the model that answered (`x-litellm-model-name`); a routed name
+  such as `nexus-auto` may send each request anywhere. The line under
+  each answer then says what answered the turn's requests, `via
+  gpt-6-luna ×3, grok-4.6`, and what the gateway charged for them,
+  `$0.0021 this turn`, its own figure (`x-litellm-response-cost`,
+  summed) in place of Claude Code's estimate at Anthropic list prices,
+  which does not apply to a gateway's names; the tooltip has the
+  session's total by the same reckoning. The model button's tooltip
+  names the last model. The agent is still Claude Code; the model is
+  whatever the gateway chose.
 - **Codex**: the first message to a Codex tab on a machine with no login is
   held back, the text put back in the box, and the login offered two ways.
   **Log In** runs `codex login` on the workspace machine and opens
@@ -239,6 +283,13 @@ is copied from elsewhere, so a fresh remote has neither.
   sign-in"). Either way Perch notices when the login lands and says so;
   send the message again. The same offer appears if Codex later answers
   401, a login that has expired.
+  On the gateway the model menu is the file's names, not Claude Code's
+  catalog: the default is `ANTHROPIC_MODEL`, and opus, sonnet and haiku
+  are what `ANTHROPIC_DEFAULT_*_MODEL` map them to, which is what the
+  gateway receives. A tab moved onto the gateway with another model
+  chosen starts from the file's default. The choice sticks: once a tab
+  is put on the gateway, new Claude tabs start there, until a tab is put
+  back on the subscription or API / Bedrock.
 
 ## Permissions
 
@@ -359,13 +410,21 @@ is shown as full again. perch re-reads after each Codex turn it runs.
 
 **Under a Claude tab**:
 
-- a **backend switch**, `sub` or `API`. Click it to move Claude between
-  your subscription login and API / Bedrock. It writes
-  `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json` and leaves
-  the rest of the file alone. Open tabs come along: each one's process
-  ends (after its current turn, if one is running) and the next message
-  resumes the same conversation on the new backend, as after a window
-  reload. The prompt cache starts over, being the backend's.
+- a **backend button**, `sub`, `API`, or `gw`. Click it for a menu of
+  three: **subscription (login)** and **API / Bedrock** are the window's
+  choice, for every Claude tab, and switching writes
+  `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json`, leaving the
+  rest of the file alone; **LLM gateway** is this tab's alone (see
+  [Logins](#logins)). Open tabs come along with the window's switch,
+  tabs on the gateway excepted: each one's process ends (after its
+  current turn, if one is running) and the next message resumes the same
+  conversation on the new backend, as after a window reload. Moving one
+  tab onto or off the gateway does the same for that tab. The prompt
+  cache starts over, being the backend's. Under a tab on the gateway the
+  button reads `gw`, with a warning while its file is missing or
+  incomplete, and the gauge shows nothing: the gateway's usage is not
+  reported here, and the line under each answer shows its tokens and
+  which models answered.
 - a **usage gauge**. On a subscription: percent remaining and time to
   reset for the 5-hour session, the week, and any model-scoped weekly
   limit, amber or red when one runs low. On API / Bedrock: the model in
@@ -486,6 +545,8 @@ Installed from a `.vsix` file, Perch does not fetch it: build it with
 
 - `src/extension.js` — the view, sessions, tab state, persistence, commands
 - `src/claudeAgent.js` — Claude Agent SDK session, no VS Code dependency
+- `src/gateway.js` — the gateway file: reading it, what makes it usable, the environment a tab gets; no VS Code dependency
+- `src/relay.js` — the loopback relay a gateway tab's process goes through, which reads which model answered; no VS Code dependency
 - `src/codexAgent.js` — Codex SDK thread, no VS Code dependency
 - `src/models.js` — model catalogs read from the agents, no VS Code dependency
 - `src/meter.js` — Claude usage, cost, and the backend switch, no VS Code dependency

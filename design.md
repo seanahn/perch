@@ -271,7 +271,9 @@ are two, and the split between them is what makes dictation possible
 | `src/markdown.js` | 126 | no | An answer's Markdown, drawn as DOM nodes; written into the page as source |
 | `src/sessionStore.js` | 257 | no | Past sessions, their names, and their transcripts, from the agents' records |
 | `src/binaries.js` | 52 | no | Where the agents' programs are: the SDK's own, or the vendor extension's |
-| `src/claudeAgent.js` | 188 | no | One Claude Code session through the Agent SDK |
+| `src/claudeAgent.js` | 190 | no | One Claude Code session through the Agent SDK |
+| `src/gateway.js` | 95 | no | The gateway file: reading it, what makes it usable, the environment a tab gets, the template |
+| `src/relay.js` | 90 | no | The loopback relay between a gateway tab's Claude Code and the gateway: forwards unchanged, reads which model answered |
 | `src/codexAgent.js` | 185 | no | One Codex thread through the Codex SDK |
 | `src/models.js` | 91 | no | Model and slash-command catalogs, read from the agents |
 | `src/meter.js` | 426 | no | Claude usage, cost, the backend switch, cache lifetime |
@@ -285,7 +287,7 @@ are two, and the split between them is what makes dictation possible
 
 **A rule the layout enforces:** logic that can be written without the
 VS Code API is, and takes its home directory, environment, and
-collaborators as parameters. Eleven of the sixteen files have no VS Code
+collaborators as parameters. Thirteen of the eighteen files have no VS Code
 dependency, which is why most of the behaviour is tested against
 throwaway directories and stand-in processes with no editor running.
 
@@ -430,8 +432,9 @@ The page and the host exchange plain JSON with `postMessage`.
 | `permission` | `sid`, `id`, `decision` | `allow`, `always`, or `deny` |
 | `setModel`, `setEffort`, `setMode` | `sid`, `value` | A choice from a menu |
 | `setIde` | `sid`, `value` | IDE context on or off |
+| `setBackend` | `sid`, `value` | A Claude tab's backend from the footer's menu: `subscription` or `api` (the window's, through its switch), or `gateway` (this tab's) |
 | `attach` | `sid` | Open the file picker for mentions |
-| `new`, `close`, `activate` | `kind` or `sid` | Sidebar tab bar |
+| `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
@@ -440,7 +443,7 @@ The page and the host exchange plain JSON with `postMessage`.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `tabs` | `tabs`, `active`, `single` | The sessions this page shows |
+| `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
 | `event` | `sid`, `ev` | One event for one session |
 | `meter` | `meter`, `codex` | Claude usage, and ChatGPT plan usage |
 | `commands` | `kind`, `list` | Slash commands |
@@ -455,14 +458,16 @@ The page and the host exchange plain JSON with `postMessage`.
 | `tool_use`, `tool_result` | yes | A tool call with its result beneath |
 | `permission` | yes, becomes a `note` once answered | Allow, Always, Deny |
 | `question` | yes, becomes `answered` | Claude's `AskUserQuestion`: choices as buttons, a line of your own, one answer for all |
-| `result` | yes | Duration, tokens in, cached, out |
+| `result` | yes | Duration, tokens in, cached, out; through a gateway, `via`: the models that answered the turn's requests, each with a count, and `gatewayCost`, `gatewayCostSoFar`: the gateway's own figures, for the turn and the session |
 | `note`, `error` | yes | A line in the transcript |
 | `status`, `busy` | latest value only | A working line at the foot of the transcript: what the agent is doing, for how long. A status that is not idle, working, or ready becomes a `note` |
 | `fill`, `insert` | no, held as a draft if no page | Text into the message box |
 | `voice` | no, re-sent on `ready` | The microphone's state |
 
 Agents emit a few more that the host consumes and does not forward:
-`session`, `model`, `context`, `responded`, `commands`.
+`session`, `model`, `context`, `responded`, `commands`, and `relay` (one
+response through the gateway: which model it came from, folded into the
+next `result` as `via` and onto the tab as its last model).
 
 ## 8. The agents
 
@@ -482,6 +487,8 @@ They translate the vendor's events into the kinds above.
 | Slash commands | `supportedCommands()` |
 | Stop | `interrupt()` |
 | Settings | All sources are loaded, the SDK's default, so the user's `~/.claude/settings.json` applies |
+| Environment | The extension host's, plus, for a tab on the gateway, the variables of the user's gateway file (`src/gateway.js`) with `CLAUDE_CODE_USE_BEDROCK=0` unless the file says otherwise. Settings still win over the environment, so a window on API / Bedrock has to be switched first |
+| Relay | On the gateway, `ANTHROPIC_BASE_URL` is a loopback port of perch's (`src/relay.js`), one per process, started before the CLI and stopped with it. Every request is forwarded to the gateway as it came, path prefix kept, token included, and the response streamed back byte for byte; the relay only reads the gateway's `x-litellm-*` headers, which name the deployment that answered. Nothing a model sees changes. A gateway that sets no such header is relayed the same and reports nothing |
 | System prompt | The SDK's default, not Claude Code's full prompt: about 6,400 tokens smaller (section 3) |
 | Questions | `AskUserQuestion` arrives through `canUseTool`; the answers go back as `updatedInput.answers` |
 | Images | Pasted images go as base64 `image` blocks before the text |
@@ -671,6 +678,98 @@ limit.
   session on the new backend, as after a window reload. The transcript
   and the session id stay; the prompt cache starts over, being a
   property of the backend. The tab is told so.
+
+**The gateway** is a third backend, a tab's own rather than the window's.
+A gateway is an Anthropic-compatible endpoint reached with
+`ANTHROPIC_BASE_URL` and a token, as a company's LLM proxy is. The user
+keeps its variables in a file written as a shell reads it
+(`export KEY=VALUE`), `~/.config/gateway-claude/env` by default
+(`perch.claude.gatewayEnv`), so one file serves a terminal launcher and
+perch. A tab on the gateway gets the file's variables added to its
+process's environment (`src/gateway.js` reads the file each time a
+process starts, or a `tabs` message is built: it is small, and the user
+may be editing it). Nothing else changes: `~/.claude/settings.json` is
+not written, the token is never in a file of perch's, and the session
+record, `CLAUDE.md`, memory, and MCP servers are those of any other tab.
+Verified: with an OAuth login present in `~/.claude`, Claude Code
+authenticates with the environment's bearer token at the environment's
+base URL and leaves the login alone (section 15).
+
+- The choice is a field of the session, saved with it. Moving a tab onto
+  or off the gateway ends its process and resumes the session, as the
+  window's switch does; the window's switch leaves tabs on the gateway
+  alone.
+- A gateway tab's first message is held when the file is missing or sets
+  no URL or token, or when the window is on API / Bedrock, since Claude
+  Code's settings win over a process's environment. The offers: open the
+  file (made from a template, mode 600, never over an existing one), use
+  the subscription, or take the tab off the gateway.
+- The gateway is a backend of a Claude tab, not a kind of tab. It is
+  chosen in the footer's backend menu under any Claude tab, where the
+  entry reads **LLM gateway** (this tab only), beside the window's two;
+  the picker, **+** and the sessions list offer Claude and Codex only.
+  A kind of its own ("Claude on the gateway", then "LLM gateway", with
+  its own numbering and icon) was tried on 2026-10-02 and taken out the
+  same day: the tab's prompt, tools, permissions, `CLAUDE.md`, skills and
+  record are all Claude Code's, and only the route differs, so a second
+  identity in the tab bar said the wrong thing. The name "LLM gateway"
+  stayed, since the client being Claude Code matters less than the router
+  behind it, which is what the tab is of; the file, the setting and the
+  code keep the plain word "gateway", which fits anyone's proxy.
+- The choice sticks. Once a tab is put on the gateway, new Claude tabs
+  start on it (`perch.claude.newTabsOnGateway` in global state, since the
+  gateway file is the machine's), until a tab is put back on the
+  subscription or API / Bedrock from the same menu; those two stick
+  through Claude Code's own setting, as before. The first-message help's
+  "Leave the Gateway" moves one tab and changes no default.
+- The gateway's model menu is the file's names, not Claude Code's
+  catalog: the default is `ANTHROPIC_MODEL`, and opus, sonnet and haiku
+  are what `ANTHROPIC_DEFAULT_*_MODEL` map them to (`src/gateway.js`,
+  `gatewayModels`), which is what the gateway receives, because those
+  three aliases are exactly what Claude Code translates through those
+  variables and a catalog id such as `claude-fable-5-1` would go out
+  untranslated to a router that has no such name. Effort offers the usual
+  levels, a router's names saying nothing of it. A tab moved onto the
+  gateway with a catalog model chosen starts from the file's default, so
+  the pill never names a Claude model while the gateway answers; an alias
+  survives the move back.
+- The template turns the hour-long prompt cache on (`ENABLE_PROMPT_CACHING_1H=1`).
+  Claude Code's rule, read from the 2.1.119 binary: `FORCE_PROMPT_CACHING_5M`
+  forces five minutes, `ENABLE_PROMPT_CACHING_1H` forces the hour (Bedrock
+  needs `ENABLE_PROMPT_CACHING_1H_BEDROCK`), and otherwise the hour goes only
+  to a claude.ai login that is not in overage, which an `ANTHROPIC_AUTH_TOKEN`
+  is not, so a gateway tab would send no `ttl` and get five minutes. On a
+  per-token bill the hour costs 0.75× more on each write and saves a whole
+  re-write of the context at the first pause over five minutes; with a 150 K
+  context one pause an hour pays for it several times over, so the file
+  turns it on and says what to remove if the gateway rejects it. The cache
+  pill reads the same three variables, from settings.local.json's env block
+  over settings.json's over the gateway file over the process (the order
+  Claude Code applies them); overage is not visible to it.
+- The gauge shows nothing under a gateway tab. The gateway's usage is its
+  own, and the cost-mode figures would be at Anthropic list prices for
+  names the gateway may map to anything. The result line under each
+  answer still shows the tokens.
+- The cache clock assumes five minutes, the API's lifetime.
+- **Which model answered.** A routed name is resolved per request, and
+  the gateway's answer body carries the alias, not the deployment; the
+  Agent SDK surfaces no response headers. So the tab's process goes
+  through the relay (section 8), and the gateway's `x-litellm-model-name`
+  is read off each response. The host counts them per turn and puts them
+  on the `result` (`via gpt-6-luna ×3, grok-4.6` under the answer: a turn
+  is several requests, and the router may send each somewhere else), and
+  the last one on the tab, for the model button's tooltip. The same
+  headers carry the gateway's own
+  price for each response (`x-litellm-response-cost`); the host sums
+  them per turn and the result line shows that figure in place of
+  Claude Code's `total_cost_usd`, which prices a gateway's names by
+  guess (≈$0.045 against the gateway's $0.0021 for one "hello" on
+  Luna). The session's sum is saved with the tab. Observed on the C3
+  gateway: the `nexus-auto-*`
+  routers sent trivial and code prompts to GPT‑6 Luna and a proof to
+  Grok 4.6 (bargain) or Opus 5.5 (auto); a one-word turn from Claude
+  Code went to Grok through a fallback. The agent is Claude Code; the
+  model is whatever answered, and the tab now says which.
 
 **No status bar items.** The gauge is the footer of each tab, where it
 follows the tab's vendor. An earlier version put AI Meter's two items in
@@ -902,6 +1001,7 @@ the remote.
 | Secret | Read by | Sent to |
 | --- | --- | --- |
 | Claude OAuth token | `src/meter.js` | `api.anthropic.com/api/oauth/usage` only |
+| Gateway token | `src/gateway.js`, from the user's env file into a gateway tab's process environment | the gateway, by Claude Code, through `src/relay.js`, which forwards the request's headers as they are and keeps nothing. The relay listens on `127.0.0.1` only, on a port of its own per process, and is gone with the process |
 | Codex login | the Codex binary | OpenAI, by Codex. perch does not read it |
 
 ### Files perch writes outside its repository
@@ -910,6 +1010,7 @@ the remote.
 | --- | --- | --- |
 | `~/.claude/settings.json` | The backend switch | One key. Atomic. Refuses unparseable files |
 | `~/.claude.json` | Terminal login fallback | Marks onboarding complete. Keeps an existing theme |
+| The gateway file, `~/.config/gateway-claude/env` by default | "Open the File", when there is none | From a template with empty values. Mode 600. Never over an existing file |
 | `~/.local/share/perch/voice/` | Voice setup | With consent |
 
 ### What leaves the machine
@@ -932,6 +1033,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Suite | What it runs | Model calls |
 | --- | --- | --- |
 | `test/meter.test.js` | Usage, cost, the switch, in throwaway homes and four timezones | no |
+| `test/gateway.test.js` | The gateway file: parsing, what makes it usable, the template, in a throwaway directory | no |
+| `test/relay.test.js` | The relay, against a stand-in gateway on the loopback interface: forwarding, streaming, headers read, errors passed on, a gateway that is down | no |
 | `test/codexMeter.test.js` | Codex usage, in throwaway session directories | no |
 | `test/models.test.js` | Catalog and command parsing | no |
 | `test/voice.test.js` | The engine, against a stand-in server | no |
@@ -940,7 +1043,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | `test/page.test.js` | The real page script, in jsdom | no |
 | `test/harness.mjs` | Live: both agents, catalogs, usage, queueing | **yes** |
 
-`make test-offline` runs the first seven. `make test` runs all eight.
+`make test-offline` runs the first nine. `make test` runs all ten.
 
 ### Rules learned the hard way
 
@@ -966,6 +1069,11 @@ track vendor updates. Without an extension, a tab shows a letter.
 8. **A stand-in must behave like the real thing.** A stand-in server that
    answered requests concurrently produced failures the real server
    cannot.
+9. **Point the tests at a gateway file of their own.** The default path
+   is a real file on the developer's machine; a host test read it and
+   found a gateway on offer that the test had not made. The stub now
+   names a path that does not exist, and the gateway tests write their
+   own file in a throwaway directory.
 
 ## 15. Verified and not verified
 
@@ -995,6 +1103,15 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Reading real records | 23 sessions listed for a folder; transcripts of 86 and 169 entries read |
 | A Codex model switch is accepted | A thread on `gpt-5.5` was taken up on `gpt-5.6-luna`; Codex noted the change. The turn itself was refused by a usage limit |
 | The packaged extension runs | From the unpacked `.vsix`, Claude answered through the Claude Code extension's program |
+| The environment's token wins over the login | With an OAuth login in `~/.claude`, `claude -p` run with `ANTHROPIC_BASE_URL` pointing at a local listener and `ANTHROPIC_AUTH_TOKEN=probe-…` sent `Authorization: Bearer probe-…` to the listener's `/v1/messages`, no `x-api-key`, and nothing to Anthropic (2026-10-01, Claude Code 2.1.119). This is what lets a gateway tab share `~/.claude` with the others |
+| The gateway names the deployment in a header, not the body | Direct calls to the C3 gateway with `model: nexus-auto-bargain` answered with `model: grok-4.6` or the alias in the body and `x-litellm-model-name: xai/grok-4.6` (`global.openai.gpt-6-luna`, `global.anthropic.claude-opus-5-5` on other prompts) in the headers, with `x-litellm-attempted-fallbacks`; through Claude Code the body says the alias. LiteLLM 1.102.0, 2026-10-01 |
+| Claude Code through the relay | The real Agent SDK, `ANTHROPIC_BASE_URL` on the relay, the relay on the gateway: a turn streamed and answered in 4.5 s; the relay saw `/api/hello` (302, no model) and `/v1/messages?beta=true` (200, `global.openai.gpt-6-luna`) (2026-10-01) |
+| Installation from the marketplace, and under Remote-SSH | Perch 0.6.1 through 0.6.37 and Perch Audio 0.1.0 through 0.3.5 published; installed on a CPU-only JupyterHub container over Remote-SSH (seclab) and used there daily since 2026-09-30, with Perch Audio on the desktop recording for it |
+| A Bluetooth headset as the microphone | Galaxy Buds Live, in A2DP with no source: switched to `headset-head-unit-msbc`, the source "Galaxy Buds Live (0310)" appeared in about a second, recorded, switched back (2026-09-30). The user found a condenser microphone clearer and kept it |
+| Codex without a sandbox where the kernel forbids user namespaces | On seclab `bwrap` failed every command and `features.use_legacy_landlock` panicked; `danger-full-access` ran `echo` and `uname` through one `codex exec` (2026-09-30) |
+| Codex's device-code login, as far as ChatGPT allows it | `codex login --device-auth` printed the link and code on seclab; ChatGPT's consent page then asked for a setting the account could not turn on. The user's own login was copied to the container instead (2026-09-30) |
+| The C3 gateway is Anthropic-compatible | It is a LiteLLM gateway serving `/v1/messages`; Claude Code, which speaks nothing else, runs through it (the relay row above) |
+| What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown and a cost at the five-minute write rate, so the route accepts the field but its accounting does not see it |
 
 ### Not verified
 
@@ -1007,7 +1124,9 @@ track vendor updates. Without an extension, a tab shows a letter.
 | **Editor-tab restoration in VS Code** | The serializer is tested against a stub |
 | **Codex cache reuse across `exec` processes** | Inferred from the design and the `cached_input_tokens` figures; the SDK exposes no cache key |
 | **Group locking, the sessions list, and the question card in a live window** | Tested against stubs and jsdom |
-| **Installation from the marketplace** | Not yet published |
+| **The browser sign-in for Codex over Remote-SSH** | The port-forwarded return trip (`asExternalUri` on `localhost:1455`) is tested against stubs; seclab was already logged in when it was built |
+| **The gateway's model menu and the sticky default in a live window** | Tested against stubs; the file's names are read, not asked of the gateway |
+| **A second gateway** | One file, one gateway. A list of gateways in settings is the natural extension when one is needed |
 
 ## 16. Limitations and open work
 
@@ -1022,6 +1141,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Two extensions poll the usage endpoint | While AI Meter is also installed, both query it. Uninstalling AI Meter removes the duplicate |
 | perch-audio must be installed by hand from a `.vsix` | From the marketplace it comes with perch, through `extensionPack` |
 | No syntax colouring in code blocks | The Markdown renderer draws code as text |
+| One gateway at a time | The file names one. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` could also let Claude Code list the gateway's own models for the menu; off in the user's file, and not used |
+| A gateway tab is told apart in the footer, not the tab bar | By choice (section 11): the tab is Claude's. A small `gw` mark on the title would be the cheap remedy if wanted |
 
 ## 17. Decision log
 
@@ -1052,6 +1173,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | perch-audio through `extensionPack`, not a dependency | `extensionDependencies` | A missing companion must not stop perch from starting |
 | The vendors' extensions in the `extensionPack` too | Leave them to the user; bundle the programs | Perch runs their programs, so a remote with one vendor's extension missing showed only a message; the pack installs both, and either can be removed |
 | Thumbnails saved with the tab (about 1.5 MB at most), rejoined to the record's messages on reload | Re-read the images from the record; save nothing | The record holds the images at up to 1568 px, too heavy for a page; a 320 px thumbnail is 20-30 KB, and the newest messages matter most |
+| On the gateway the model menu is the file's names, carried by Claude Code's aliases | Claude Code's catalog; the gateway's `/v1/models` | A catalog id such as `claude-fable-5-1` goes to the gateway as it is, and the router has no such name; the aliases opus, sonnet and haiku are what Claude Code maps through `ANTHROPIC_DEFAULT_*_MODEL`, so they are the choices that mean something. Discovery (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`) could add the gateway's own list later |
 | A Codex backend switch of perch's own (ChatGPT login or API key, the key in VS Code's secret storage, given to each `codex` process as `CODEX_API_KEY`) | `codex login --with-api-key`, which rewrites Codex's own `auth.json` | Codex has no setting for the choice as Claude Code has (`CLAUDE_CODE_USE_BEDROCK`), and overwriting its login to use a key would lose the login; a key in the process environment leaves `auth.json` alone and switches back for free |
 | Codex without a sandbox on a machine whose kernel forbids user namespaces, by the user's choice, remembered by hostname | Fail every command; Codex's legacy Landlock sandbox | bubblewrap cannot start in such a container (seclab), and `features.use_legacy_landlock` is deprecated and panics in codex 0.155 ("filesystem-restricted execution requires bubblewrap"); `danger-full-access` runs (verified there). Silently dropping the sandbox is not perch's call, so it asks |
 | Claude's credentials looked for before the first message, on the backend the tab would get | Let the process fail and show its error | A first-time user on a fresh machine sees a way in (Claude Code's sign-in, or the settings file for Bedrock) instead of the CLI's refusal; the same shape as the Codex check |
@@ -1060,8 +1182,15 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Voice setup brings pip in itself when `venv` cannot | Tell the user to install `python3-venv` | Containers often have no `sudo`; pip's installer is one fetch from `bootstrap.pypa.io` |
 | Bluetooth headsets switched to their headset profile around a recording | Tell the user to switch profiles; record from the default source and let PipeWire switch | The default source is often a monitor; and the user dictates into ear buds |
 | Voice model `auto`, chosen by device | `large-v3-turbo` always, with a setting | A remote workspace is usually CPU-only; "hello" took 10 s there, and nobody reads a setting's description to learn why |
+| A gateway as a tab's own backend, its variables from the user's shell env file into that tab's process environment, the shared `~/.claude` kept | A separate `CLAUDE_CONFIG_DIR` per gateway, as a terminal launcher uses; the variables in `~/.claude/settings.json`; a window-wide switch | The settings file would put every session, every tool, on the gateway and bake the token into a config file. A separate config dir isolates settings, which is not the point: the environment is what differs, and perch sets it per process, so the session record, memory, and MCP servers stay shared and a tab resumes across the move. Per tab rather than per window because the user mixes: a gateway tab beside subscription tabs, to try it |
+| A loopback relay per gateway process, to read which model answered | Trust the body's `model`; ask the gateway's spend log; a fingerprint prompt | The body carries the alias, so a routed name tells nothing; the log endpoint sits behind C3's front door (401); a model's word on its own name is worth nothing. The header is authoritative and costs one `pipe()`. The relay forwards everything as it is, so the prompt cache and the token path are unchanged |
 | Ask the CLI for its idle/running word (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) | Count results against messages sent | A message sent mid-turn can be folded into that turn and answered by its one result, which left the tab working for good; the count cannot tell, the CLI can |
 | Transcribe in perch-audio when the user's machine has the GPU | Always with the workspace; Whisper in the webview | The user's desktop has an RTX 3090 and the remote is a CPU-only container. Same engine, copied at build; the webview route would be a second engine, and slower |
+
+| "LLM gateway" as the name, not "Claude on the gateway" | The vendor's name first | What the tab is of is the router behind it; the client being Claude Code matters less, and the name fits anyone's proxy. The file, setting and code keep the plain word |
+| The gateway is a backend of a Claude tab, chosen in the footer's menu | A tab kind of its own, with picker entry, numbering and icon (tried and reverted on 2026-10-02) | Everything but the route is Claude Code's; a second identity in the tab bar said the wrong thing |
+| The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |
+| The backend chosen for a tab becomes the default for new Claude tabs | Every new tab on the window's backend; a setting | The user opening a gateway tab wants the next one there too; subscription and API already stick through Claude Code's setting, so the gateway is made to stick the same way, in global state |
 
 ## 18. References
 

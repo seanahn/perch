@@ -231,7 +231,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   assert.deepStrictEqual(v5.view.webview.options.localResourceRoots.map((u) => u.path), ['/ext/fennets.perch', '/ext/anthropic.claude-code']);
   const none = install(undefined, { extensions: {} });
   const v6 = fakeView(); none.registered['perch.main'].resolveWebviewView(v6.view);
-  assert(!/<img/.test(v6.view.webview.html) && !/class="k glyph/.test(v6.view.webview.html), 'no vendor extensions, letters only');
+  assert(!/<img/.test(v6.view.webview.html) && !/class="k glyph (claude|codex)/.test(v6.view.webview.html), 'no vendor extensions, letters only; the LLM gateway glyph is its own');
 
   // settings give new tabs their defaults; an effort the model lacks is dropped; an unlisted model is kept and labelled as itself
   const cfgd = install(undefined, { config: { 'claude.effort': 'high', 'claude.model': 'fable', 'codex.reasoningEffort': 'nonsense', 'codex.model': 'gpt-internal-9' } });
@@ -1001,6 +1001,49 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the backend chosen for a tab sticks: the next new Claude tab starts there
+  {
+    const m = install(undefined, {}); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const a = v.lastTabs().active;
+    assert.strictEqual(v.tab(a).gateway, false, 'at first, the window\'s backend');
+    v.fire({ type: 'setBackend', sid: a, value: 'gateway' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const b = v.lastTabs().active;
+    assert.deepStrictEqual([v.tab(b).gateway, m.globalState._dump()['perch.claude.newTabsOnGateway']], [true, true], 'the gateway chosen once, a new tab starts on it');
+    v.fire({ type: 'new', kind: 'codex' }); assert.strictEqual(v.lastTabs().tabs.find((t) => t.id === v.lastTabs().active).gateway, false, 'Codex tabs are untouched');
+    v.fire({ type: 'setBackend', sid: b, value: 'subscription' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    assert.deepStrictEqual([v.tab(b).gateway, v.tab(c).gateway, m.globalState._dump()['perch.claude.newTabsOnGateway']], [false, false, false], 'the subscription chosen, new tabs are off the gateway again');
+    m.perch.dispose();
+    // and it holds in a new window
+    const r = install(undefined, { globals: { 'perch.claude.newTabsOnGateway': true } }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    rv.fire({ type: 'new', kind: 'claude' }); assert.strictEqual(rv.tab(rv.lastTabs().active).gateway, true);
+    r.perch.dispose();
+  }
+
+  // ---- the model pill on the gateway: the gateway's names, from the file; a model of Claude's catalog is let go when a tab moves there
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-gw-')); const file = path.join(dir, 'env');
+    fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\nexport ANTHROPIC_MODEL=nexus-auto-bargain[1m]\nexport ANTHROPIC_DEFAULT_OPUS_MODEL=nexus-auto-quality[1m]\nexport ANTHROPIC_DEFAULT_SONNET_MODEL=nexus-auto-unlimited[1m]\n');
+    const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
+    v.fire({ type: 'setModel', sid: x, value: 'fable' }); await flush();
+    assert.strictEqual(v.tab(x).model, 'fable');
+    v.fire({ type: 'setBackend', sid: x, value: 'gateway' }); await flush();
+    const t = v.tab(x);
+    assert.deepStrictEqual([t.gateway, t.model, t.effort], [true, '', ''], 'Fable means nothing to the gateway: back to the file\'s default');
+    assert.deepStrictEqual(t.models.map((o) => [o.value, o.label]), [['', 'default · nexus-auto-bargain[1m]'], ['opus', 'nexus-auto-quality[1m]'], ['sonnet', 'nexus-auto-unlimited[1m]']], 'the menu is the file\'s names, carried by the aliases Claude Code maps to them');
+    assert.strictEqual(t.models[0].title, 'ANTHROPIC_MODEL in the gateway file');
+    v.fire({ type: 'setModel', sid: x, value: 'opus' }); await flush();
+    assert.deepStrictEqual([v.tab(x).model, v.tab(x).efforts.map((e) => e.value)], ['opus', ['', 'low', 'medium', 'high']]);
+    v.fire({ type: 'setBackend', sid: x, value: 'subscription' }); await flush();
+    assert.deepStrictEqual([v.tab(x).gateway, v.tab(x).model], [false, 'opus'], 'off the gateway an alias still means something, so it stays');
+    m.perch.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // ---- the Codex backend: the ChatGPT login, or an OpenAI API key kept in secret storage, for every Codex tab from its next turn
   {
     const m = install(); await flush();
@@ -1544,6 +1587,135 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(CodexAgent.prototype._input.call(a, '  ', [PNG]).map((i) => [i.type, require('path').basename(i.path)]), [['local_image', '3.png']], 'no words, no text part; files are never reused');
     const dir = a.imageDir; CodexAgent.prototype.dispose.call(a);
     assert.deepStrictEqual([fs.existsSync(dir), a.imageDir], [false, null]);
+  }
+
+  // ======================================================================== a Claude tab on the gateway
+  // The gateway is a tab's own backend: its process gets the variables of the user's env file, and the window's switch does
+  // not touch it. The file here is a throwaway; the stub points every other test at a path that does not exist, so the
+  // developer's own gateway file is never read.
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-host-gw-')), file = path.join(tmp, 'env');
+    try {
+      const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
+      const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+      // no file yet: nothing offers a tab on the gateway, but the command and the footer's menu still lead to one
+      assert.deepStrictEqual(v.lastTabs().gateway, { file, exists: false, ok: false }, 'every tabs message says where the file is and whether there is one');
+      assert.deepStrictEqual(m.ui.contexts, [['perch.gateway', false]], 'the title menus are told to hide their gateway entry');
+      m.picks.push((i) => i.gateway); assert.strictEqual(await m.commands['perch.new'](), null, 'the quick pick has no gateway entry');
+      await m.commands['perch.newClaudeGateway']();
+      let t = v.lastTabs(); const g = t.tabs[0].id;
+      assert.deepStrictEqual([t.tabs[0].title, t.tabs[0].gateway, t.tabs[0].gatewayWarn, t.tabs[0].backend, t.tabs[0].cache.minutes], ['Claude 1', true, true, '', 5], 'a tab on the gateway, flagged while there is no file; its cache lifetime is the API\'s five minutes');
+      // the first message is held, and Open the File makes the file from the template
+      const n0 = created.length;
+      m.ui.answers.push('Open the File');
+      v.fire({ type: 'send', sid: g, text: 'hello gateway' }); await flush(); await flush();
+      assert.strictEqual(created.length, n0, 'no process is started');
+      assert(v.events(g).some((e) => e.kind === 'note' && e.text === `This tab is on the gateway, but ${file} does not exist. Fill it in, or take this tab off the gateway, then send the message again.`), 'the tab says why');
+      assert(v.events(g).some((e) => e.kind === 'insert' && e.text === 'hello gateway'), 'the message is put back in the box');
+      assert(/^This tab is on the LLM gateway, but .* does not exist\. Perch gives a tab on the gateway the variables in that file/.test(m.ui.warnings.pop()));
+      assert.deepStrictEqual(m.ui.opened.pop(), [file, null], 'the file is opened in the editor');
+      assert.strictEqual(fs.readFileSync(file, 'utf8').split('\n')[2], 'export ANTHROPIC_BASE_URL=', 'made from the template');
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600, 'for its owner only');
+      // with a file, the gateway is on offer; the tab stays flagged until the file is filled in
+      v.fire({ type: 'activate', sid: g }); t = v.lastTabs();
+      assert.deepStrictEqual([t.gateway.exists, t.gateway.ok, t.tabs[0].gatewayWarn], [true, false, true]);
+      assert.deepStrictEqual(m.ui.contexts.pop(), ['perch.gateway', true], 'and the title menus show their entry');
+      m.picks.push((i) => i.kind === 'claude'); const s1 = await m.commands['perch.new'](); assert.deepStrictEqual([s1.kind, s1.gateway, s1.title], ['claude', false, 'Claude 2'], 'the quick pick offers Claude; the gateway is a choice in the tab\'s backend menu');
+      m.perch.closeSession(s1.id); const s2 = m.perch.addSession('claude', { gateway: true }); assert.deepStrictEqual([s2.kind, s2.gateway, s2.title], ['claude', true, 'Claude 3']);
+      m.perch.closeSession(s2.id);
+      m.ui.answers.push('Leave the Gateway');
+      v.fire({ type: 'send', sid: g, text: 'again' }); await flush(); await flush();
+      assert(/sets no ANTHROPIC_BASE_URL\. Perch gives/.test(m.ui.warnings.pop()), 'an empty file is named for what it lacks');
+      assert.deepStrictEqual([created.length, v.lastTabs().tabs[0].gateway], [n0, false], 'no process; the tab is taken off the gateway at the user\'s word');
+      // back on, from the footer's menu, with a usable file: the process gets the file's variables, with Bedrock off
+      v.fire({ type: 'setBackend', sid: g, value: 'gateway' });
+      assert.strictEqual(v.lastTabs().tabs[0].gateway, true);
+      fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example.com/llm-api\nexport ANTHROPIC_AUTH_TOKEN="tok"   # mine\nexport ANTHROPIC_MODEL=nexus-auto[1m]\n');
+      v.fire({ type: 'send', sid: g, text: 'hello gateway' });
+      assert.strictEqual(created.length, n0 + 1, 'a process starts');
+      const agent = created[n0];
+      assert.deepStrictEqual(agent.o.env, { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_MODEL: 'nexus-auto[1m]' }, 'the file\'s variables, and Bedrock off');
+      assert.strictEqual(agent.o.model, undefined, 'the tab on default sends no model: the file\'s ANTHROPIC_MODEL decides');
+      assert.deepStrictEqual(agent.o.gateway, { target: 'https://gw.example.com/llm-api' }, 'the process runs through the relay to the file\'s base URL');
+      t = v.lastTabs();
+      assert.deepStrictEqual([t.tabs[0].backend, t.tabs[0].gatewayWarn, t.tabs[0].started, t.gateway.ok, t.tabs[0].cache.minutes], ['gateway', false, true, true, 5]);
+      // what answered: the relay's word on each response, counted for the turn and put on the result; the last one on the tab
+      assert.deepStrictEqual(t.tabs[0].models[0], { value: '', label: 'default · nexus-auto[1m]', title: 'ANTHROPIC_MODEL in the gateway file' }, 'the default is the file\'s model, not the window\'s');
+      assert.strictEqual(t.tabs[0].via, 'global.openai.gpt-6-luna', 'the model that answered last');
+      const res = v.events(g).filter((e) => e.kind === 'result').pop();
+      assert.deepStrictEqual(res.via, [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 2 }, { model: 'xai/grok-4.6', short: 'grok-4.6', n: 1 }], 'three requests, two models, on the result line');
+      assert(!v.events(g).some((e) => e.kind === 'relay'), 'the relay\'s own events stay in the host');
+      const near = (a, b) => Math.abs(a - b) < 1e-9;
+      assert(near(res.gatewayCost, 0.0003) && near(res.gatewayCostSoFar, 0.0003), 'the gateway\'s figures for the turn\'s three requests, summed, and the session\'s so far');
+      v.fire({ type: 'send', sid: g, text: 'and again' });
+      const res2 = v.events(g).filter((e) => e.kind === 'result').pop();
+      assert.deepStrictEqual(res2.via.map((x) => x.n), [2, 1], 'counted per turn, not since the tab opened');
+      assert(near(res2.gatewayCost, 0.0003) && near(res2.gatewayCostSoFar, 0.0006), 'the turn\'s figure starts over; the session\'s accumulates');
+      assert(near(m.memento._dump()['perch.sessions.v1'].sessions[0].gatewayCost, 0.0006), 'and is saved with the tab');
+      assert.strictEqual(m.box.writes.length, 0, 'nothing is written to Claude Code\'s settings for any of this');
+      // the window's switch restarts the other Claude tabs and leaves a tab on the gateway alone
+      v.fire({ type: 'new', kind: 'claude', gateway: false }); const plain = v.lastTabs().tabs[1].id;   // asked for plainly: the gateway, once chosen, is where new tabs start
+      v.fire({ type: 'send', sid: plain, text: 'hi' });
+      const plainAgent = created[n0 + 1]; assert.deepStrictEqual([plainAgent.o.env, plainAgent.o.gateway, v.lastTabs().tabs[1].via, v.lastTabs().tabs[1].models[0].label], [undefined, undefined, '', 'default · Opus 5.5'], 'a tab not on the gateway gets no extra environment, no relay, and the window\'s default');
+      assert(!v.events(plain).some((e) => e.kind === 'result' && e.via), 'and no result line of its says anything of a gateway');
+      v.fire({ type: 'meterToggle' }); await flush(); await flush();
+      assert.deepStrictEqual([m.box.bedrock, agent.disposed, plainAgent.disposed], [true, false, true], 'the switch to API / Bedrock restarts the plain tab, not the gateway one');
+      assert(!v.events(g).some((e) => e.kind === 'note' && /backend is now/.test(e.text)), 'and says nothing to it');
+      // the window being on API / Bedrock, a gateway tab starting now could not reach the gateway: it is told, and offered the way back
+      v.fire({ type: 'new', kind: 'claude', gateway: true }); const g2 = v.lastTabs().tabs[2].id;
+      assert.strictEqual(v.lastTabs().tabs[2].gateway, true, 'the + menu opens a tab on the gateway');
+      m.ui.answers.push('Use Subscription');
+      v.fire({ type: 'send', sid: g2, text: 'x' }); await flush(); await flush();
+      assert(v.events(g2).some((e) => e.kind === 'note' && /set to API \/ Bedrock in ~\/\.claude\/settings\.json, which wins over the gateway's environment/.test(e.text)));
+      assert(/Claude Code applies its settings over a process's environment/.test(m.ui.warnings.pop()));
+      assert.deepStrictEqual([m.box.bedrock, created.length], [false, n0 + 2], 'Use Subscription flips the window back; no process was started');
+      assert.strictEqual(agent.disposed, false, 'the running gateway tab was untouched by that switch too');
+      // moving a running tab off the gateway: its process ends and the next message resumes the session without the gateway
+      const writes = m.box.writes.length;
+      v.fire({ type: 'setBackend', sid: g, value: 'subscription' }); await flush();
+      assert.deepStrictEqual([agent.disposed, v.lastTabs().tabs[0].gateway, v.lastTabs().tabs[0].started, m.box.writes.length], [true, false, false, writes], 'the process ends; already on the subscription, the switch is not touched');
+      assert(v.events(g).some((e) => e.kind === 'note' && e.text === 'This tab is on subscription (login) from the next message; the conversation continues, the prompt cache starts over.'));
+      v.fire({ type: 'send', sid: g, text: 'resume' });
+      assert.deepStrictEqual([created[created.length - 1].o.resume, created[created.length - 1].o.env, v.lastTabs().tabs[0].backend], ['sess-' + n0, undefined, 'subscription'], 'the same session, resumed on the window\'s backend');
+      // the menu's API / Bedrock goes through the window's switch, for every tab
+      v.fire({ type: 'setBackend', sid: g, value: 'api' }); await flush(); await flush();
+      assert.deepStrictEqual([m.box.bedrock, m.box.writes.length], [true, writes + 1]);
+      v.fire({ type: 'setBackend', sid: g, value: 'api' }); await flush();
+      assert.strictEqual(m.box.writes.length, writes + 1, 'asking for the backend the window is on changes nothing');
+      v.fire({ type: 'setBackend', sid: g, value: 'bogus' }); v.fire({ type: 'setBackend', sid: plain, value: 'gateway' }); v.fire({ type: 'setBackend', sid: 'nope', value: 'gateway' });
+      assert.deepStrictEqual([v.lastTabs().tabs[0].gateway, v.lastTabs().tabs[1].gateway], [false, true], 'junk is ignored; any Claude tab can be put on the gateway');
+      v.fire({ type: 'meterToggle' }); await flush(); await flush(); assert.strictEqual(m.box.bedrock, false);
+      // a tab in the middle of a turn moves after it
+      v.fire({ type: 'send', sid: g2, text: 'hold this' });
+      const held = created[created.length - 1]; assert.deepStrictEqual([held.o.env.ANTHROPIC_BASE_URL, v.lastTabs().tabs[2].busy], ['https://gw.example.com/llm-api', true]);
+      v.fire({ type: 'setBackend', sid: g2, value: 'subscription' }); await flush();
+      assert.deepStrictEqual([held.disposed, v.lastTabs().tabs[2].gateway], [false, false], 'the choice is made now, the move waits for the turn');
+      assert(v.events(g2).some((e) => e.kind === 'note' && e.text === 'This tab moves to subscription (login) after the current turn; the conversation continues, the prompt cache starts over.'));
+      held.finish(); await flush();
+      assert.deepStrictEqual([held.disposed, v.lastTabs().tabs[2].started], [true, false], 'moved once the turn ended');
+      // a Codex tab has no gateway
+      v.fire({ type: 'new', kind: 'codex', gateway: true }); const cx = v.lastTabs().tabs[3];
+      assert.deepStrictEqual([cx.kind, cx.gateway, cx.gatewayWarn], ['codex', false, false]);
+      v.fire({ type: 'setBackend', sid: cx.id, value: 'gateway' }); assert.strictEqual(v.lastTabs().tabs[3].gateway, false);
+      // the choice survives a reload
+      const dump = m.memento._dump();
+      assert.deepStrictEqual(dump['perch.sessions.v1'].sessions.map((s) => s.gateway), [false, true, false, false], 'saved with each tab');
+      const m2 = install(dump, { config: { 'claude.gatewayEnv': file } }); await flush();
+      const v2 = fakeView(); m2.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
+      assert.deepStrictEqual(v2.lastTabs().tabs.map((x) => [x.gateway, x.cache && x.cache.minutes]), [[false, 60], [true, 5], [false, 60], [false, null]], 'restored as they were');
+      assert.deepStrictEqual(dump['perch.sessions.v1'].sessions.map((s) => near(s.gatewayCost, 0.0006)), [true, false, false, false], 'the first tab\'s gateway figure is kept with it, though it has left the gateway; the others have none');
+      v2.fire({ type: 'send', sid: v2.lastTabs().tabs[1].id, text: 'after the reload' });
+      assert(near(v2.events(v2.lastTabs().tabs[1].id).filter((e) => e.kind === 'result').pop().gatewayCostSoFar, 0.0003), 'a tab with no saved figure starts from nothing');
+      v2.fire({ type: 'setBackend', sid: v2.lastTabs().tabs[0].id, value: 'gateway' }); v2.fire({ type: 'send', sid: v2.lastTabs().tabs[0].id, text: 'back on' });
+      assert(near(v2.events(v2.lastTabs().tabs[0].id).filter((e) => e.kind === 'result').pop().gatewayCostSoFar, 0.0009), 'the first tab, back on the gateway, carries on from what was saved');
+      assert.deepStrictEqual(v2.lastTabs().gateway, { file, exists: true, ok: true });
+      // the sessions list and the handoff offer a tab on the gateway too, now that there is a file
+      const qp = await m2.perch.pickSession();
+      assert.deepStrictEqual(qp.rows().slice(0, 2).map((r) => r[0]), ['$(add) New Claude tab', '$(add) New Codex tab'], 'no tab kind of its own: the gateway is a backend');
+      qp.choose((i) => i.fresh === 'claude');
+      assert.strictEqual(v2.lastTabs().tabs.pop().gateway, true, 'a new tab starts where the last Claude tab was put: on the gateway, chosen earlier in this window');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 
   console.log('HOST OK');
