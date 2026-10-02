@@ -764,7 +764,31 @@ base URL and leaves the login alone (section 15).
   them per turn and the result line shows that figure in place of
   Claude Code's `total_cost_usd`, which prices a gateway's names by
   guess (≈$0.045 against the gateway's $0.0021 for one "hello" on
-  Luna). The session's sum is saved with the tab. Observed on the C3
+  Luna). The session's sum is saved with the tab. But LiteLLM puts that
+  header only on a response it has finished pricing, and a streamed one
+  is not priced when its headers go out: Claude Code streams every
+  request, so a tab never sees it (measured 2026-10-02: the same request
+  unstreamed carried `x-litellm-response-cost: 0.000918`, streamed it
+  carried the zeroed `-original`, `-input`, `-output` parts and no cost).
+  So each response's token counts (the SDK's assistant message carries
+  `usage`; `claudeAgent.js` passes them on once per message id) are
+  priced by the host at the answering model's list rates
+  (`src/prices.js`): the relay's model names are queued per turn in
+  order and each `usage` takes the next, so a turn of two requests on
+  Luna and one on Grok is three requests at their own rates. The rates
+  are LiteLLM's public table (`model_prices_and_context_window.json`,
+  the one the gateway prices with, short of a deployment's own
+  overrides), fetched once a week into the extension's global storage,
+  and a name is looked up as the gateway spells it and then without its
+  region and provider prefixes (`global.openai.gpt-6-luna` →
+  `openai.gpt-6-luna`; `xai/grok-4.6` as is). The result line shows that
+  figure with `≈` when the gateway gave none, and the tooltip says the
+  reckoning; for the `hello` that Claude Code priced at ≈$0.594 as Opus
+  the Luna rate gives ≈$0.012. The gateway also puts the token's running
+  total on every response (`x-litellm-key-spend`, every use of the token
+  included, and not quite monotonic across the gateway's replicas); the
+  host keeps the last seen and the tooltip states it, since it is the
+  one figure that is the gateway's own. Observed on the C3
   gateway: the `nexus-auto-*`
   routers sent trivial and code prompts to GPT‑6 Luna and a proof to
   Grok 4.6 (bargain) or Opus 5.5 (auto); a one-word turn from Claude
@@ -1111,7 +1135,9 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Codex without a sandbox where the kernel forbids user namespaces | On seclab `bwrap` failed every command and `features.use_legacy_landlock` panicked; `danger-full-access` ran `echo` and `uname` through one `codex exec` (2026-09-30) |
 | Codex's device-code login, as far as ChatGPT allows it | `codex login --device-auth` printed the link and code on seclab; ChatGPT's consent page then asked for a setting the account could not turn on. The user's own login was copied to the container instead (2026-09-30) |
 | The C3 gateway is Anthropic-compatible | It is a LiteLLM gateway serving `/v1/messages`; Claude Code, which speaks nothing else, runs through it (the relay row above) |
-| What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown and a cost at the five-minute write rate, so the route accepts the field but its accounting does not see it |
+| A streamed response carries no price from the gateway | The same `Reply with ok` to the C3 gateway twice (2026-10-02): unstreamed, `x-litellm-response-cost: 0.000918` and the parts; streamed, no `x-litellm-response-cost`, the parts at `0.0`. Both carried `x-litellm-model-name` (`xai/grok-4.6`, by a fallback), `x-litellm-call-id` and `x-litellm-key-spend`; the deployed proxy said `x-litellm-version: 1.102.0`. The management routes (`/model/info`, `/key/info`, `/spend/logs`) answered 401 to the token: no price catalog or after-the-fact lookup from the client |
+| LiteLLM's public table names the gateway's deployments | `xai/grok-4.6`, `gpt-6-luna` and `openai.gpt-6-luna`, `claude-opus-5-5` and the Bedrock spellings are all entries (4,453 entries, 3 MB, 2026-10-02) |
+| What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
 
@@ -1189,6 +1215,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 
 | "LLM gateway" as the name, not "Claude on the gateway" | The vendor's name first | What the tab is of is the router behind it; the client being Claude Code matters less, and the name fits anyone's proxy. The file, setting and code keep the plain word |
 | The gateway is a backend of a Claude tab, chosen in the footer's menu | A tab kind of its own, with picker entry, numbering and icon (tried and reverted on 2026-10-02) | Everything but the route is Claude Code's; a second identity in the tab bar said the wrong thing |
+| A turn through the gateway is priced per response at the answering model's list rates, from LiteLLM's public table | Trust Claude Code's `total_cost_usd` (prices a gateway's names as Opus, 50× Luna); ask the gateway after the fact by call id (its management routes refuse the token); read the token's running total off the headers (every use of the token, not this tab's; not monotonic across replicas) | The gateway prices nothing on a streamed response; the model that answered and the token counts are both known, and the table is the one the gateway itself uses. Shown with `≈` and the reckoning in the tooltip; the gateway's own figure, when it ever comes, is preferred |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |
 | The backend chosen for a tab becomes the default for new Claude tabs | Every new tab on the window's backend; a setting | The user opening a gateway tab wants the next one there too; subscription and API already stick through Claude Code's setting, so the gateway is made to stick the same way, in global state |
 

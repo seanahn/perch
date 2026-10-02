@@ -10,7 +10,7 @@ const http = require('http');
 const https = require('https');
 
 /** The gateway's headers worth keeping, as LiteLLM names them. Other gateways set none; the relay then reports nothing. */
-const HEADERS = { model: 'x-litellm-model-name', group: 'x-litellm-model-group', fallbacks: 'x-litellm-attempted-fallbacks', cost: 'x-litellm-response-cost', callId: 'x-litellm-call-id' };
+const HEADERS = { model: 'x-litellm-model-name', group: 'x-litellm-model-group', fallbacks: 'x-litellm-attempted-fallbacks', cost: 'x-litellm-response-cost', callId: 'x-litellm-call-id', keySpend: 'x-litellm-key-spend' };
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
 /**
@@ -62,7 +62,7 @@ class Relay {
     for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k) && k !== 'host') headers[k] = v;
     headers.host = this.target.host;
     const up = this.lib.request({ protocol: this.target.protocol, hostname: this.target.hostname, port: this.target.port || undefined, method: req.method, path, headers, agent: this.agent }, (ur) => {
-      const h = ur.headers, call = { path: req.url, status: ur.statusCode, model: h[HEADERS.model] || '', group: h[HEADERS.group] || '', fallbacks: Number(h[HEADERS.fallbacks]) || 0, cost: h[HEADERS.cost] !== undefined ? Number(h[HEADERS.cost]) : undefined, callId: h[HEADERS.callId] || '' };
+      const h = ur.headers, call = { path: req.url, status: ur.statusCode, model: h[HEADERS.model] || '', group: h[HEADERS.group] || '', fallbacks: Number(h[HEADERS.fallbacks]) || 0, cost: h[HEADERS.cost] !== undefined ? Number(h[HEADERS.cost]) : undefined, callId: h[HEADERS.callId] || '', ...(h[HEADERS.keySpend] !== undefined && Number.isFinite(Number(h[HEADERS.keySpend])) ? { keySpend: Number(h[HEADERS.keySpend]) } : {}) };
       this.calls++;
       try { this.onCall(call); } catch (_) { /* a listener must not break the relay */ }
       const out = {};

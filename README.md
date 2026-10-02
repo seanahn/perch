@@ -268,7 +268,11 @@ is copied from elsewhere, so a fresh remote has neither.
   `$0.0021 this turn`, its own figure (`x-litellm-response-cost`,
   summed) in place of Claude Code's estimate at Anthropic list prices,
   which does not apply to a gateway's names; the tooltip has the
-  session's total by the same reckoning. The model button's tooltip
+  session's total by the same reckoning. A streamed response carries no price from the gateway, so a
+  turn is priced at list rates for the model that answered each request
+  (LiteLLM's public price table, fetched weekly) and shown with `≈`; the
+  tooltip says so, and gives the token's running total as the gateway
+  counts it. The model button's tooltip
   names the last model. The agent is still Claude Code; the model is
   whatever the gateway chose.
 - **Codex**: the first message to a Codex tab on a machine with no login is

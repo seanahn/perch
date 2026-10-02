@@ -145,6 +145,9 @@ class ClaudeAgent {
         return;
       }
       case 'assistant': {
+        // one response's token counts, once (the SDK may hand the same message over more than once): on a gateway, the host prices them
+        const u = m.message && m.message.usage, mid = m.message && m.message.id;
+        if (u && mid !== this.usageId) { this.usageId = mid; this.emit({ kind: 'usage', model: (m.message && m.message.model) || '', usage: { input: u.input_tokens || 0, cache_write: u.cache_creation_input_tokens || 0, cache_read: u.cache_read_input_tokens || 0, output: u.output_tokens || 0, cache_write_1h: (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) || 0 } }); }
         const blocks = (m.message && m.message.content) || [];
         const texts = [];
         for (const b of blocks) {

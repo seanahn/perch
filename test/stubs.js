@@ -32,6 +32,18 @@ const created = [];   // every FakeAgent constructed, in order
 const engines = [];   // every FakeEngine constructed, in order
 // Answers at once, unless the message starts with "hold": then it stays busy until finish() is called, which is how
 // the tests get a turn that is still running. As Claude it queues further messages itself, as the real agent does.
+const knobs = { relayCost: 0.0001 };   // what the fake gateway puts on each response; null for a streamed response, which carries none
+const PRICES = { 'openai.gpt-6-luna': { input_cost_per_token: 1e-7, output_cost_per_token: 5e-7, cache_creation_input_token_cost: 1.25e-7, cache_read_input_token_cost: 1e-8 }, 'xai/grok-4.6': { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6, cache_read_input_token_cost: 5e-7 } };
+let storage = null;
+/** The extension's storage directory for a test run, holding a fresh price table so a gateway turn is priced without a fetch. */
+function storageDir() {
+  if (!storage) {
+    storage = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'perch-storage-'));
+    require('fs').writeFileSync(require('path').join(storage, 'litellm-prices.json'), JSON.stringify(PRICES));
+    require('../src/prices').fetch = async () => { throw new Error('no network in tests'); };
+  }
+  return storage;
+}
 class FakeAgent {
   constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
   send(t, a, b) {
@@ -50,7 +62,7 @@ class FakeAgent {
     this.emit({ kind: 'status', text: 'ready · fake' });
     if (this.claude) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
     // through a gateway, the relay reports each response's model: a turn here is three requests, two to one model and one to another
-    if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) this.emit({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'nexus-auto', fallbacks: 0, cost: 0.0001, callId: 'c' });
+    if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) { this.emit(Object.assign({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'nexus-auto', fallbacks: 0, callId: 'c', keySpend: 0.5 }, knobs.relayCost === null ? {} : { cost: knobs.relayCost })); this.emit({ kind: 'usage', model: 'nexus-auto', usage: { input: 1000, cache_write: 0, cache_read: 0, output: 100 } }); }
     if (/^hold/.test(t)) { this.held = t; return; }
     this.answer(t);
   }
@@ -226,7 +238,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const globalState = makeMemento(globals);
   const secrets = Object.assign(new Map(), { get: async function (k) { return this.has(k) ? Map.prototype.get.call(this, k) : undefined; }, store: async function (k, v) { Map.prototype.set.call(this, k, v); }, delete: async function (k) { Map.prototype.delete.call(this, k); } });
   if (meter && meter.secrets) for (const [k, v] of Object.entries(meter.secrets)) Map.prototype.set.call(secrets, k, v);
-  const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, secrets, extensionUri: { path: '/ext/fennets.perch' } });
+  const perch = ext.activate({ subscriptions: [], workspaceState: memento, globalState, secrets, extensionUri: { path: '/ext/fennets.perch' }, globalStorageUri: { fsPath: storageDir() } });
   const changeConfig = (patch) => { Object.assign(cfgBox, patch); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => Object.keys(patch).some((k) => ('perch.' + k).startsWith(sec)) }); };
   const waitingTab = (label) => { const t = { label, input: { viewType: 'mainThreadWebview-perch.session' } }; ui.waiting.push(t); return t; };
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
@@ -247,4 +259,4 @@ function fakeView() {
     view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
 }
 
-module.exports = { install, fakeView, created, engines, FakeAgent, flush, CATALOGS, CODEX_LIMITS };
+module.exports = { install, fakeView, created, engines, FakeAgent, flush, CATALOGS, CODEX_LIMITS, knobs, PRICES };

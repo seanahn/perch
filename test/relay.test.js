@@ -18,7 +18,7 @@ assert.deepStrictEqual(['global.openai.gpt-6-luna', 'global.anthropic.claude-opu
     req.on('end', () => {
       seen.push({ method: req.method, url: req.url, host: req.headers.host, auth: req.headers.authorization, version: req.headers['anthropic-version'], body });
       if (mode === 'error') { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"type":"error","error":{"type":"authentication_error","message":"nope"}}'); return; }
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'x-litellm-model-name': 'global.openai.gpt-6-luna', 'x-litellm-model-group': 'nexus-auto', 'x-litellm-attempted-fallbacks': '1', 'x-litellm-response-cost': '0.000152', 'x-litellm-call-id': 'call-1', 'x-other': 'kept' });
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'x-litellm-key-spend': '0.6748937', 'x-litellm-model-name': 'global.openai.gpt-6-luna', 'x-litellm-model-group': 'nexus-auto', 'x-litellm-attempted-fallbacks': '1', 'x-litellm-response-cost': '0.000152', 'x-litellm-call-id': 'call-1', 'x-other': 'kept' });
       res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
       setTimeout(() => { res.write('event: content_block_delta\ndata: {"delta":{"text":"ok"}}\n\n'); setTimeout(() => { res.end('event: message_stop\ndata: {}\n\n'); }, 20); }, 20);
     });
@@ -45,7 +45,7 @@ assert.deepStrictEqual(['global.openai.gpt-6-luna', 'global.anthropic.claude-opu
   assert.deepStrictEqual([r.headers['content-type'], r.headers['x-litellm-model-name'], r.headers['x-other']], ['text/event-stream', 'global.openai.gpt-6-luna', 'kept'], 'the gateway\'s headers reach Claude Code too');
   assert.strictEqual(r.body, 'event: message_start\ndata: {"type":"message_start"}\n\nevent: content_block_delta\ndata: {"delta":{"text":"ok"}}\n\nevent: message_stop\ndata: {}\n\n', 'byte for byte');
   assert(r.chunks.length >= 2 && r.times[r.times.length - 1] - r.times[0] >= 15, 'streamed as it came, not held until the end');
-  assert.deepStrictEqual(calls, [{ path: '/v1/messages?beta=true', status: 200, model: 'global.openai.gpt-6-luna', group: 'nexus-auto', fallbacks: 1, cost: 0.000152, callId: 'call-1' }], 'what the relay read off the headers');
+  assert.deepStrictEqual(calls, [{ path: '/v1/messages?beta=true', status: 200, model: 'global.openai.gpt-6-luna', group: 'nexus-auto', fallbacks: 1, cost: 0.000152, callId: 'call-1', keySpend: 0.6748937 }], 'what the relay read off the headers');
 
   // ---- an error from the gateway is passed on as it is; a listener that throws does not break the relay
   mode = 'error';

@@ -3,7 +3,7 @@ process.env.PERCH_RESTORE_GRACE_MS = '60';   // the wait for VS Code to bring ba
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
-const { install, fakeView, created, engines, flush, CODEX_LIMITS } = require('./stubs');
+const { install, fakeView, created, engines, flush, CODEX_LIMITS, knobs } = require('./stubs');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const vals = (list) => list.map((o) => o.value);
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
@@ -1653,6 +1653,18 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       assert.deepStrictEqual(res2.via.map((x) => x.n), [2, 1], 'counted per turn, not since the tab opened');
       assert(near(res2.gatewayCost, 0.0003) && near(res2.gatewayCostSoFar, 0.0006), 'the turn\'s figure starts over; the session\'s accumulates');
       assert(near(m.memento._dump()['perch.sessions.v1'].sessions[0].gatewayCost, 0.0006), 'and is saved with the tab');
+      // each response's token counts, priced at the model that answered it: two on Luna, one on Grok (the fake agent's 1000 in, 100 out each)
+      const lunaReq = 1000 * 1e-7 + 100 * 5e-7, grokReq = 1000 * 2e-6 + 100 * 6e-6;
+      assert(near(res2.gatewayEstimate, 2 * lunaReq + grokReq) && near(res2.gatewayEstimateSoFar, 2 * (2 * lunaReq + grokReq)), 'the turn at list prices for what answered, and the session so far; beside the gateway\'s own figure, which the page prefers');
+      assert.strictEqual(res2.keySpend, 0.5, 'what the gateway says the token has spent in all');
+      assert(near(m.memento._dump()['perch.sessions.v1'].sessions[0].gatewayEstimate, 2 * (2 * lunaReq + grokReq)), 'saved with the tab');
+      // a streamed response carries no price from the gateway: the estimate is what the turn has
+      knobs.relayCost = null;
+      try {
+        v.fire({ type: 'send', sid: g, text: 'streamed' });
+        const res3 = v.events(g).filter((e) => e.kind === 'result').pop();
+        assert.deepStrictEqual([res3.gatewayCost, near(res3.gatewayEstimate, 2 * lunaReq + grokReq)], [undefined, true], 'no figure from the gateway; the estimate stands alone');
+      } finally { knobs.relayCost = 0.0001; }
       assert.strictEqual(m.box.writes.length, 0, 'nothing is written to Claude Code\'s settings for any of this');
       // the window's switch restarts the other Claude tabs and leaves a tab on the gateway alone
       v.fire({ type: 'new', kind: 'claude', gateway: false }); const plain = v.lastTabs().tabs[1].id;   // asked for plainly: the gateway, once chosen, is where new tabs start

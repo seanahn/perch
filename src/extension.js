@@ -10,6 +10,7 @@ const { VoiceHost } = require('./voiceHost');
 const { resolveProgram } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
+const Prices = require('./prices');
 const { shortModel } = require('./relay');
 const { listSessions, renameSession, loadTranscript, cleanTitle, ago } = require('./sessionStore');
 
@@ -171,7 +172,7 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost }) {
+  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -188,6 +189,10 @@ class Session {
     this.lastVia = '';               // gateway only: the model that answered most recently, for the tooltip
     this.viaCost = null;             // gateway only: the gateway's own figure for this turn so far, summed over its requests; null until one is reported
     this.gatewayCost = typeof gatewayCost === 'number' ? gatewayCost : 0;   // gateway only: the gateway's figure for the whole session, saved with the tab
+    this.viaQueue = [];              // gateway only: the models that answered this turn's requests, in order, until each response's token counts arrive
+    this.viaEstimate = null;         // gateway only: this turn so far at the answering models' list rates (src/prices.js); null until a response is priced
+    this.gatewayEstimate = typeof gatewayEstimate === 'number' ? gatewayEstimate : 0;   // gateway only: that, for the whole session, saved with the tab
+    this.keySpend = null;            // gateway only: what the gateway says this token has spent in all, as of its last response
     this.context = null;             // claude only: { percent, used, max } of the context window
     this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
     this.costSoFar = typeof costSoFar === 'number' ? costSoFar : null;   // claude only: the session's cost at API rates, as last reported, so each turn's own cost can be told
@@ -283,10 +288,19 @@ class Session {
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
       case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn
         if (typeof ev.cost === 'number' && Number.isFinite(ev.cost)) this.viaCost = (this.viaCost || 0) + ev.cost;
+        if (typeof ev.keySpend === 'number') this.keySpend = ev.keySpend;
         if (!ev.model) return;
+        if (ev.status === 200 && /^\/v1\/messages/.test(ev.path || '')) this.viaQueue.push(ev.model);   // its token counts follow from the agent, in the same order
         this.via[ev.model] = (this.via[ev.model] || 0) + 1;
         if (this.lastVia !== ev.model) { this.lastVia = ev.model; this.view.sendTabs(); }
         return;
+      case 'usage': {                // one response's token counts: on the gateway, priced at the answering model's list rates, for when the gateway gives no figure
+        if (!this.gateway) return;
+        const model = this.viaQueue.shift() || this.lastVia;
+        const rate = model && this.view.prices ? this.view.prices.rateFor(model) : null;
+        if (rate) this.viaEstimate = (this.viaEstimate || 0) + Prices.costOf(rate, ev.usage);
+        return;
+      }
       case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
       case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
       case 'result': {
@@ -296,6 +310,10 @@ class Session {
         this.via = {};
         // the gateway's own figure for the turn, in place of Claude Code's estimate, which prices a gateway's names by guess
         if (this.viaCost !== null) { this.gatewayCost += this.viaCost; ev.gatewayCost = this.viaCost; ev.gatewayCostSoFar = this.gatewayCost; this.viaCost = null; this.view.persist(); }
+        // and, for a streamed response the gateway puts no price on, the turn at the answering models' list rates
+        if (this.viaEstimate !== null) { this.gatewayEstimate += this.viaEstimate; ev.gatewayEstimate = this.viaEstimate; ev.gatewayEstimateSoFar = this.gatewayEstimate; this.viaEstimate = null; this.view.persist(); }
+        if (this.keySpend !== null) ev.keySpend = this.keySpend;
+        this.viaQueue = [];
         break;
       }
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
@@ -327,6 +345,7 @@ class Session {
       // fixed for the life of the agent process: a process cannot change how it authenticated
       this.backend = this.gateway ? 'gateway' : this.view.meter ? this.view.meter.backend() : '';
       const gw = this.gateway ? this.view.gateway() : null;
+      if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
@@ -510,7 +529,7 @@ class Session {
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : '', this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -541,6 +560,8 @@ class PerchView {
     this.closing = false;
     this.graceTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
+    // list prices for a gateway's models, in the extension's own storage: read when a tab goes through the gateway
+    this.prices = Prices.createPrices({ file: require('path').join((context.globalStorageUri && context.globalStorageUri.fsPath) || require('path').join(require('os').tmpdir(), 'perch'), 'litellm-prices.json') });
     this.voice = new VoiceHost({
       root: (context.extensionUri && (context.extensionUri.fsPath || context.extensionUri.path)) || context.extensionPath || require('path').join(__dirname, '..'),
       send: (sid, ev) => this.sendEvent(sid, ev),

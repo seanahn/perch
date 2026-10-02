@@ -506,10 +506,16 @@ ev('a', { kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache
   assert(/done · 1\.2s · in 10 · cached 0 · out 3 · via gpt-6-luna ×2, grok-4\.6$/.test(r.textContent), 'short names, with a count past one');
   assert.strictEqual(r.title, 'Answered through the gateway by global.openai.gpt-6-luna (2 requests), xai/grok-4.6, as the gateway reported. A gateway\'s own billing is not Anthropic\'s list price.'); }
 // with the gateway's own figure, that is the cost shown, and Claude Code's estimate moves to the tooltip
-ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.3, costTurn: 0.045, gatewayCost: 0.002096, gatewayCostSoFar: 0.0123, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
+ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.3, costTurn: 0.045, gatewayCost: 0.002096, gatewayCostSoFar: 0.0123, gatewayEstimate: 0.0021, gatewayEstimateSoFar: 0.013, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
 { const r = $$('#panes .pane .result').pop();
   assert(/done · 0\.8s · in 10 · cached 0 · out 3 · \$0\.0021 this turn · via gpt-6-luna$/.test(r.textContent), 'the gateway\'s figure, to a fraction of a cent; no ≈, no list-price guess');
   assert.strictEqual(r.title, 'The gateway\'s own figure for this turn, summed over its requests as the gateway reported each; the session so far $0.012 by the same reckoning. Claude Code\'s estimate at Anthropic\'s list prices, ≈$0.045, does not apply to a gateway\'s names. Answered through the gateway by global.openai.gpt-6-luna, as the gateway reported.'); }
+// a streamed response carries no price from the gateway: the turn at list rates for what answered, marked as an estimate, with the token's running total in the tooltip
+ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.9, costTurn: 0.594, gatewayEstimate: 0.0119, gatewayEstimateSoFar: 0.0119, keySpend: 0.6749, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
+{ const r = $$('#panes .pane .result').pop();
+  assert(/done · 0\.8s · in 10 · cached 0 · out 3 · ≈\$0\.012 this turn · via gpt-6-luna$/.test(r.textContent), 'the estimate at the answering model\'s rates, with ≈');
+  assert(/^This turn at list prices for what answered: .*since the gateway puts no price on a streamed response; the session so far ≈\$0\.012 by the same reckoning\. Claude Code\'s own figure, ≈\$0\.594, prices a gateway\'s names as Opus\. Answered through the gateway by global\.openai\.gpt-6-luna, as the gateway reported\. The gateway counts \$0\.675 spent on this token in all/.test(r.title), r.title);
+}
 host({ type: 'tabs', tabs: [with_(A, { gateway: true, backend: 'gateway', started: true, via: 'xai/grok-4.6' }), B], active: 'a' });
 assert(/Last answered by xai\/grok-4\.6\. /.test($('#t-model').title), 'the model button names what answered last');
 host({ type: 'tabs', tabs: [A, B], active: 'a' });

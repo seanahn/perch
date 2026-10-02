@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.38",
+  "version": "0.6.39",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -509,7 +509,7 @@
     "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/gateway.test.js && node test/relay.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/gateway.test.js && node test/relay.test.js && node test/prices.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"
