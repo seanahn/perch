@@ -983,6 +983,57 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(/^Perch: could not create \/nonexistent\/perch-test\/\.claude\/settings\.json\. /.test(m.ui.errors.pop()), 'a file is made to fill in; here the place for it cannot exist');
     m.ui.answers.push('Use Subscription'); m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush(); await flush();
     assert.deepStrictEqual([m.box.writes, v.lastMeter().backend, /has no subscription login yet/.test(m.ui.infos.pop())], [[true, false], 'subscription', true], 'back to the subscription, whose login is offered by the switch');
+    // the same choices stay as buttons under each note, for when the notification has gone. A button may be an old note's: each acts only on what still applies
+    const acts = (sid) => v.events(sid).filter((e) => e.kind === 'note' && e.actions).map((e) => e.actions.map((a) => a.id));
+    assert.deepStrictEqual(acts(z)[0], ['claudeSettings', 'claudeSubscription'], 'under the note for API / Bedrock without credentials');
+    v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush();
+    assert.deepStrictEqual(acts(z).pop(), ['claudeLogin', 'claudeApi'], 'and under the note for a subscription with no login');
+    m.ui.warnings.length = 0; m.ui.infos.length = 0; m.ui.executed.length = 0; const w0 = m.box.writes.length;
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeSubscription' }); await flush();
+    assert.strictEqual(m.box.writes.length, w0, 'Use Subscription from an old note, the window being on the subscription already: nothing');
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); m.box.login = true; await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.executed, m.ui.infos.pop(), m.ui.warnings.length], [['claude-vscode.editor.openLast'], 'Perch: Claude is logged in. Send your message again.', 0], 'Log In from the note: Claude Code\'s sign-in, with no notification first');
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.executed.length, m.ui.infos.pop()], [1, 'Perch: Claude is logged in. Send your message again.'], 'pressed again once logged in: it says so and opens nothing');
+    m.box.apiCreds = true;   // with credentials there: the switch asks nothing
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeApi' }); await flush(); await flush();
+    assert.deepStrictEqual([m.box.writes.length, v.lastMeter().backend], [w0 + 1, 'api'], 'Use API / Bedrock from the note');
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeApi' }); v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); await flush(); await flush();
+    assert.deepStrictEqual([m.box.writes.length, m.ui.executed.length], [w0 + 1, 1], 'again, and Log In while on API / Bedrock: nothing');
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeSettings' }); await flush(); await flush();
+    assert(/^Perch: could not create \/nonexistent\/perch-test\/\.claude\/settings\.json\. /.test(m.ui.errors.pop()), 'Open settings.json from the note');
+    m.perch.dispose();
+  }
+
+  // ---- a tab the user has not named takes the title of its agent's record, so the tab and its row in the sessions list say the same name
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'review https://github.com/c3-e/c3securitytools/pull/277' }); await flush(); await flush();
+    const sid = 'sess-' + (created.length - 1);
+    assert.strictEqual(v.tab(c).title, 'review https://github.com/c3', 'at first, the start of the first message; the agent has no record of the session to ask');
+    // Claude Code titles the session itself; the tab follows when a turn ends
+    const rec = { kind: 'claude', id: sid, title: 'c3securitytools PR #277', named: false, updatedAt: Date.now() }; m.store.sessions.push(rec);
+    v.fire({ type: 'send', sid: c, text: 'more' }); await flush(); await flush();
+    assert.strictEqual(v.tab(c).title, 'c3securitytools PR #277', 'the record\'s title, which is what the sessions list shows');
+    assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c).title, 'c3securitytools PR #277', 'kept with the tab');
+    // and when the list opens, for a title that moved since the last turn
+    rec.title = 'PR #277 follow-up';
+    const qp = await m.perch.pickSession(); await flush();
+    assert.deepStrictEqual([v.tab(c).title, qp.items.find((i) => i.past && i.past.id === sid).label], ['PR #277 follow-up', 'PR #277 follow-up'], 'the open tab and its row agree');
+    qp.hide();
+    // a name the user gave is theirs: the agent's title does not replace it
+    await m.perch.setTitle(m.perch.get(c), 'Mine'); await flush();
+    rec.title = 'Something Claude Code thought of later';
+    v.fire({ type: 'send', sid: c, text: 'again' }); await flush(); await flush();
+    assert.strictEqual(v.tab(c).title, 'Mine');
+    // deleting a session that is open in a tab, from the list: the dialog says the tab will be closed, the tab is closed, then the record goes
+    const qp2 = await m.perch.pickSession(); await flush();
+    m.ui.answers.push('Delete'); m.ui.details.length = 0; const before = v.lastTabs().tabs.length;
+    await qp2.press((i) => i.past && i.past.id === sid, 1); await flush();
+    assert.deepStrictEqual([/^Claude Code's record of this session is removed from this machine and cannot be brought back\. Its tab is open and will be closed\.$/.test(m.ui.details.pop()), v.lastTabs().tabs.length, m.store.deleted.map((d) => d.slice(0, 2)), m.store.deleted[0][2].codex],
+      [true, before - 1, [['claude', sid]], undefined]);
     m.perch.dispose();
   }
 
@@ -1142,6 +1193,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(created.length, made, 'no agent is started: it would only be refused');
     assert(/^Codex is not logged in on .+\. Log in, then send the message again\.$/.test(v.events(x).filter((e) => e.kind === 'note').pop().text));
     assert.strictEqual(v.events(x).filter((e) => e.kind === 'insert').pop().text, 'hello', 'the message goes back into the box');
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'note').pop().actions, [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }], 'the two ways in stay as buttons under the note');
     assert(/^Codex is not logged in on .+\. Perch runs it with your ChatGPT login, kept in \/home\/me\/\.codex\. Log In opens ChatGPT's sign-in page in your browser\. Device Code prints a link and a one-time code in a terminal instead, which ChatGPT must allow first \(Settings, Security and login, App security\)\.$/.test(m.ui.warnings.pop()), 'and the offer says where the login lives, and the two ways');
     assert.deepStrictEqual([m.ui.terminals.length, m.box.codexWaits || 0, m.box.codexLogins], [0, 0, undefined], 'declined: nothing runs');
     // taken up: the browser sign-in runs here, its page opens on the user's machine, the return port is forwarded, and the login is watched for
@@ -1151,11 +1203,18 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       'the program here, the page there, the port between, and the server let go once the login is in');
     v.fire({ type: 'send', sid: x, text: 'hello again' }); await flush(); await flush();
     assert.strictEqual(created.length, made + 1, 'logged in: the message goes to a Codex of its own');
+    // the note's buttons, pressed once the login is in: they say so and start nothing
+    v.fire({ type: 'noteAction', sid: x, action: 'codexLogin' }); v.fire({ type: 'noteAction', sid: x, action: 'codexDevice' }); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, m.ui.terminals.length, m.ui.infos.pop()], [1, 0, 'Perch: Codex is logged in. Send your message again.']);
+    // and before it is: the note's Log In runs the same sign-in, with no notification first
+    m.box.codexLoggedIn = false; m.ui.warnings.length = 0;
+    v.fire({ type: 'noteAction', sid: x, action: 'codexLogin' }); await flush(); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, m.ui.warnings.length, m.ui.infos.pop()], [2, 0, 'Perch: Codex is logged in. Send your message again.']);
     // the other way: the device code, in a terminal
     m.box.codexLoggedIn = false; m.ui.answers.push('Device Code'); v.fire({ type: 'new', kind: 'codex' }); const y = v.lastTabs().active;
     v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
     const t = m.ui.terminals.pop();
-    assert.deepStrictEqual([t.o.name, t.sent.length, /login --device-auth$/.test(t.sent[0]), m.box.codexWaits, m.box.codexLogins.length], ['Codex login', 1, true, 2, 1]);
+    assert.deepStrictEqual([t.o.name, t.sent.length, /login --device-auth$/.test(t.sent[0]), m.box.codexWaits, m.box.codexLogins.length], ['Codex login', 1, true, 3, 2], 'the device code runs no browser sign-in: the two before it were the notification\'s and the note\'s');
     // and the browser sign-in that cannot start says so
     m.box.codexLoggedIn = false; m.box.codexLoginFails = 'spawn ENOENT'; m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
     assert.strictEqual(m.ui.errors.pop(), 'Perch: the Codex login could not start. spawn ENOENT');
@@ -1190,7 +1249,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     assert.deepStrictEqual([list.shown, list.busy, list.placeholder, list.title], [true, false, 'Search sessions…', 'Perch sessions']);
     assert.deepStrictEqual(list.rows(), [['$(add) New Claude tab', undefined], ['$(add) New Codex tab', undefined], ['Perch session name and loading', 'Claude · 2m'], ['hello', 'Codex · 26m'], ['supertrend', 'Claude · 1mo']], 'a new tab of each kind first, then the past');
-    assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.buttons.map((b) => [b.iconPath.id, b.tooltip])), Array(3).fill([['edit', 'Rename session']]));
+    assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.buttons.map((b) => [b.iconPath.id, b.tooltip])), Array(3).fill([['edit', 'Rename session'], ['trash', 'Delete session']]));
     assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.iconPath.path || i.iconPath.dark.path), ['/ext/anthropic.claude-code/resources/claude-logo.svg', '/ext/openai.chatgpt/resources/blossom.dark.png', '/ext/anthropic.claude-code/resources/claude-logo.svg'], 'each under its vendor\'s icon, the one its editor tab carries');
 
     // renaming one that is not open writes to the agent's record, and the list comes back with the new name
@@ -1264,6 +1323,21 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     // names survive a reload, waiting ones included
     v.fire({ type: 'new', kind: 'claude' }); const w = v.lastTabs().active;
     m.ui.inputs.push('Not started'); v.fire({ type: 'rename', sid: w }); await flush();
+    // each row has a second button: delete. Asked first, in a dialog that waits; declined, nothing happens
+    list = await m.commands['perch.sessions']();
+    assert.deepStrictEqual(list.items.find((i) => i.past && i.past.id === 'x-old').buttons.map((b) => b.tooltip), ['Rename session', 'Delete session']);
+    m.ui.warnings.length = 0; m.ui.details.length = 0;
+    await list.press((i) => i.past && i.past.id === 'x-old', 1);
+    assert.deepStrictEqual([m.ui.warnings.pop(), /^Codex's record of this session is removed from this machine and cannot be brought back\.$/.test(m.ui.details.pop()), m.store.deleted], ['Delete "' + list.items.find((i) => i.past && i.past.id === 'x-old').label + '"?', true, []], 'declined: nothing is deleted');
+    // taken up: the agent's own delete, given the Codex program for a Codex session; the list opens again without the row
+    list = m.ui.lists[m.ui.lists.length - 1]; m.ui.answers.push('Delete');
+    await list.press((i) => i.past && i.past.id === 'x-old', 1);
+    assert.deepStrictEqual([m.store.deleted.length, m.store.deleted[0].slice(0, 2), m.store.deleted[0][2].dir, typeof m.store.deleted[0][2].codex], [1, ['codex', 'x-old'], process.cwd(), 'string']);
+    list = m.ui.lists[m.ui.lists.length - 1];
+    assert(!list.items.some((i) => i.past && i.past.id === 'x-old'), 'gone from the list');
+    // a record that cannot be removed says so
+    list = m.ui.lists[m.ui.lists.length - 1]; const left = list.items.find((i) => i.past && !/open/.test(i.description || ''));   // one with no tab open: a tab would be closed first
+    if (left) { m.store.failDelete = 'EACCES: permission denied'; m.ui.answers.push('Delete'); await list.press((i) => i === left, 1); assert.strictEqual(m.ui.errors.pop(), 'Perch: the session could not be deleted. EACCES: permission denied'); m.store.failDelete = null; }
     m.perch.dispose();
     const m2 = install(m.memento._dump(), { past }); await flush();
     const v2 = fakeView(); m2.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();

@@ -177,6 +177,11 @@ A tab is named from its first message until you name it yourself: run
 sessions of the workspace folder, Claude's and Codex's together, newest
 first. Type to search. Choose one to open a tab on it, or go to the tab
 already open on it. The pencil on a row renames that session, open or not.
+The bin deletes it, after asking: the agent's own record of the session is
+removed from this machine (Claude Code's by the Agent SDK, Codex's by
+`codex delete`), and a tab open on it is closed first. A tab you have not
+named shows the title its agent's record has, so a tab and its row in the
+list say the same name.
 
 perch keeps no list or names of its own. It reads each agent's records,
 and writes a name where that agent keeps names: for Claude, in the

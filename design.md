@@ -355,6 +355,32 @@ A tab can be moved between surfaces. The session, its agent, and its
 transcript are untouched; only its `location` changes and the new
 surface is sent a replay.
 
+### A tab's title
+
+A tab is titled from the start of its first message, until its agent's
+record has a title of its own: Claude Code titles a session itself as the
+conversation goes on (`ai-title` records), and the sessions list reads the
+records. A tab the user has not named takes the record's title when a turn
+ends (`getSessionInfo`), and again when the list opens, so a tab and its
+row say the same name. Before 2026-10-05 the tab kept its first-message
+title and an open session could not be found in the list by the name on
+its tab ("review https://github.com/c3" on the tab,
+"c3securitytools PR #277" in the list). A name the user gave (`named`,
+kept with the tab and written to the record as before) is never replaced.
+
+### Deleting a session
+
+Each row of the sessions list has a bin beside the pencil. It asks first,
+in a dialog that waits (the one modal dialog perch shows: the record
+cannot be brought back), and then removes the session by its agent's own
+means: the Agent SDK's `deleteSession` for Claude, and
+`codex delete --force <id>` for Codex, which takes a UUID only and removes
+the rollout with its name (`src/sessionStore.js`, `deleteSession`).
+Nothing of either agent's store is touched by perch's own hand. A tab open
+on the session is closed first, since its agent would write the record
+again; the dialog says so. The list opens again afterwards, without the
+row.
+
 ## 6. State, replay, and persistence
 
 ### The host owns everything
@@ -756,7 +782,16 @@ base URL and leaves the login alone (section 15).
   posts `noteAction`), where they stay: the notification beside them,
   which says more, hides itself after a few seconds, and on a first run
   that was the whole of the guidance. Each button is safe to press again,
-  since an old note keeps its buttons.
+  since an old note keeps its buttons. The other first-message holds
+  carry theirs the same way: Claude on API / Bedrock with no credentials
+  (Open settings.json, Use Subscription), Claude on the subscription with
+  no login (Log In, Use API / Bedrock), and Codex with no login (Log In,
+  Device Code). A button acts only on what still applies: Use
+  Subscription does nothing in a window already on it, Log In says so
+  when the login is already there, and a login taken from a button runs
+  without the notification, which may be gone or still waiting unseen
+  in the notification centre. The Codex sign-in is one run at a time
+  whichever asked for it, since it listens on a fixed port.
 - With no `ANTHROPIC_MODEL` in the file the model button reads
   "default" and its tooltip says to set one. It first read "the gateway's
   default", which was wrong as well as long: the gateway does not choose,
@@ -1175,6 +1210,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | LiteLLM's public table names the gateway's deployments | `xai/grok-4.6`, `gpt-6-luna` and `openai.gpt-6-luna`, `claude-opus-5-5` and the Bedrock spellings are all entries (4,453 entries, 3 MB, 2026-10-02) |
 | A gateway tab under a `settings.json` that forces Bedrock | In a throwaway `CLAUDE_CONFIG_DIR` whose settings set `CLAUDE_CODE_USE_BEDROCK=1` and a Bedrock `ANTHROPIC_MODEL`, with a stand-in gateway on the loopback (2026-10-05): the gateway's variables in the environment alone, nothing reached the gateway (the CLI went to Bedrock); with `--settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}'` the CLI's request arrived at `/v1/messages`; through the Agent SDK with `gatewaySettings(...)`, it arrived with the file's model (`nexus-auto-bargain`) and the token |
 | The gateway on a machine pinned to Bedrock, first run to first answer | seclab (2026-10-05): `CLAUDE_CODE_USE_BEDROCK=1` in both `~/.claude/settings.json` and the pod's environment, a Bedrock `ANTHROPIC_MODEL` exported, no gateway file. A tab put on the gateway held its message with the note and its two buttons; the file was made from the template, then filled; the next message was answered through the gateway (`via gpt-6-luna`, model button `nexus-auto-bargain[1m]`, cache pill 60m), the window's Bedrock tabs untouched |
+| Deleting a session, by each agent's own means | Two sessions made for the purpose in a temporary folder (2026-10-05): a Claude one, listed by the SDK before `deleteSession` and not after (`getSessionInfo` then answers nothing); a Codex one, whose rollout was there before `codex delete --force` and gone after |
+| A streamed response's token counts arrive at its end | One streamed request to the C3 gateway (2026-10-05): `message_start` usage `input 0, output 0, cache 0`; `message_delta` usage `input 9, output 17`. On seclab the estimate taken at the start had read ≈$0.0000 for a turn whose record shows 92,842 tokens written |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
@@ -1254,6 +1291,9 @@ track vendor updates. Without an extension, a tab shows a letter.
 | "LLM gateway" as the name, not "Claude on the gateway" | The vendor's name first | What the tab is of is the router behind it; the client being Claude Code matters less, and the name fits anyone's proxy. The file, setting and code keep the plain word |
 | The gateway is a backend of a Claude tab, chosen in the footer's menu | A tab kind of its own, with picker entry, numbering and icon (tried and reverted on 2026-10-02) | Everything but the route is Claude Code's; a second identity in the tab bar said the wrong thing |
 | A turn through the gateway is priced per response at the answering model's list rates, from LiteLLM's public table | Trust Claude Code's `total_cost_usd` (prices a gateway's names as Opus, 50× Luna); ask the gateway after the fact by call id (its management routes refuse the token); read the token's running total off the headers (every use of the token, not this tab's; not monotonic across replicas) | The gateway prices nothing on a streamed response; the model that answered and the token counts are both known, and the table is the one the gateway itself uses. Shown with `≈` and the reckoning in the tooltip; the gateway's own figure, when it ever comes, is preferred |
+| A tab the user has not named takes the title in its agent's record | Keep the first-message title on the tab; or show the tab's title in the list | Claude Code retitles a session as it goes and the list reads the records, so a tab could not be found in the list by the name on it. The record is the one name that outlives the tab |
+| Deleting a session goes through the agent's own delete, after a modal question | Remove the files by hand; no confirmation | Each agent knows what its record consists of (Codex keeps names apart from rollouts); a deleted conversation cannot be brought back, which is what a waiting dialog is for |
+| The cache clock restarts with each request, and a turn's token counts are read at each response's end | Once per turn, from the result and the assistant message | A long turn read "cold" throughout after an expiry; a gateway reports its counts only when a streamed response closes |
 | The ways on from a held message are buttons under its note | A VS Code notification alone | A notification hides itself after a few seconds; on a first run it was gone before it was read. The notification stays for the longer explanation |
 | A gateway tab's process is given the gateway's variables as its own settings, over the user's | Hold the tab's first message and tell the user to switch the window to the subscription (as it did until 0.6.41) | On a machine whose only Claude login is Bedrock (seclab) the instruction had no good outcome: switching the window would strand the Bedrock tabs. Settings given on the command line outrank the user's file, so the tab can be made right by itself; the token is kept out of them, since a process's arguments are readable by others on the machine |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |

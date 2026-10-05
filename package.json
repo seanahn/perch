@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.44",
+  "version": "0.6.45",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {

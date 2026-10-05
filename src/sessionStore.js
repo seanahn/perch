@@ -50,6 +50,19 @@ async function listClaude({ dir, limit = 100, sdk } = {}) {
   return out;
 }
 
+/**
+ * One Claude session's title as Claude Code's record has it now: the user's name for it, else the title Claude Code gives a
+ * session itself as the conversation goes on, else the first prompt. Null when there is no record yet.
+ * @returns {Promise<{title: string, named: boolean}|null>}
+ */
+async function titleOfClaude(id, { dir, sdk } = {}) {
+  const api = sdk || await claudeSdk();
+  if (typeof api.getSessionInfo !== 'function') return null;
+  const s = await api.getSessionInfo(id, dir ? { dir } : undefined);
+  const title = s ? cleanTitle(s.customTitle || s.summary || s.firstPrompt) : '';
+  return title ? { title, named: !!s.customTitle } : null;
+}
+
 async function renameClaude(id, title, { dir, sdk } = {}) {
   const api = sdk || await claudeSdk();
   await api.renameSession(id, title, dir ? { dir } : undefined);
@@ -270,4 +283,25 @@ async function renameSession(kind, id, title, opts = {}) {
   return name;
 }
 
-module.exports = { splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+/**
+ * Delete a session from its agent's own records, by the agent's own means: the Agent SDK's deleteSession for Claude, and
+ * `codex delete --force <id>` for Codex, which removes the rollout and its name. `codex` is the Codex program to run.
+ * Throws if the record cannot be removed.
+ */
+async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
+  if (!id) throw new Error('This session has not started yet.');
+  if (kind === 'claude') {
+    const api = sdk || await claudeSdk();
+    if (typeof api.deleteSession !== 'function') throw new Error('This version of the Claude Agent SDK cannot delete a session.');
+    await api.deleteSession(id, dir ? { dir } : undefined);
+  } else if (kind === 'codex') {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new Error('Not a Codex session id: ' + id);   // --force takes a UUID only, and nothing else is passed to the program
+    const exec = run || ((cmd, args) => new Promise((resolve, reject) => require('child_process').execFile(cmd, args, { timeout: 30000 }, (err, out, errOut) => (err ? reject(new Error(String(errOut || err.message).trim().split('\n').pop())) : resolve(out)))));
+    await exec(codex || 'codex', ['delete', '--force', id]);
+  } else throw new Error('Unknown agent: ' + kind);
+}
+
+/** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
+async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
+
+module.exports = { deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

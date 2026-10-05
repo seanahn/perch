@@ -88,9 +88,11 @@ class FakeAgent {
 
 function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past } = {}) {
   // the agents' own records of past sessions: what they list, and every name written to them
-  const store = Object.assign({ sessions: [], failed: [], renamed: [], lists: [], failRename: null, transcripts: {}, loads: [] }, past);
+  const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [] }, past);
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
   const fakeStore = Object.assign({}, realStore, {
+    titleOf: async (kind, id) => { const x = store.sessions.find((r) => r.kind === kind && r.id === id); return x && kind === 'claude' ? { title: x.title, named: !!x.named } : null; },
+    deleteSession: async (kind, id, o) => { if (store.failDelete) throw new Error(store.failDelete); store.deleted.push([kind, id, o]); store.sessions = store.sessions.filter((x) => !(x.kind === kind && x.id === id)); },
     listSessions: async (o) => { store.lists.push(o); return { sessions: store.sessions.map((x) => Object.assign({}, x)), failed: store.failed.slice() }; },
     loadTranscript: async (kind, id, o) => { store.loads.push([kind, id, o]); const t = store.transcripts[id]; if (t instanceof Error) throw t; return t ? JSON.parse(JSON.stringify(t)) : { events: [], earlier: 0 }; },
     renameSession: async (kind, id, title, o) => { const name = realStore.cleanTitle(title); if (!name) throw new Error('A session name cannot be empty.'); if (store.failRename) throw new Error(store.failRename); store.renamed.push([kind, id, name, o]); for (const x of store.sessions) if (x.kind === kind && x.id === id) { x.title = name; x.named = true; } return name; },

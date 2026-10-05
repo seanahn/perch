@@ -12,7 +12,7 @@ const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
-const { listSessions, renameSession, loadTranscript, cleanTitle, ago } = require('./sessionStore');
+const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf } = require('./sessionStore');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -172,13 +172,14 @@ function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionM
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate }) {
+  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
     this.title = title;
     this.titled = !!titled;          // true once the title came from the first message, or from the user
     this.unsaved = !!unsaved;        // the user's name for it has yet to reach the agent's own record of the session
+    this.named = !!named;            // the user named this tab: its title is theirs, and the agent's own title for the session does not replace it
     this.mode = mode || defaultMode(kind);
     this.model = typeof model === 'string' ? model : defaultModel(kind);     // '' = the agent's default model
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
@@ -283,6 +284,7 @@ class Session {
         if (ev.busy && !this.busy) this.busySince = Date.now(); else if (!ev.busy) this.busySince = 0;
         this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
         if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
+        if (!this.busy) this.view.syncTitle(this);         // and a tab the user has not named takes the title its agent's record has by now
         if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
         return;
       case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
@@ -402,14 +404,15 @@ class Session {
     // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
     if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun()) {
       const api = this.view.meter.backend() === 'api';
-      this.post({ kind: 'note', text: api ? `Claude is set to API / Bedrock on ${require('os').hostname()}, and no credentials for it were found there. Set them up, or use your subscription, then send the message again.` : `Claude is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
+      this.post({ kind: 'note', text: api ? `Claude is set to API / Bedrock on ${require('os').hostname()}, and no credentials for it were found there. Set them up, or use your subscription, then send the message again.` : `Claude is not logged in on ${require('os').hostname()}. Log in, then send the message again.`,
+        actions: api ? [{ id: 'claudeSettings', label: 'Open settings.json' }, { id: 'claudeSubscription', label: 'Use Subscription' }] : [{ id: 'claudeLogin', label: 'Log In' }, { id: 'claudeApi', label: 'Use API / Bedrock' }] });
       this.view.deliver(this.id, text);
       this.view.claudeLogin();
       return;
     }
     // Codex with no login here would only be refused (401, five reconnects, an error): hold the message, offer the login
     if (this.kind === 'codex' && !this.agent && !(this.view.meter && this.view.meter.codexBackend() === 'api') && !codexAuth.loggedIn()) {
-      this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.` });
+      this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.`, actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
       this.view.deliver(this.id, text);
       this.view.codexLogin();
       return;
@@ -530,7 +533,7 @@ class Session {
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : '', this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -637,7 +640,14 @@ class PerchView {
    * sign-in (the meter's login), watched until it lands; or the switch to API / Bedrock. On API / Bedrock: the settings
    * file, where the credentials and region go; or the switch to the subscription, which offers its login. One at a time.
    */
-  async claudeLogin() {
+  async claudeLogin(choice) {
+    if (choice) {                    // from a note's button (the notification may be gone, or still waiting unseen): log in, if that is still what is missing
+      if (choice !== 'Log In' || this.meter.backend() === 'api') return;
+      if (this.meter.canRun()) { vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.'); return; }
+      await this.meter.login();
+      if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.');
+      return;
+    }
     if (this.claudeLoginOpen) return;
     this.claudeLoginOpen = true;
     try {
@@ -728,6 +738,16 @@ class PerchView {
       const lead = why || `Codex is not logged in on ${require('os').hostname()}.`;
       const pick = await vscode.window.showWarningMessage(`${lead} Perch runs it with your ChatGPT login, kept in ${codexAuth.codexHome()}. Log In opens ChatGPT's sign-in page in your browser. Device Code prints a link and a one-time code in a terminal instead, which ChatGPT must allow first (Settings, Security and login, App security).`, 'Log In', 'Device Code');
       if (!pick) return;
+      await this.codexLoginRun(pick);
+    } finally { this.codexLoginOpen = false; }
+  }
+
+  /** Run the Codex login the user chose ("Log In" or "Device Code"), from the notification or from a note's button. One at
+   * a time: the browser sign-in listens on a fixed port. */
+  async codexLoginRun(pick) {
+    if (this.codexLoginRunning) return;
+    this.codexLoginRunning = true;
+    try {
       const prog = program('codex');
       if (prog.from === 'none') { vscode.window.showErrorMessage('Perch: ' + MISSING.codex); return; }
       const exe = prog.path || 'codex';
@@ -746,7 +766,7 @@ class PerchView {
       if (child) { try { child.kill(); } catch (_) { /* ended on its own */ } }
       if (ok) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
       else vscode.window.showWarningMessage('Perch: the Codex login did not complete.');
-    } finally { this.codexLoginOpen = false; }
+    } finally { this.codexLoginRunning = false; }
   }
 
   deliver(sid, text) {
@@ -968,6 +988,15 @@ class PerchView {
       case 'noteAction':             // a button under a note: the gateway file, or this tab off the gateway. Old notes keep their buttons, so each is safe to press again
         if (msg.action === 'gatewayFile') this.openGatewayFile();
         else if (msg.action === 'gatewayLeave') { if (s && s.gateway) s.setGateway(false); }
+        // the ways into Claude and Codex. A button may be an old note's: each acts only on what still applies
+        else if (msg.action === 'claudeSettings') this.openSettingsFile();
+        else if (msg.action === 'claudeSubscription') { if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
+        else if (msg.action === 'claudeApi') { if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
+        else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
+        else if (msg.action === 'codexLogin' || msg.action === 'codexDevice') {
+          if (codexAuth.loggedIn()) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
+          else this.codexLoginRun(msg.action === 'codexDevice' ? 'Device Code' : 'Log In');
+        }
         return;
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
@@ -1051,10 +1080,31 @@ class PerchView {
   async setTitle(s, title) {
     const name = cleanTitle(title);
     if (!s || !name) return false;
-    s.title = name; s.titled = true; s.unsaved = true;
+    s.title = name; s.titled = true; s.unsaved = true; s.named = true;
     this.persist();
     this.sendTabs();
     await this.saveName(s);
+    return true;
+  }
+
+  /**
+   * A tab the user has not named shows the title its agent's record has: Claude Code titles a session itself as the
+   * conversation goes on, and the sessions list reads those titles, so a tab still showing the start of its first message
+   * could not be found in the list by name. Looked up when a turn ends; the list does the same for every open tab.
+   */
+  async syncTitle(s) {
+    if (!s || s.kind !== 'claude' || s.named || s.unsaved || !s.agentSessionId) return;
+    let t = null;
+    try { t = await titleOf(s.kind, s.agentSessionId, { dir: cwd() }); } catch (_) { return; }
+    this.adoptTitle(s, t);
+  }
+  /** Give an open tab the title of its record, unless the name is the user's. @returns {boolean} whether it changed */
+  adoptTitle(s, t) {
+    if (!s || s.disposed || s.named || s.unsaved || !t || !t.title) return false;
+    if (t.named) s.named = true;     // the record's name is one a user gave it
+    if (t.title === s.title) return false;
+    s.title = t.title; s.titled = true;
+    this.sendTabs(); this.persist();
     return true;
   }
 
@@ -1088,6 +1138,24 @@ class PerchView {
     catch (e) { vscode.window.showErrorMessage(`Perch: the session could not be renamed. ${e.message}`); }
   }
 
+  /**
+   * Delete a past session, from the list: asked first, in a dialog that waits, since the agent's record of the conversation
+   * is removed from this machine and cannot be brought back. A tab open on it is closed first: its agent would write the
+   * record again.
+   */
+  async deletePast(past) {
+    if (!past || !past.id) return;
+    const vendor = past.kind === 'claude' ? 'Claude Code' : 'Codex';
+    const open = this.sessions.find((s) => s.kind === past.kind && s.agentSessionId === past.id);
+    const pick = await vscode.window.showWarningMessage(`Delete "${past.title}"?`, { modal: true, detail: `${vendor}'s record of this session is removed from this machine and cannot be brought back.${open ? ' Its tab is open and will be closed.' : ''}` }, 'Delete');
+    if (pick !== 'Delete') return;
+    let codex;
+    if (past.kind === 'codex') { const prog = program('codex'); if (prog.from === 'none') { vscode.window.showErrorMessage('Perch: ' + MISSING.codex); return; } codex = prog.path || 'codex'; }
+    if (open) this.closeSession(open.id);
+    try { await deleteSession(past.kind, past.id, { dir: cwd(), codex }); }
+    catch (e) { vscode.window.showErrorMessage(`Perch: the session could not be deleted. ${e.message}`); }
+  }
+
   /** Open a tab on a past session, or go to the tab that is already open on it: two agents must not write one record. */
   resumeSession(past) {
     const open = this.sessions.find((s) => s.kind === past.kind && s.agentSessionId === past.id);
@@ -1103,17 +1171,18 @@ class PerchView {
     qp.title = 'Perch sessions'; qp.placeholder = 'Search sessions…'; qp.matchOnDescription = true; qp.busy = true;
     qp.onDidAccept(() => { const it = qp.selectedItems[0]; qp.hide(); if (it && it.fresh) this.addSession(it.fresh, { gateway: it.gateway }); else if (it) this.resumeSession(it.past); });
     // the box that asks for the name takes the list's place, so the list is opened again afterwards, with the new name in it
-    qp.onDidTriggerItemButton(async (e) => { qp.hide(); await this.renamePast(e.item.past); await this.pickSession(); });
+    qp.onDidTriggerItemButton(async (e) => { qp.hide(); if (e.button && e.button.tooltip === 'Delete session') await this.deletePast(e.item.past); else await this.renamePast(e.item.past); await this.pickSession(); });
     qp.onDidHide(() => qp.dispose());
     qp.show();
     const { sessions, failed } = await listSessions({ dir: cwd(), limit: 200 });
-    const rename = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Rename session' };
+    const rename = { iconPath: new vscode.ThemeIcon('edit'), tooltip: 'Rename session' }, del = { iconPath: new vscode.ThemeIcon('trash'), tooltip: 'Delete session' };
     // a new tab is also a way in, so the list begins with one of each kind, whatever is typed
     const fresh = this.freshKinds().map((k) => ({ label: `$(add) New ${k.tab}`, fresh: k.kind, gateway: k.gateway, alwaysShow: true }));
     qp.items = fresh.concat(sessions.map((p) => {
       const open = this.sessions.find((s) => s.kind === p.kind && s.agentSessionId === p.id);
+      if (open) this.adoptTitle(open, p);   // an open tab and its row say the same name: the record's, unless the user named the tab
       const past = open && open.unsaved ? Object.assign({}, p, { title: open.title }) : p;
-      return { label: past.title, description: [p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename], past };
+      return { label: past.title, description: [p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename, del], past };
     }));
     const missing = failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ');
     if (!sessions.length) qp.placeholder = missing ? `The sessions of ${missing} could not be read` : 'No past sessions in this folder';
