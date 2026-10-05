@@ -147,15 +147,29 @@ class ClaudeAgent {
         // a response has begun: the request that brought it read (or wrote) the prompt cache, so the cache is warm from now.
         // Said per request, not per turn: a turn can run for many minutes, and the clock restarts with each of its requests.
         // A subagent's requests are another conversation's cache and do not count.
-        if (ev.type === 'message_start' && !m.parent_tool_use_id) { this.emit({ kind: 'responded', at: Date.now() }); return; }
+        if (ev.type === 'message_start' || ev.type === 'message_delta' || ev.type === 'message_stop') {
+          // One response's token counts, for the host to price on a gateway. They are final only when the response ends: a
+          // gateway in front of another vendor's model sends zeros at the start and the real counts in the closing delta
+          // (seen through LiteLLM: 0 written at the start, 92,842 at the end), so each field is the largest seen. Kept per
+          // conversation, since a subagent's responses stream alongside the main thread's.
+          const key = m.parent_tool_use_id || '', open = (this.reqUsage = this.reqUsage || new Map());
+          const u = ev.type === 'message_start' ? ev.message && ev.message.usage : ev.usage;
+          if (ev.type === 'message_start') open.set(key, {});
+          const acc = open.get(key);
+          if (acc && u) {
+            const top = (k, v) => { if (typeof v === 'number' && v > (acc[k] || 0)) acc[k] = v; };
+            top('input', u.input_tokens); top('cache_write', u.cache_creation_input_tokens); top('cache_read', u.cache_read_input_tokens); top('output', u.output_tokens);
+            top('cache_write_1h', u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens);
+          }
+          if (ev.type === 'message_stop' && acc) { open.delete(key); this.emit({ kind: 'usage', usage: { input: acc.input || 0, cache_write: acc.cache_write || 0, cache_read: acc.cache_read || 0, output: acc.output || 0, cache_write_1h: acc.cache_write_1h || 0 } }); }
+          if (ev.type === 'message_start' && !m.parent_tool_use_id) this.emit({ kind: 'responded', at: Date.now() });
+          return;
+        }
         if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { this.live += ev.delta.text; this.emit({ kind: 'delta', text: ev.delta.text }); }
         else if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') this.emit({ kind: 'tool_start', name: ev.content_block.name });
         return;
       }
       case 'assistant': {
-        // one response's token counts, once (the SDK may hand the same message over more than once): on a gateway, the host prices them
-        const u = m.message && m.message.usage, mid = m.message && m.message.id;
-        if (u && mid !== this.usageId) { this.usageId = mid; this.emit({ kind: 'usage', model: (m.message && m.message.model) || '', usage: { input: u.input_tokens || 0, cache_write: u.cache_creation_input_tokens || 0, cache_read: u.cache_read_input_tokens || 0, output: u.output_tokens || 0, cache_write_1h: (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) || 0 } }); }
         const blocks = (m.message && m.message.content) || [];
         const texts = [];
         for (const b of blocks) {

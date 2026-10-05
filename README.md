@@ -255,7 +255,7 @@ is copied from elsewhere, so a fresh remote has neither.
   rejects the request. The first message to a tab whose file is
   missing or incomplete is held back, and the offer opens the file (made
   from a template, readable by you alone) or takes the tab off the
-  gateway. The window's own backend does not matter: with Claude set to
+  gateway; the two choices stay as buttons under the note. The window's own backend does not matter: with Claude set to
   API / Bedrock in `~/.claude/settings.json`, a tab on the gateway still
   goes to the gateway, because Perch gives its process the gateway's
   variables (all but the token) as settings of its own, which Claude Code

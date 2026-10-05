@@ -1503,6 +1503,18 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(out.length, 1, 'a subagent\'s request is another conversation\'s cache');
     ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } } });
     assert.deepStrictEqual(out.slice(1), [{ kind: 'delta', text: 'x' }], 'the text of a response does not restart the clock again');
+    // a response's token counts are taken when it ends: a gateway in front of another vendor's model sends zeros first
+    out.length = 0;
+    const ev = (event, extra) => ClaudeAgent.prototype._onMessage.call(a, Object.assign({ type: 'stream_event', event }, extra));
+    ev({ type: 'message_start', message: { usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 } } });
+    ev({ type: 'message_start', message: { usage: { input_tokens: 7, output_tokens: 1 } } }, { parent_tool_use_id: 'toolu_1' });   // a subagent's response, alongside
+    ev({ type: 'message_delta', usage: { input_tokens: 2, cache_creation_input_tokens: 92842, cache_read_input_tokens: 0, output_tokens: 11, cache_creation: { ephemeral_1h_input_tokens: 0 } } });
+    ev({ type: 'message_delta', usage: { output_tokens: 40 } }, { parent_tool_use_id: 'toolu_1' });
+    ev({ type: 'message_stop' });
+    ev({ type: 'message_stop' }, { parent_tool_use_id: 'toolu_1' });
+    ev({ type: 'message_stop' });   // a stop with nothing open says nothing
+    assert.deepStrictEqual(out, [{ kind: 'responded', at: out[0].at }, { kind: 'usage', usage: { input: 2, cache_write: 92842, cache_read: 0, output: 11, cache_write_1h: 0 } }, { kind: 'usage', usage: { input: 7, cache_write: 0, cache_read: 0, output: 40, cache_write_1h: 0 } }],
+      'the counts as they stood at the end, each conversation\'s own; only the main thread\'s response restarts the cache clock');
   }
 
   // ---- the real Claude agent takes Claude Code's word on whether a turn runs: a lost result must not leave a tab working

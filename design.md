@@ -749,6 +749,19 @@ base URL and leaves the login alone (section 15).
   gateway with a catalog model chosen starts from the file's default, so
   the pill never names a Claude model while the gateway answers; an alias
   survives the move back.
+- A tab whose file is missing or incomplete holds its first message,
+  puts it back in the box, and says why in a note. The two ways on, the
+  file (made from the template if absent) and the tab off the gateway,
+  are buttons under that note (a note event may carry `actions`; the page
+  posts `noteAction`), where they stay: the notification beside them,
+  which says more, hides itself after a few seconds, and on a first run
+  that was the whole of the guidance. Each button is safe to press again,
+  since an old note keeps its buttons.
+- With no `ANTHROPIC_MODEL` in the file the model button reads
+  "default" and its tooltip says to set one. It first read "the gateway's
+  default", which was wrong as well as long: the gateway does not choose,
+  Claude Code sends the name it would use anyway (the environment's
+  `ANTHROPIC_MODEL`, or its own default), which a gateway may not know.
 - The template turns the hour-long prompt cache on (`ENABLE_PROMPT_CACHING_1H=1`).
   Claude Code's rule, read from the 2.1.119 binary: `FORCE_PROMPT_CACHING_5M`
   forces five minutes, `ENABLE_PROMPT_CACHING_1H` forces the hour (Bedrock
@@ -786,9 +799,16 @@ base URL and leaves the login alone (section 15).
   request, so a tab never sees it (measured 2026-10-02: the same request
   unstreamed carried `x-litellm-response-cost: 0.000918`, streamed it
   carried the zeroed `-original`, `-input`, `-output` parts and no cost).
-  So each response's token counts (the SDK's assistant message carries
-  `usage`; `claudeAgent.js` passes them on once per message id) are
-  priced by the host at the answering model's list rates
+  So each response's token counts are priced by the host at the
+  answering model's list rates. The counts are taken from the response's
+  own stream, when it ends (`claudeAgent.js`: the largest value of each
+  field across `message_start` and `message_delta`, per conversation,
+  said at `message_stop`), not from the SDK's assistant message: a
+  gateway in front of another vendor's model sends zeros at the start and
+  the real counts in the closing delta (measured 2026-10-05: start
+  `input 0, output 0`, end `input 9, output 17`), and a figure taken at
+  the start read ≈$0.0000 for a turn that had written 92,842 tokens. They
+  are priced
   (`src/prices.js`): the relay's model names are queued per turn in
   order and each `usage` takes the next, so a turn of two requests on
   Luna and one on Grok is three requests at their own rates. The rates
@@ -1154,6 +1174,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | A streamed response carries no price from the gateway | The same `Reply with ok` to the C3 gateway twice (2026-10-02): unstreamed, `x-litellm-response-cost: 0.000918` and the parts; streamed, no `x-litellm-response-cost`, the parts at `0.0`. Both carried `x-litellm-model-name` (`xai/grok-4.6`, by a fallback), `x-litellm-call-id` and `x-litellm-key-spend`; the deployed proxy said `x-litellm-version: 1.102.0`. The management routes (`/model/info`, `/key/info`, `/spend/logs`) answered 401 to the token: no price catalog or after-the-fact lookup from the client |
 | LiteLLM's public table names the gateway's deployments | `xai/grok-4.6`, `gpt-6-luna` and `openai.gpt-6-luna`, `claude-opus-5-5` and the Bedrock spellings are all entries (4,453 entries, 3 MB, 2026-10-02) |
 | A gateway tab under a `settings.json` that forces Bedrock | In a throwaway `CLAUDE_CONFIG_DIR` whose settings set `CLAUDE_CODE_USE_BEDROCK=1` and a Bedrock `ANTHROPIC_MODEL`, with a stand-in gateway on the loopback (2026-10-05): the gateway's variables in the environment alone, nothing reached the gateway (the CLI went to Bedrock); with `--settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}'` the CLI's request arrived at `/v1/messages`; through the Agent SDK with `gatewaySettings(...)`, it arrived with the file's model (`nexus-auto-bargain`) and the token |
+| The gateway on a machine pinned to Bedrock, first run to first answer | seclab (2026-10-05): `CLAUDE_CODE_USE_BEDROCK=1` in both `~/.claude/settings.json` and the pod's environment, a Bedrock `ANTHROPIC_MODEL` exported, no gateway file. A tab put on the gateway held its message with the note and its two buttons; the file was made from the template, then filled; the next message was answered through the gateway (`via gpt-6-luna`, model button `nexus-auto-bargain[1m]`, cache pill 60m), the window's Bedrock tabs untouched |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
@@ -1233,6 +1254,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | "LLM gateway" as the name, not "Claude on the gateway" | The vendor's name first | What the tab is of is the router behind it; the client being Claude Code matters less, and the name fits anyone's proxy. The file, setting and code keep the plain word |
 | The gateway is a backend of a Claude tab, chosen in the footer's menu | A tab kind of its own, with picker entry, numbering and icon (tried and reverted on 2026-10-02) | Everything but the route is Claude Code's; a second identity in the tab bar said the wrong thing |
 | A turn through the gateway is priced per response at the answering model's list rates, from LiteLLM's public table | Trust Claude Code's `total_cost_usd` (prices a gateway's names as Opus, 50× Luna); ask the gateway after the fact by call id (its management routes refuse the token); read the token's running total off the headers (every use of the token, not this tab's; not monotonic across replicas) | The gateway prices nothing on a streamed response; the model that answered and the token counts are both known, and the table is the one the gateway itself uses. Shown with `≈` and the reckoning in the tooltip; the gateway's own figure, when it ever comes, is preferred |
+| The ways on from a held message are buttons under its note | A VS Code notification alone | A notification hides itself after a few seconds; on a first run it was gone before it was read. The notification stays for the longer explanation |
 | A gateway tab's process is given the gateway's variables as its own settings, over the user's | Hold the tab's first message and tell the user to switch the window to the subscription (as it did until 0.6.41) | On a machine whose only Claude login is Bedrock (seclab) the instruction had no good outcome: switching the window would strand the Bedrock tabs. Settings given on the command line outrank the user's file, so the tab can be made right by itself; the token is kept out of them, since a process's arguments are readable by others on the machine |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |
 | The backend chosen for a tab becomes the default for new Claude tabs | Every new tab on the window's backend; a setting | The user opening a gateway tab wants the next one there too; subscription and API already stick through Claude Code's setting, so the gateway is made to stick the same way, in global state |
