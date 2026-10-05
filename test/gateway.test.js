@@ -88,7 +88,7 @@ try {
     assert.deepStrictEqual(c.models[0].efforts, ['low', 'medium', 'high']);
     assert(/ANTHROPIC_DEFAULT_OPUS_MODEL in the gateway file; sent as Claude Code's "opus"/.test(c.models[0].description));
     const bare = G.gatewayModels({ ANTHROPIC_BASE_URL: 'u', ANTHROPIC_AUTH_TOKEN: 't' });
-    assert.deepStrictEqual([bare.defaultModel.label, bare.models], ['the gateway\'s default', []], 'a file that names no models offers only the default');
+    assert.deepStrictEqual([bare.defaultModel.label, bare.models, /Set ANTHROPIC_MODEL in the file/.test(bare.defaultModel.description)], ['', [], true], 'a file that names no models offers only the default, unnamed, and says what to set');
     assert.deepStrictEqual(G.gatewayModels(undefined).models, []);
   }
 

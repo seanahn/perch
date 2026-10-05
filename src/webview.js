@@ -143,8 +143,9 @@ ${glyphCss}
   .ask .other { width: 100%; box-sizing: border-box; margin: 3px 0; padding: 5px 9px; font: inherit; font-size: 12px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 6px; outline: none; }
   .ask .other:focus { border-color: var(--vscode-focusBorder); }
   .ask .btns { display: flex; gap: 6px; margin-top: 4px; }
-  .ask .btns button { font-size: 11px; padding: 3px 12px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-  .ask .btns button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .status .btns { display: flex; gap: 6px; margin-top: 6px; justify-content: center; }
+  .ask .btns button, .status .btns button { font-size: 11px; padding: 3px 12px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .ask .btns button.primary, .status .btns button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .ask .btns button:disabled { opacity: .45; cursor: default; }
   .ask.done { border-color: var(--vscode-panel-border); padding: 6px 10px; }
   .ask.done .q { margin: 2px 0; } .ask.done .t { display: inline; font-weight: 500; margin: 0 6px 0 0; }
@@ -488,7 +489,7 @@ ${glyphCss}
     $tCtx.hidden = !claude; $tCache.hidden = !claude;
     if (!t) { syncVoice(); $tModel.querySelector('.m').textContent = ''; $tModel.querySelector('.e').textContent = ''; $tMode.textContent = ''; $send.disabled = true; $send.className = ''; $send.innerHTML = SVG.up; return; }
 
-    const model = resolved(t.models, t.model) || (claude ? 'Claude' : 'Codex');
+    const model = resolved(t.models, t.model) || (t.gateway ? 'default' : claude ? 'Claude' : 'Codex');   // on a gateway whose file names no model, the default has no name to show
     const hasEffort = (t.efforts || []).length > 1, effort = hasEffort ? cap(resolved(t.efforts, t.effort)) : '';
     $tModel.querySelector('.m').textContent = model;
     $tModel.querySelector('.e').textContent = effort;
@@ -806,7 +807,14 @@ ${glyphCss}
         if (via) d.title = (d.title ? d.title + ' ' : '') + 'Answered through the gateway by ' + m.via.map((v) => v.model + (v.n > 1 ? ' (' + v.n + ' requests)' : '')).join(', ') + ', as the gateway reported.' + (gw || est ? '' : ' A gateway\\'s own billing is not Anthropic\\'s list price.');
         if (typeof m.keySpend === 'number') d.title = (d.title ? d.title + ' ' : '') + 'The gateway counts $' + gwUsd(m.keySpend) + ' spent on this token in all, every use of it included, as of this answer.';
         break; }
-      case 'note': endLive(p); addLinked(p, 'status', m.text); break;
+      case 'note': { endLive(p); const d = addLinked(p, 'status', m.text);
+        // what can be done about it stays with the note: a notification is gone in seconds
+        if (Array.isArray(m.actions) && m.actions.length) {
+          const btns = el('div', 'btns');
+          m.actions.forEach((a, i) => { const b = el('button', i ? null : 'primary', a.label); b.addEventListener('click', () => vscode.postMessage({ type: 'noteAction', sid, action: a.id })); btns.append(b); });
+          d.append(btns); p.stick = true;
+        }
+        break; }
       case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); addLinked(p, 'error', m.text); break;
       case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; p.sent.length = 0; p.hist = null; break;

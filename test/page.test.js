@@ -515,6 +515,9 @@ ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_
   assert(/done · 0\.8s · in 10 · cached 0 · out 3 · ≈\$0\.012 this turn · via gpt-6-luna$/.test(r.textContent), 'the estimate at the answering model\'s rates, with ≈');
   assert(/^This turn at list prices for what answered: .*since the gateway puts no price on a streamed response; the session so far ≈\$0\.012 by the same reckoning\. Claude Code\'s own figure, ≈\$0\.594, prices a gateway\'s names as Opus\. Answered through the gateway by global\.openai\.gpt-6-luna, as the gateway reported\. The gateway counts \$0\.675 spent on this token in all/.test(r.title), r.title);
 }
+// on a gateway whose file names no model, the pill reads "default": there is no name to show, and it is not Claude's
+host({ type: 'tabs', tabs: [with_(A, { gateway: true, backend: 'gateway', model: '', models: [{ value: '', label: 'default', title: 'The gateway file sets no ANTHROPIC_MODEL' }] }), B], active: 'a' });
+assert.strictEqual($('#t-model .lbl') ? $('#t-model .lbl').textContent : $('#t-model').textContent.trim(), 'default');
 host({ type: 'tabs', tabs: [with_(A, { gateway: true, backend: 'gateway', started: true, via: 'xai/grok-4.6' }), B], active: 'a' });
 assert(/Last answered by xai\/grok-4\.6\. /.test($('#t-model').title), 'the model button names what answered last');
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
@@ -830,6 +833,12 @@ window.close();
   assert(err.textContent.startsWith('You\'ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit'), 'the text is whole');
   p4.host({ type: 'event', sid: 'a', ev: { kind: 'note', text: 'see https://claude.ai/settings/usage.' } });
   assert.deepStrictEqual([...[...p4.$$('.pane')[0].querySelectorAll('.status')].pop().querySelectorAll('a')].map((a) => a.textContent), ['https://claude.ai/settings/usage']);
+  // a note with things to do about it: buttons that stay under the note
+  p4.host({ type: 'event', sid: 'a', ev: { kind: 'note', text: 'the file does not exist.', actions: [{ id: 'gatewayFile', label: 'Open the File' }, { id: 'gatewayLeave', label: 'Leave the Gateway' }] } });
+  { const btns = p4.$$('#panes .pane .status .btns button');
+    assert.deepStrictEqual(btns.map((b) => [b.textContent, b.className]), [['Open the File', 'primary'], ['Leave the Gateway', '']]);
+    btns[1].click(); assert.deepStrictEqual(p4.out.pop(), { type: 'noteAction', sid: 'a', action: 'gatewayLeave' });
+    btns[0].click(); assert.deepStrictEqual(p4.out.pop(), { type: 'noteAction', sid: 'a', action: 'gatewayFile' }); }
   // a thumbnail is small; a click shows it at the size it was kept, another puts it back
   const pic = last.querySelector('.pics img');
   assert.deepStrictEqual([pic.classList.contains('big'), pic.title], [false, 'Click to see it larger']);

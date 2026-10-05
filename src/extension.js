@@ -392,7 +392,8 @@ class Session {
     if (this.kind === 'claude' && !this.agent && this.gateway && this.view.meter) {
       const gw = this.view.gateway();
       if (!gw.ok) {
-        this.post({ kind: 'note', text: `This tab is on the gateway, but ${Gateway.describe(gw)} Fill it in, or take this tab off the gateway, then send the message again.` });
+        // the ways on are buttons under the note, which stay; the notification beside them says more and is gone in seconds
+        this.post({ kind: 'note', text: `This tab is on the gateway, but ${Gateway.describe(gw)} Fill it in, or take this tab off the gateway, then send the message again.`, actions: [{ id: 'gatewayFile', label: 'Open the File' }, { id: 'gatewayLeave', label: 'Leave the Gateway' }] });
         this.view.deliver(this.id, text);
         this.view.gatewayHelp(this, gw);
         return;
@@ -964,6 +965,10 @@ class PerchView {
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
       case 'copy': vscode.env.clipboard.writeText(String(msg.text || '')); return;
+      case 'noteAction':             // a button under a note: the gateway file, or this tab off the gateway. Old notes keep their buttons, so each is safe to press again
+        if (msg.action === 'gatewayFile') this.openGatewayFile();
+        else if (msg.action === 'gatewayLeave') { if (s && s.gateway) s.setGateway(false); }
+        return;
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       default: return;

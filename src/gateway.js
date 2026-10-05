@@ -107,7 +107,7 @@ function gatewaySettings(env, baseUrl) {
 function gatewayModels(vars) {
   const v = vars || {};
   const EFFORTS = ['low', 'medium', 'high'];   // a gateway's names say nothing of effort; Claude Code's usual levels are offered
-  const defaultModel = { value: '', label: v.ANTHROPIC_MODEL || 'the gateway\'s default', description: v.ANTHROPIC_MODEL ? 'ANTHROPIC_MODEL in the gateway file' : 'The gateway file sets no ANTHROPIC_MODEL; the gateway decides', efforts: EFFORTS };
+  const defaultModel = { value: '', label: v.ANTHROPIC_MODEL || '', description: v.ANTHROPIC_MODEL ? 'ANTHROPIC_MODEL in the gateway file' : 'The gateway file sets no ANTHROPIC_MODEL: Claude Code sends the name it would use anyway (ANTHROPIC_MODEL from the environment, or its own default), which the gateway may not know. Set ANTHROPIC_MODEL in the file.', efforts: EFFORTS };
   const models = [];
   for (const [alias, key] of [['opus', 'ANTHROPIC_DEFAULT_OPUS_MODEL'], ['sonnet', 'ANTHROPIC_DEFAULT_SONNET_MODEL'], ['haiku', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']]) {
     if (!v[key]) continue;

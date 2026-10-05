@@ -1625,6 +1625,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       assert.strictEqual(created.length, n0, 'no process is started');
       assert(v.events(g).some((e) => e.kind === 'note' && e.text === `This tab is on the gateway, but ${file} does not exist. Fill it in, or take this tab off the gateway, then send the message again.`), 'the tab says why');
       assert(v.events(g).some((e) => e.kind === 'insert' && e.text === 'hello gateway'), 'the message is put back in the box');
+      assert.deepStrictEqual(v.events(g).filter((e) => e.kind === 'note').pop().actions, [{ id: 'gatewayFile', label: 'Open the File' }, { id: 'gatewayLeave', label: 'Leave the Gateway' }], 'and the ways on are buttons under the note, which stay when the notification has gone');
       assert(/^This tab is on the LLM gateway, but .* does not exist\. Perch gives a tab on the gateway the variables in that file/.test(m.ui.warnings.pop()));
       assert.deepStrictEqual(m.ui.opened.pop(), [file, null], 'the file is opened in the editor');
       assert.strictEqual(fs.readFileSync(file, 'utf8').split('\n')[2], 'export ANTHROPIC_BASE_URL=', 'made from the template');
@@ -1636,6 +1637,12 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       m.picks.push((i) => i.kind === 'claude'); const s1 = await m.commands['perch.new'](); assert.deepStrictEqual([s1.kind, s1.gateway, s1.title], ['claude', false, 'Claude 2'], 'the quick pick offers Claude; the gateway is a choice in the tab\'s backend menu');
       m.perch.closeSession(s1.id); const s2 = m.perch.addSession('claude', { gateway: true }); assert.deepStrictEqual([s2.kind, s2.gateway, s2.title], ['claude', true, 'Claude 3']);
       m.perch.closeSession(s2.id);
+      // the note's own buttons: the file again (it exists now, and is opened as it is), and this tab off the gateway and back
+      v.fire({ type: 'noteAction', sid: g, action: 'gatewayFile' }); await flush();
+      assert.deepStrictEqual(m.ui.opened.pop(), [file, null], 'the note\'s button opens the file');
+      v.fire({ type: 'noteAction', sid: g, action: 'gatewayLeave' }); assert.strictEqual(v.lastTabs().tabs[0].gateway, false, 'and its other button takes the tab off the gateway');
+      v.fire({ type: 'noteAction', sid: g, action: 'gatewayLeave' }); v.fire({ type: 'noteAction', sid: g, action: 'bogus' }); assert.strictEqual(v.lastTabs().tabs[0].gateway, false, 'pressed again, or junk: nothing');
+      v.fire({ type: 'setBackend', sid: g, value: 'gateway' }); assert.strictEqual(v.lastTabs().tabs[0].gateway, true);
       m.ui.answers.push('Leave the Gateway');
       v.fire({ type: 'send', sid: g, text: 'again' }); await flush(); await flush();
       assert(/sets no ANTHROPIC_BASE_URL\. Perch gives/.test(m.ui.warnings.pop()), 'an empty file is named for what it lacks');
