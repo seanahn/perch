@@ -1493,6 +1493,18 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- the prompt cache is warm from each response of a turn, not only from the turn's end: a long turn must not read "cold" throughout
+  {
+    const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
+    const out = [], a = { live: '', emit: (e) => out.push(e) };
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'message_start' } });
+    assert.deepStrictEqual([out.length, out[0].kind, typeof out[0].at], [1, 'responded', 'number'], 'a response has begun: the request that brought it touched the cache');
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: 'toolu_1' });
+    assert.strictEqual(out.length, 1, 'a subagent\'s request is another conversation\'s cache');
+    ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'x' } } });
+    assert.deepStrictEqual(out.slice(1), [{ kind: 'delta', text: 'x' }], 'the text of a response does not restart the clock again');
+  }
+
   // ---- the real Claude agent takes Claude Code's word on whether a turn runs: a lost result must not leave a tab working
   {
     const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');

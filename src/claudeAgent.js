@@ -140,6 +140,10 @@ class ClaudeAgent {
         return;
       case 'stream_event': {
         const ev = m.event || {};
+        // a response has begun: the request that brought it read (or wrote) the prompt cache, so the cache is warm from now.
+        // Said per request, not per turn: a turn can run for many minutes, and the clock restarts with each of its requests.
+        // A subagent's requests are another conversation's cache and do not count.
+        if (ev.type === 'message_start' && !m.parent_tool_use_id) { this.emit({ kind: 'responded', at: Date.now() }); return; }
         if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { this.live += ev.delta.text; this.emit({ kind: 'delta', text: ev.delta.text }); }
         else if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') this.emit({ kind: 'tool_start', name: ev.content_block.name });
         return;

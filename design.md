@@ -595,15 +595,28 @@ the vendor's chooser read as a broken switch; it was taken out on
 
 ### The cache clock
 
-How long Claude Code keeps the prompt cache warm:
+How long Claude Code keeps the prompt cache warm, by Claude Code's own
+rule (read from the 2.1.119 binary; `src/meter.js`, `promptCacheMinutes`):
 
-1. `CLAUDE_CODE_PROMPT_CACHE_TTL` in the environment, if set.
-2. `promptCacheTtl` in the settings files, if set.
-3. Otherwise one hour on a subscription, five minutes on API, Bedrock,
-   Vertex, or Foundry.
+1. `FORCE_PROMPT_CACHING_5M` set: five minutes.
+2. `ENABLE_PROMPT_CACHING_1H` set (on Bedrock,
+   `ENABLE_PROMPT_CACHING_1H_BEDROCK`): one hour.
+3. Otherwise one hour on a claude.ai login, five minutes on an API key,
+   a gateway token, Bedrock, Vertex, or Foundry.
 
-The clock counts down from the last answer. A running tab keeps the
-lifetime of the backend it started on.
+The variables are read as Claude Code sees them: the settings files'
+`env` blocks over a gateway file's variables over the process
+environment. A running tab keeps the lifetime of the backend it started
+on.
+
+The clock counts down from the last request, not the last answer: the
+agent says `responded` when each response of a turn begins (the SDK's
+`message_start`, which the request that touched the cache brought), and
+again at the turn's end. Counting from the turn's end only, as it first
+did, left the pill reading "cold" all through a turn that began after an
+expiry, however long the turn ran and however many requests had warmed
+the cache since (seen on 2026-10-05). A subagent's requests are another
+conversation's cache and do not restart the clock.
 
 ### Slash filter
 
