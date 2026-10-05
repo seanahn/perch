@@ -387,14 +387,14 @@ class Session {
       if (before < MANY_IMAGES && after >= MANY_IMAGES) this.post({ kind: 'note', text: `This conversation now carries ${after} images. Past ${MANY_IMAGES}, the API refuses a conversation holding any image 2000 px or wider, which images from earlier versions of perch or from Claude Code's own reading may be. If a turn then fails with "an image could not be processed", /compact lets the earlier images go.` });
     }
     if (!text.trim() && !images.length) return;
-    // Claude on the gateway with no gateway to reach: the file is missing or incomplete, or the window is on API / Bedrock,
-    // which Claude Code's settings apply over a process's environment. Hold the message, say what to do.
+    // Claude on the gateway with no gateway to reach: the file is missing or incomplete. Hold the message, say what to do.
+    // (The window being on API / Bedrock is no obstacle: the tab's process is given the gateway's variables as its own settings.)
     if (this.kind === 'claude' && !this.agent && this.gateway && this.view.meter) {
-      const gw = this.view.gateway(), bedrock = this.view.meter.backend() === 'api';
-      if (!gw.ok || bedrock) {
-        this.post({ kind: 'note', text: bedrock ? 'This tab is on the LLM gateway, but Claude is set to API / Bedrock in ~/.claude/settings.json, which wins over the gateway\'s environment. Switch Claude to the subscription, or take this tab off the gateway, then send the message again.' : `This tab is on the gateway, but ${Gateway.describe(gw)} Fill it in, or take this tab off the gateway, then send the message again.` });
+      const gw = this.view.gateway();
+      if (!gw.ok) {
+        this.post({ kind: 'note', text: `This tab is on the gateway, but ${Gateway.describe(gw)} Fill it in, or take this tab off the gateway, then send the message again.` });
         this.view.deliver(this.id, text);
-        this.view.gatewayHelp(this, gw, bedrock);
+        this.view.gatewayHelp(this, gw);
         return;
       }
     }
@@ -681,16 +681,13 @@ class PerchView {
    * A tab on the gateway cannot reach it: the file is missing or incomplete, or Claude is on API / Bedrock, which Claude Code's
    * settings apply over a process's environment. Offer the way on: the file, the subscription, or this tab off the gateway.
    */
-  async gatewayHelp(s, gw, bedrock) {
+  async gatewayHelp(s, gw) {
     if (this.gatewayOpen) return;
     this.gatewayOpen = true;
     try {
       const off = 'Leave the Gateway';
-      const pick = bedrock
-        ? await vscode.window.showWarningMessage('This tab is on the LLM gateway, but Claude is set to API / Bedrock in ~/.claude/settings.json. Claude Code applies its settings over a process\'s environment, so the gateway\'s ANTHROPIC_BASE_URL would not be used. Switch Claude to the subscription (login), or take this tab off the gateway.', 'Use Subscription', off)
-        : await vscode.window.showWarningMessage(`This tab is on the LLM gateway, but ${Gateway.describe(gw)} Perch gives a tab on the gateway the variables in that file (export KEY=VALUE lines, as a shell reads them): ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. Nothing is written to Claude Code's settings.`, 'Open the File', off);
+      const pick = await vscode.window.showWarningMessage(`This tab is on the LLM gateway, but ${Gateway.describe(gw)} Perch gives a tab on the gateway the variables in that file (export KEY=VALUE lines, as a shell reads them): ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. Nothing is written to Claude Code's settings.`, 'Open the File', off);
       if (pick === off) { if (!s.disposed) s.setGateway(false); }
-      else if (pick === 'Use Subscription') await this.meter.toggleBackend();
       else if (pick === 'Open the File') await this.openGatewayFile();
     } finally { this.gatewayOpen = false; }
   }

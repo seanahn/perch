@@ -92,5 +92,10 @@ try {
     assert.deepStrictEqual(G.gatewayModels(undefined).models, []);
   }
 
+  // ---- the same variables as the process's own settings, which Claude Code applies over ~/.claude/settings.json: without the token, to the relay
+  assert.deepStrictEqual(G.gatewaySettings(G.gatewayEnv({ ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key', ANTHROPIC_MODEL: 'nexus-auto[1m]' }), 'http://127.0.0.1:5000'),
+    { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'http://127.0.0.1:5000', ANTHROPIC_MODEL: 'nexus-auto[1m]' } }, 'Bedrock off and the file\'s names over the user\'s settings; the token stays in the environment; requests go to the relay');
+  assert.deepStrictEqual(G.gatewaySettings(undefined), { env: {} });
+
   console.log('gateway tests passed');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

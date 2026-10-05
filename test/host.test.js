@@ -1686,14 +1686,17 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       v.fire({ type: 'meterToggle' }); await flush(); await flush();
       assert.deepStrictEqual([m.box.bedrock, agent.disposed, plainAgent.disposed], [true, false, true], 'the switch to API / Bedrock restarts the plain tab, not the gateway one');
       assert(!v.events(g).some((e) => e.kind === 'note' && /backend is now/.test(e.text)), 'and says nothing to it');
-      // the window being on API / Bedrock, a gateway tab starting now could not reach the gateway: it is told, and offered the way back
+      // the window being on API / Bedrock does not stop a gateway tab: its process is given the gateway's variables as settings of its own,
+      // which Claude Code applies over ~/.claude/settings.json. Nothing is held, nothing is asked.
       v.fire({ type: 'new', kind: 'claude', gateway: true }); const g2 = v.lastTabs().tabs[2].id;
       assert.strictEqual(v.lastTabs().tabs[2].gateway, true, 'the + menu opens a tab on the gateway');
-      m.ui.answers.push('Use Subscription');
-      v.fire({ type: 'send', sid: g2, text: 'x' }); await flush(); await flush();
-      assert(v.events(g2).some((e) => e.kind === 'note' && /set to API \/ Bedrock in ~\/\.claude\/settings\.json, which wins over the gateway's environment/.test(e.text)));
-      assert(/Claude Code applies its settings over a process's environment/.test(m.ui.warnings.pop()));
-      assert.deepStrictEqual([m.box.bedrock, created.length], [false, n0 + 2], 'Use Subscription flips the window back; no process was started');
+      v.fire({ type: 'new', kind: 'claude', gateway: true }); const g3 = v.lastTabs().tabs[3].id;
+      v.fire({ type: 'send', sid: g3, text: 'x' }); await flush(); await flush();
+      assert.deepStrictEqual([created.length, created[n0 + 2].o.gateway, created[n0 + 2].o.env.CLAUDE_CODE_USE_BEDROCK, v.events(g3).some((e) => e.kind === 'note' && /settings\.json/.test(e.text))], [n0 + 3, { target: 'https://gw.example.com/llm-api' }, '0', false], 'a process starts through the relay, though the window is on API / Bedrock');
+      v.fire({ type: 'close', sid: g3 }); await flush();
+      assert.strictEqual(v.lastTabs().tabs.length, 3);
+      v.fire({ type: 'meterToggle' }); await flush(); await flush();
+      assert.strictEqual(m.box.bedrock, false, 'back on the subscription for what follows');
       assert.strictEqual(agent.disposed, false, 'the running gateway tab was untouched by that switch too');
       // moving a running tab off the gateway: its process ends and the next message resumes the session without the gateway
       const writes = m.box.writes.length;

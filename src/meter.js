@@ -335,16 +335,17 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
    * (read from the 2.1.119 binary). FORCE_PROMPT_CACHING_5M forces five minutes; ENABLE_PROMPT_CACHING_1H forces the
    * hour (on Bedrock, ENABLE_PROMPT_CACHING_1H_BEDROCK); otherwise the hour is given only to a claude.ai login, which
    * an API key or an ANTHROPIC_AUTH_TOKEN (a gateway) is not, and the rest get five minutes. The variables are read
-   * the way Claude Code sees them: settings.local.json's env block over settings.json's over `extra` (a gateway
-   * file's variables, which a tab's process is given) over this process's environment. Overage, which also drops a
+   * the way Claude Code sees them: `extra` (a gateway file's variables, which a tab's process is given as settings of
+   * its own) over settings.local.json's env block over settings.json's over this process's environment. Overage, which also drops a
    * subscription to five minutes, is not known here.
    */
   function promptCacheMinutes(backend, extra) {
     const on = (v) => v !== undefined && v !== null && ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase().trim());
-    const seen = Object.assign({}, env, extra || {});
+    const seen = Object.assign({}, env);
     for (const f of ['settings.json', 'settings.local.json']) {
       try { const j = JSON.parse(fs.readFileSync(path.join(claudeDir, f), 'utf8')); if (j && j.env && typeof j.env === 'object') Object.assign(seen, j.env); } catch (_) { /* missing or unparsable */ }
     }
+    Object.assign(seen, extra || {});   // a gateway tab's process is given these as settings of its own, over the user's
     if (on(seen.FORCE_PROMPT_CACHING_5M)) return 5;
     if (on(seen.ENABLE_PROMPT_CACHING_1H)) return 60;
     if (on(seen.CLAUDE_CODE_USE_BEDROCK) && on(seen.ENABLE_PROMPT_CACHING_1H_BEDROCK)) return 60;

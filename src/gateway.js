@@ -79,9 +79,24 @@ function readGateway(file) {
 }
 
 /** The variables a tab's process is given: the file's, and Bedrock turned off unless the file says otherwise, since a
- * gateway speaks the Anthropic protocol. (A setting in ~/.claude/settings.json still wins over these: Claude Code applies
- * its settings over the environment, so a window on API / Bedrock has to be switched to the subscription first.) */
+ * gateway speaks the Anthropic protocol. */
 function gatewayEnv(vars) { return Object.assign({ CLAUDE_CODE_USE_BEDROCK: '0' }, vars || {}); }
+
+/**
+ * The same variables as settings for that one process (the SDK's `settings`, Claude Code's --settings). Claude Code applies
+ * the `env` block of ~/.claude/settings.json over a process's environment, so a window set to API / Bedrock there
+ * (CLAUDE_CODE_USE_BEDROCK=1) would send a gateway tab to Bedrock whatever its environment said; settings given on the
+ * command line are applied over the user's, and put the gateway's variables back on top. The token is left out: these
+ * settings are an argument of the process, which other users of the machine can read, and the environment carries it.
+ * `baseUrl` is where the process is to send its requests (the relay), in place of the file's.
+ * @returns {{ env: Record<string,string> }}
+ */
+function gatewaySettings(env, baseUrl) {
+  const out = {};
+  for (const [k, v] of Object.entries(env || {})) if (!TOKEN_VARS.includes(k) && typeof v === 'string') out[k] = v;
+  if (baseUrl) out[URL_VAR] = baseUrl;
+  return { env: out };
+}
 
 /**
  * The models a tab on the gateway can choose, from the file: Claude Code's three aliases, each sent as the gateway name the
@@ -113,4 +128,4 @@ function createTemplate(file) {
   fs.writeFileSync(file, TEMPLATE, { flag: 'wx', mode: 0o600 });
 }
 
-module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewayModels, describe, createTemplate };
+module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, gatewayModels, describe, createTemplate };

@@ -5,6 +5,7 @@
 
 const { randomUUID } = require('crypto');
 const { Relay } = require('./relay');
+const { gatewaySettings } = require('./gateway');
 
 class AsyncQueue {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -71,6 +72,9 @@ class ClaudeAgent {
       includePartialMessages: true,
       abortController: this.abort,
       env,
+      // on the gateway, the same variables as this process's own settings, which Claude Code applies over ~/.claude/settings.json:
+      // a window set to API / Bedrock there does not take the tab off the gateway
+      ...(this.opts.gateway ? { settings: gatewaySettings(this.opts.env, env.ANTHROPIC_BASE_URL) } : {}),
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();

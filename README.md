@@ -255,9 +255,11 @@ is copied from elsewhere, so a fresh remote has neither.
   rejects the request. The first message to a tab whose file is
   missing or incomplete is held back, and the offer opens the file (made
   from a template, readable by you alone) or takes the tab off the
-  gateway. A window on API / Bedrock has to be switched to the
-  subscription first: Claude Code applies its settings over a process's
-  environment, so the gateway's URL would not be used; the tab says so.
+  gateway. The window's own backend does not matter: with Claude set to
+  API / Bedrock in `~/.claude/settings.json`, a tab on the gateway still
+  goes to the gateway, because Perch gives its process the gateway's
+  variables (all but the token) as settings of its own, which Claude Code
+  applies over the user's.
   A tab on the gateway runs its process through a small relay of
   Perch's on the loopback interface, which forwards each request to the
   gateway unchanged and reads the header in which a LiteLLM gateway
