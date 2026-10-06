@@ -34,8 +34,8 @@ function loadCodexModels(home = path.join(os.homedir(), '.codex')) {
   const entry = (m) => ({ value: m.slug, label: m.display_name || m.slug, description: m.description || '', efforts: levels(m), defaultEffort: effortFor(m) });
   const listed = all.filter((m) => m.visibility !== 'hide').sort((a, b) => (a.priority || 0) - (b.priority || 0)).map(entry);
   const def = cfg.model && all.find((m) => m.slug === cfg.model);
-  const defaultModel = def ? { label: def.display_name || def.slug, efforts: levels(def), defaultEffort: effortFor(def) }
-    : { label: cfg.model || '', efforts: [...new Set(listed.flatMap((m) => m.efforts))], defaultEffort: cfg.model_reasoning_effort || '' };
+  const defaultModel = def ? { label: def.display_name || def.slug, slug: def.slug, efforts: levels(def), defaultEffort: effortFor(def) }
+    : { label: cfg.model || '', slug: cfg.model || '', efforts: [...new Set(listed.flatMap((m) => m.efforts))], defaultEffort: cfg.model_reasoning_effort || '' };
   return { defaultModel, models: listed };
 }
 

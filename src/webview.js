@@ -910,11 +910,21 @@ ${glyphCss}
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
   }
-  // Codex has two backends, so its button is a switch. Claude has the window's two and, for this tab, the gateway: a menu.
+  // Each vendor's backends are a menu: Codex's three (every tab), Claude's two of the window's and, for this tab, the gateway.
   $mb.addEventListener('click', (e) => {
     const t = cur();
-    if (meterKind !== 'claude' || !t) { vscode.postMessage({ type: 'meterToggle', vendor: meterKind }); return; }
+    if (!t) return;
     e.stopPropagation();
+    if (meterKind !== 'claude') {
+      openMenu('backend', $mb, (m) => {
+        const c = meters.codex || {}, b = c.bedrock || {}, pick = (value) => () => vscode.postMessage({ type: 'codexBackend', value });
+        m.append(el('div', 'h', 'Codex backend'));
+        m.append(item('ChatGPT (login)', { radio: true, checked: c.backend === 'chatgpt', desc: 'Every tab. Your ChatGPT plan and its limits.', pick: pick('chatgpt') }));
+        m.append(item('OpenAI API key', { radio: true, checked: c.backend === 'api', desc: 'Every tab. Billed per token; the key stays in VS Code\\'s secret storage.', pick: pick('api') }));
+        m.append(item('Amazon Bedrock', { radio: true, checked: c.backend === 'bedrock', desc: 'Every tab. ' + (b.endpoint === 'runtime' ? 'The runtime endpoint' : 'Mantle') + ' in ' + (b.region || '…') + (b.profile ? ', profile ' + b.profile : '') + ', with your AWS credentials; billed to that account.', pick: pick('bedrock') }));
+      });
+      return;
+    }
     openMenu('backend', $mb, (m) => {
       const windowBackend = meter ? meter.backend : 'subscription';
       const pick = (value) => () => vscode.postMessage({ type: 'setBackend', sid: t.id, value });

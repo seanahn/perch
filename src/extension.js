@@ -368,6 +368,7 @@ class Session {
         reasoningEffort: this.effort || undefined,
         executable: prog.path || undefined,
         apiKey: this.view.meter && this.view.meter.codexBackend() === 'api' ? this.view.meter.codexApiKey() : undefined,
+        bedrock: this.view.meter && this.view.meter.codexBackend() === 'bedrock' ? this.view.codexBedrock() : undefined,
       });
       this.backend = this.view.meter ? this.view.meter.codexBackend() : '';
     }
@@ -410,8 +411,15 @@ class Session {
       this.view.claudeLogin();
       return;
     }
+    // Codex on Bedrock with nothing to sign with: hold the message, say what Bedrock needs, offer the way back
+    if (this.kind === 'codex' && !this.agent && this.view.meter && this.view.meter.codexBackend() === 'bedrock' && !this.view.meter.meter.apiCredentialsPresent()) {
+      const b = this.view.meter.codexBedrock();
+      this.post({ kind: 'note', text: `Codex is set to Amazon Bedrock on ${require('os').hostname()} (${b.region}${b.profile ? ', profile ' + b.profile : ''}), and no AWS credentials were found there: no ~/.aws credentials or profile, no AWS_* variables. Set them up, or use the ChatGPT login, then send the message again.`, actions: [{ id: 'codexChatgpt', label: 'Use ChatGPT' }] });
+      this.view.deliver(this.id, text);
+      return;
+    }
     // Codex with no login here would only be refused (401, five reconnects, an error): hold the message, offer the login
-    if (this.kind === 'codex' && !this.agent && !(this.view.meter && this.view.meter.codexBackend() === 'api') && !codexAuth.loggedIn()) {
+    if (this.kind === 'codex' && !this.agent && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && !codexAuth.loggedIn()) {
       this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.`, actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
       this.view.deliver(this.id, text);
       this.view.codexLogin();
@@ -585,11 +593,13 @@ class PerchView {
   onMeter(state, why, codex) {
     this.raw({ type: 'meter', meter: state, codex });
     if (why === 'codexBackend') {
-      // Codex takes its key per process, so every tab moves on its next turn; nothing is restarted
-      const backend = this.meter.codexBackend(), key = backend === 'api' ? this.meter.codexApiKey() : null;
+      // Codex takes its key and its --config overrides per process, so every tab moves on its next turn; nothing is restarted
+      const backend = this.meter.codexBackend(), key = backend === 'api' ? this.meter.codexApiKey() : null, bedrock = backend === 'bedrock' ? this.codexBedrock() : undefined;
       for (const s of this.sessions) if (s.kind === 'codex' && s.agent && s.backend !== backend) {
-        s.agent.setApiKey(key); s.backend = backend;
-        s.post({ kind: 'note', text: backend === 'api' ? 'Codex backend is now your OpenAI API key, from the next message; billed per token, no plan limits.' : 'Codex backend is now your ChatGPT login, from the next message.' });
+        s.agent.setBackend({ apiKey: key, bedrock }); s.backend = backend;
+        s.post({ kind: 'note', text: backend === 'api' ? 'Codex backend is now your OpenAI API key, from the next message; billed per token, no plan limits.'
+          : backend === 'bedrock' ? `Codex backend is now Amazon Bedrock (${bedrock.endpoint === 'runtime' ? 'the runtime endpoint' : 'Mantle'}, ${bedrock.region}), from the next message; billed to the AWS account, no plan limits.`
+          : 'Codex backend is now your ChatGPT login, from the next message.' });
       }
       this.sendTabs();
       return;
@@ -667,6 +677,13 @@ class PerchView {
   }
 
   // ---- the gateway: an Anthropic-compatible endpoint a Claude tab can be put on, described by a file of the user's
+  /** How a Codex process is to reach Bedrock: the meter's settings, and the catalog's default model, which Codex's own default (config.toml) does not serve there. */
+  codexBedrock() {
+    const b = this.meter.codexBedrock();
+    const d = this.catalog.codex && this.catalog.codex.defaultModel;
+    return Object.assign({}, b, { defaultModel: (d && d.slug) || '' });
+  }
+
   /** Where the gateway's file is, by the setting or the default. */
   gatewayPath() { return Gateway.gatewayFile(cfg('claude.gatewayEnv')); }
   /** The gateway as its file describes it now. Read each time: the file is small, and the user may be editing it. */
@@ -975,6 +992,7 @@ class PerchView {
       case 'setBackend': this.setBackend(s, msg.value); return;
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
       case 'meterToggle': if (msg.vendor === 'codex') this.meter.toggleCodexBackend(); else this.meter.toggleBackend(); return;
+      case 'codexBackend': this.meter.chooseCodexBackend(String(msg.value || '')); return;   // the footer's menu under a Codex tab: ChatGPT, an API key, or Bedrock
       case 'meterLogin': this.meter.login(); return;
       case 'voiceStart': if (s) this.voice.start(s.id); return;
       case 'voiceStop': if (s) this.voice.stop(s.id); return;
@@ -993,6 +1011,7 @@ class PerchView {
         else if (msg.action === 'claudeSubscription') { if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeApi') { if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
+        else if (msg.action === 'codexChatgpt') { if (this.meter.codexBackend() !== 'chatgpt') this.meter.chooseCodexBackend('chatgpt'); }
         else if (msg.action === 'codexLogin' || msg.action === 'codexDevice') {
           if (codexAuth.loggedIn()) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
           else this.codexLoginRun(msg.action === 'codexDevice' ? 'Device Code' : 'Log In');

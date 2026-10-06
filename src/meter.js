@@ -277,6 +277,16 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
   }
 
   /** CLAUDE_CODE_USE_BEDROCK from Claude Code's settings files (settings.local.json overrides settings.json), or undefined. */
+  /** The env block of Claude Code's settings files, settings.local.json over settings.json: a machine set up for Claude on
+   * Bedrock has its AWS_REGION and AWS_PROFILE there. */
+  function settingsEnv() {
+    const out = {};
+    for (const f of ['settings.json', 'settings.local.json']) {
+      try { const j = JSON.parse(fs.readFileSync(path.join(claudeDir, f), 'utf8')); if (j && j.env && typeof j.env === 'object') Object.assign(out, j.env); } catch (_) { /* missing or unparsable */ }
+    }
+    return out;
+  }
+
   function settingsBedrockValue() {
     for (const f of ['settings.local.json', 'settings.json']) {
       try {
@@ -427,7 +437,7 @@ function createMeter({ home = os.homedir(), env = process.env, platform = proces
     return stats;
   }
 
-  return { claudeDir, settingsPath: SETTINGS, readCredentials, fetchUsage, settingsBedrockValue, bedrockConfigured, envNote, setBedrockSetting, apiCredentialsPresent, promptCacheMinutes, collectRecords, computeCostStats };
+  return { claudeDir, settingsPath: SETTINGS, readCredentials, fetchUsage, settingsEnv, settingsBedrockValue, bedrockConfigured, envNote, setBedrockSetting, apiCredentialsPresent, promptCacheMinutes, collectRecords, computeCostStats };
 }
 
 module.exports = { createMeter, summarize, retryAfterMs, parseUsageResponse, parseUsageLine, priceFor, recordCost, shortModel, fmtTok, fmtUsd, fmtEta, fmtResetTime, labelFor, tankBar, PROVIDER_MODEL, ERRORS };

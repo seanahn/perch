@@ -1129,6 +1129,29 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'new', kind: 'codex' }); const z = v.lastTabs().active; const made = created.length; v.fire({ type: 'send', sid: z, text: 'go' }); await flush();
     assert.deepStrictEqual([created.length, created[created.length - 1].o.apiKey, m.ui.warnings.length], [made + 1, 'sk-other-0123456789abcdefghijklmnop', 0]);
     m.box.codexLoggedIn = true;
+    // Bedrock, from the footer's menu: every Codex tab gets Codex's own Bedrock provider as --config overrides, the region and profile from
+    // perch's settings or Claude Code's, and its model in Bedrock's form; no key, no login needed
+    m.box.settingsEnv = { AWS_REGION: 'us-west-2', AWS_PROFILE: 'stage2' }; m.box.apiCreds = true;
+    v.fire({ type: 'codexBackend', value: 'bedrock' }); await flush(); await flush();
+    const bm = v.lastCodexMeter();
+    assert.deepStrictEqual([bm.backend, bm.backendLabel, bm.plan, bm.segments, bm.bedrock, m.globalState._dump()['perch.codex.backend']],
+      ['bedrock', 'Bedrock', '', [], { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'stage2' }, 'bedrock'], 'the runtime endpoint, in the region and with the profile Claude Code is set up with');
+    assert(/Codex runs on Amazon Bedrock \(the runtime endpoint, us-west-2, profile stage2\)/.test(bm.backendTitle));
+    const bz = created[created.length - 1];
+    assert.deepStrictEqual([bz.backends.pop(), v.lastTabs().tabs[2].backend], [{ apiKey: null, bedrock: { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'stage2', defaultModel: 'gpt-5.6-sol' } }, 'bedrock'], 'the open tab moves on its next turn, with the catalog\'s default for when it has no model of its own');
+    assert(/Codex backend is now Amazon Bedrock \(the runtime endpoint, us-west-2\), from the next message/.test(v.events(z).filter((e) => e.kind === 'note').pop().text));
+    m.box.codexLoggedIn = false;   // no ChatGPT login: no matter on Bedrock
+    v.fire({ type: 'new', kind: 'codex' }); const w = v.lastTabs().active; const madeW = created.length; v.fire({ type: 'send', sid: w, text: 'go' }); await flush();
+    assert.deepStrictEqual([created.length, created[created.length - 1].o.apiKey, created[created.length - 1].o.bedrock.provider, m.ui.warnings.length], [madeW + 1, undefined, 'amazon-bedrock-runtime', 0], 'a new tab starts on Bedrock without being held for a login');
+    // with nothing to sign with, the first message is held, and the note's button goes back to ChatGPT
+    m.box.apiCreds = false; v.fire({ type: 'new', kind: 'codex' }); const q = v.lastTabs().active; const madeQ = created.length; v.fire({ type: 'send', sid: q, text: 'go' }); await flush();
+    const hold = v.events(q).filter((e) => e.kind === 'note').pop();
+    assert.deepStrictEqual([created.length, /^Codex is set to Amazon Bedrock on .+ \(us-west-2, profile stage2\), and no AWS credentials were found there/.test(hold.text), hold.actions], [madeQ, true, [{ id: 'codexChatgpt', label: 'Use ChatGPT' }]]);
+    v.fire({ type: 'noteAction', sid: q, action: 'codexChatgpt' }); await flush(); await flush();
+    assert.strictEqual(v.lastCodexMeter().backend, 'chatgpt');
+    v.fire({ type: 'noteAction', sid: q, action: 'codexChatgpt' }); await flush();
+    assert.strictEqual(v.lastCodexMeter().backend, 'chatgpt', 'pressed again: nothing');
+    m.box.codexLoggedIn = true; m.box.apiCreds = true;
     m.perch.dispose();
     // the key comes back from secret storage in a new window
     const r = install(undefined, { meter: { secrets: { 'perch.codex.apiKey': 'sk-kept-0123456789abcdefghijklmnop' } } }); await flush();
@@ -1589,6 +1612,22 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     ev({ type: 'message_stop' });   // a stop with nothing open says nothing
     assert.deepStrictEqual(out, [{ kind: 'responded', at: out[0].at }, { kind: 'usage', usage: { input: 2, cache_write: 92842, cache_read: 0, output: 11, cache_write_1h: 0 } }, { kind: 'usage', usage: { input: 7, cache_write: 0, cache_read: 0, output: 40, cache_write_1h: 0 } }],
       'the counts as they stood at the end, each conversation\'s own; only the main thread\'s response restarts the cache clock');
+  }
+
+  // ---- the real Codex agent: a thread cannot cross between OpenAI and Bedrock, so a switch across them, or a refusal for encrypted reasoning, starts a new thread
+  {
+    const { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const out = [], a = { opts: {}, threadId: 't1', thread: null, sdk: null, emit: (e) => out.push(e) };
+    CodexAgent.prototype.setBackend.call(a, { apiKey: 'sk-x' }); assert.strictEqual(a.fresh, undefined, 'ChatGPT to the API key: the same provider, the thread goes on');
+    CodexAgent.prototype.setBackend.call(a, { bedrock: { provider: 'amazon-bedrock' } }); assert.strictEqual(a.fresh, true, 'to Bedrock: the thread cannot follow');
+    a.fresh = undefined; a.threadId = null;
+    CodexAgent.prototype.setBackend.call(a, {}); assert.strictEqual(a.fresh, undefined, 'with no thread yet there is nothing to leave');
+    CodexAgent.prototype._said.call(a, '{"error":{"code":"invalid_encrypted_content","message":"invalid encrypted content","param":"input"}}');
+    assert.deepStrictEqual([a.crossed, out], [true, []], 'the refusal is not shown as an error: send starts over and tries again');
+    CodexAgent.prototype._onEvent.call(a, { type: 'turn.failed', error: { message: 'invalid_encrypted_content' } }, Date.now());
+    assert.deepStrictEqual(out, [], 'nor is the failed turn');
+    CodexAgent.prototype._said.call(a, 'This session was recorded with model gpt-6-astra but is resuming with openai.gpt-6-astra.');
+    assert.strictEqual(out.pop().kind, 'note', 'Codex\'s word on the model change is a note, as before');
   }
 
   // ---- the real Claude agent takes Claude Code's word on whether a turn runs: a lost result must not leave a tab working

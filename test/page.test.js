@@ -198,9 +198,12 @@ assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-pla
 $('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
 $('#m-codex').click(); assert.deepStrictEqual([out.pop(), $('#m-codex').title], [{ type: 'openExternal', url: 'https://chatgpt.com/' }, 'Open chatgpt.com'], 'the vendor mark opens the vendor site');
 // under a Codex tab the backend button shows the Codex backend, and a click asks the host to switch it
-host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { bedrock: { endpoint: 'runtime', region: 'us-west-2', profile: 'stage2' }, backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
 assert.deepStrictEqual([shown($('#m-backend')), $('#m-backend').textContent, $('#m-backend').title], [true, 'ChatGPT', 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.']);
-$('#m-backend').click(); assert.deepStrictEqual(out.pop(), { type: 'meterToggle', vendor: 'codex' });
+$('#m-backend').click();
+{ assert.deepStrictEqual(menuItems().map((i) => [i.label, i.on]), [['ChatGPT (login)', true], ['OpenAI API key', false], ['Amazon Bedrock', false]], 'a menu of the three Codex backends, the current one marked');
+  assert(/The runtime endpoint in us-west-2, profile stage2/.test(menuItems()[2].desc), 'Bedrock\'s entry says where it goes');
+  $$('#menu .it')[2].click(); assert.deepStrictEqual([out.pop(), $('#menu')], [{ type: 'codexBackend', value: 'bedrock' }, null], 'a choice goes to the host and closes the menu'); }
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
 assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: CODEX });
@@ -580,9 +583,9 @@ host({ type: 'tabs', tabs: [A, B], active: 'a', gateway: GW });
 $('#add').click(); assert.deepStrictEqual($$('#menu .row').map((r) => r.textContent), ['New Claude tab', 'New Codex tab']);
 $$('#menu .row')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' }, 'a plain tab asks for no gateway, as before');
 assert.deepStrictEqual([$mb.textContent, [...$mu.children].map((n) => n.textContent)], ['sub', ['1.0h 91%', '6.5d 20%']], 'off the gateway, the footer is the window\'s again');
-// under a Codex tab the button stays a switch
+// under a Codex tab the button is Codex's own menu
 host({ type: 'tabs', tabs: [A, B], active: 'b', gateway: GW }); host({ type: 'meter', meter: METER, codex: { vendor: 'Codex', backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 't', level: 'ok', action: 'refresh', lines: [], segments: [], plan: 'plus' } });
-$mb.click(); assert.deepStrictEqual([out.pop(), $('#menu')], [{ type: 'meterToggle', vendor: 'codex' }, null]);
+$mb.click(); assert.deepStrictEqual([out.length, $$('#menu .h').map((n) => n.textContent), menuItems().map((i) => i.label)], [0, ['Codex backend'], ['ChatGPT (login)', 'OpenAI API key', 'Amazon Bedrock']]); d.body.click(); assert.strictEqual($('#menu'), null);
 host({ type: 'tabs', tabs: [A, B], active: 'a', gateway: GW }); host({ type: 'meter', meter: METER });
 
 // ---- new-tab menu and close

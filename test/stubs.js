@@ -14,7 +14,7 @@ const CATALOGS = {
     { value: 'haiku', label: 'Haiku 4.5', description: 'Fastest', efforts: [], defaultEffort: '' },
     { value: 'claude-opus-4-6', label: 'Opus 4.6', description: '', efforts: ['low', 'medium', 'high', 'max'], defaultEffort: '' },
   ], commands: [{ name: 'compact', description: 'Summarise the conversation so far', hint: '[instructions]' }, { name: 'clear', description: 'Start over', hint: '' }] },
-  codex: { defaultModel: { label: 'GPT-5.6-Sol', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' }, models: [
+  codex: { defaultModel: { label: 'GPT-5.6-Sol', slug: 'gpt-5.6-sol', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' }, models: [
     { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: '', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' },
     { value: 'gpt-6-luna', label: 'GPT-6-Luna', description: '', efforts: ALL, defaultEffort: 'medium' },
     { value: 'gpt-5.5', label: 'GPT-5.5', description: '', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
@@ -83,7 +83,8 @@ class FakeAgent {
   setEffort(e) { this.efforts.push(e); }
   setModel(m) { this.models.push(m); }
   dispose() { this.disposed = true; }
-  setApiKey(k) { (this.apiKeys = this.apiKeys || []).push(k); this.o.apiKey = k || undefined; }
+  setApiKey(k) { this.setBackend({ apiKey: k }); }
+  setBackend(b) { (this.apiKeys = this.apiKeys || []).push(b.apiKey || null); (this.backends = this.backends || []).push(b); this.o.apiKey = b.apiKey || undefined; this.o.bedrock = b.bedrock || undefined; }
 }
 
 function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past } = {}) {
@@ -132,7 +133,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     codex: { limits: CODEX_LIMITS(4, 1), error: null, plan: 'plus', at: Date.now() - 60000 }, codexReads: 0 }, meter);
   const fakeMeter = {
     claudeDir: '/nonexistent/perch-test/.claude', settingsPath: '/nonexistent/perch-test/.claude/settings.json',
-    bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
+    bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, settingsEnv: () => box.settingsEnv || {}, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
     fetchUsage: async () => { box.fetches++; return box.usage; },
     computeCostStats: () => { if (box.cost instanceof Error) throw box.cost; return box.cost; },
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),

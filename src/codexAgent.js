@@ -4,6 +4,7 @@
 // is no permission callback here, unlike the Claude side.
 
 const fs = require('fs');
+const { bedrockConfig, bedrockModel } = require('./codexBedrock');
 const os = require('os');
 const path = require('path');
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
@@ -46,18 +47,31 @@ class CodexAgent {
     return true;
   }
 
-  /** The client: the program to run and, on the API backend, the key it runs with (CODEX_API_KEY in its environment). */
+  /** The client: the program to run and, on the API backend, the key it runs with (CODEX_API_KEY in its environment); on
+   * Bedrock, the provider and its region and profile as --config overrides (src/codexBedrock.js). */
   _client() {
     const o = {};
     if (this.opts.executable) o.codexPathOverride = this.opts.executable;
     if (this.opts.apiKey) o.apiKey = this.opts.apiKey;
+    if (this.opts.bedrock) o.config = bedrockConfig(this.opts.bedrock);
     return new this.sdk.Codex(o);
   }
   /** Switch the key the next turn runs with: null means the ChatGPT login. The thread is taken up again by the new client. */
-  setApiKey(key) {
-    this.opts.apiKey = key || undefined;
+  setApiKey(key) { this.setBackend({ apiKey: key }); }
+  /** Switch the backend the next turn runs on: an API key, Bedrock settings, or neither (the ChatGPT login). */
+  setBackend({ apiKey, bedrock } = {}) {
+    // A thread's reasoning is encrypted for the provider that made it (OpenAI's `encrypted_content`), and the other cannot
+    // read it: a thread cannot cross between OpenAI and Bedrock. The next message starts a new one; the old stays on record.
+    if (!!this.opts.bedrock !== !!bedrock && (this.threadId || this.thread)) this.fresh = true;
+    this.opts.apiKey = apiKey || undefined;
+    this.opts.bedrock = bedrock || undefined;
     if (!this.sdk) return;
     this.codex = this._client(); this.changed = true;
+  }
+  /** Leave the thread behind and start another with the next message: its record cannot be carried to this provider. */
+  _startOver(why) {
+    this.threadId = null; this.thread = null; this.changed = false; this.fresh = false; this.crossed = false;
+    this.emit({ kind: 'note', text: why });
   }
 
   _options() {
@@ -67,7 +81,9 @@ class CodexAgent {
       sandboxMode: this.opts.sandboxMode || 'workspace-write',
       approvalPolicy: this.opts.approvalPolicy || 'on-failure',
     };
-    if (this.opts.model) topts.model = this.opts.model;
+    // on Bedrock the model goes by its Bedrock id, and Codex's own default (config.toml) is not one: the catalog's default slug stands in
+    const model = this.opts.bedrock ? bedrockModel(this.opts.model || this.opts.bedrock.defaultModel, this.opts.bedrock.endpoint) : this.opts.model;
+    if (model) topts.model = model;
     if (this.opts.reasoningEffort) topts.modelReasoningEffort = this.opts.reasoningEffort;
     return topts;
   }
@@ -77,6 +93,7 @@ class CodexAgent {
    * on and how to run: so a thread is carried on under a new model, effort, or sandbox by taking it up again with them.
    */
   _thread() {
+    if (this.fresh) this._startOver(`This conversation's reasoning is encrypted for the provider that made it, and ${this.opts.bedrock ? 'Bedrock' : 'OpenAI'} cannot read it: a new thread starts with this message. The old one stays in the sessions list.`);
     if (this.thread && !this.changed) return this.thread;
     const id = this.threadId || (this.thread && this.thread.id) || null;
     this.thread = id ? this.codex.resumeThread(id, this._options()) : this.codex.startThread(this._options());
@@ -107,11 +124,20 @@ class CodexAgent {
     this.emit({ kind: 'busy', busy: true });
     const t0 = Date.now();
     try {
-      const { events } = await this._thread().runStreamed(pics.length ? this._input(text, pics) : text, { signal: this.turnAbort.signal });
-      for await (const e of events) this._onEvent(e, t0);
-    } catch (err) {
-      if (!(this.turnAbort && this.turnAbort.signal.aborted)) this.emit({ kind: 'error', text: String(err && err.message || err) });
-      else this.emit({ kind: 'status', text: 'interrupted' });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        this.crossed = false;
+        try {
+          const { events } = await this._thread().runStreamed(pics.length ? this._input(text, pics) : text, { signal: this.turnAbort.signal });
+          for await (const e of events) this._onEvent(e, t0);
+        } catch (err) {
+          if (this.crossed && attempt === 0) { /* said below */ }
+          else if (!(this.turnAbort && this.turnAbort.signal.aborted)) this.emit({ kind: 'error', text: String(err && err.message || err) });
+          else this.emit({ kind: 'status', text: 'interrupted' });
+        }
+        // a thread resumed on the other provider (from the sessions list, say) is refused for its encrypted reasoning: once, start over and send again
+        if (!(this.crossed && attempt === 0)) break;
+        this._startOver(`This conversation was recorded on ${this.opts.bedrock ? 'OpenAI' : 'Bedrock'}, whose reasoning is encrypted for it, and ${this.opts.bedrock ? 'Bedrock' : 'OpenAI'} cannot read it: a new thread starts with this message. The old one stays in the sessions list.`);
+      }
     } finally {
       this.running = false;
       this.emit({ kind: 'busy', busy: false });
@@ -165,6 +191,7 @@ class CodexAgent {
         return;
       }
       case 'turn.failed':
+        if (/invalid_encrypted_content/.test(String(e.error && e.error.message))) { this.crossed = true; return; }
         this.emit({ kind: 'result', ok: false, duration_ms: Date.now() - t0, error: e.error && e.error.message });
         return;
       case 'error':
@@ -176,7 +203,10 @@ class CodexAgent {
   }
 
   /** Codex says that a thread is being carried on under another model as an error. It is the user's own choice: a note. */
-  _said(text) { this.emit({ kind: /^This session was recorded with model /.test(String(text)) ? 'note' : 'error', text: String(text) }); }
+  _said(text) {
+    if (/invalid_encrypted_content/.test(String(text))) { this.crossed = true; return; }   // the thread cannot cross providers: handled in send
+    this.emit({ kind: /^This session was recorded with model /.test(String(text)) ? 'note' : 'error', text: String(text) });
+  }
 
   /** A message with images, in the form the SDK takes: the text, then each image as a file of its own. */
   _input(text, pics) {

@@ -31,16 +31,16 @@ let c = loadCodexModels(home);                                       // no confi
 assert.deepStrictEqual(c.models.map((m) => m.value), ['gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.5'], 'listed models only, by priority');
 assert.deepStrictEqual(c.models[0], { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: 'big', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'medium' });
 assert.deepStrictEqual(c.models[1].efforts, ['low', 'ultra'], 'levels may be plain strings');
-assert.deepStrictEqual(c.defaultModel, { label: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: '' }, 'unknown default: any listed effort may be chosen');
+assert.deepStrictEqual(c.defaultModel, { label: '', slug: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: '' }, 'unknown default: any listed effort may be chosen');
 
 fs.writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "ultra"\n[mcp_servers.x]\ncommand = "y"\n');
 c = loadCodexModels(home);
-assert.deepStrictEqual(c.defaultModel, { label: 'GPT-5.6-Sol', efforts: ['low', 'ultra'], defaultEffort: 'ultra' }, 'default model and effort from the user config');
+assert.deepStrictEqual(c.defaultModel, { label: 'GPT-5.6-Sol', slug: 'gpt-5.6-sol', efforts: ['low', 'ultra'], defaultEffort: 'ultra' }, 'default model and effort from the user config; the slug is what Bedrock\'s id is made from');
 assert.strictEqual(c.models.find((m) => m.value === 'gpt-6-sol').defaultEffort, 'ultra', 'the configured effort applies to a model that accepts it');
 assert.strictEqual(c.models.find((m) => m.value === 'gpt-5.5').defaultEffort, 'medium', 'and falls back to the model default where it does not');
 
 fs.writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-reserve"\n');
-assert.deepStrictEqual(loadCodexModels(home).defaultModel, { label: 'GPT-Reserve', efforts: ['low', 'medium'], defaultEffort: 'medium' }, 'a hidden model can still be the configured default');
+assert.deepStrictEqual(loadCodexModels(home).defaultModel, { label: 'GPT-Reserve', slug: 'gpt-reserve', efforts: ['low', 'medium'], defaultEffort: 'medium' }, 'a hidden model can still be the configured default');
 fs.writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-private"\n');
 assert.strictEqual(loadCodexModels(home).defaultModel.label, 'gpt-private', 'a default the cache does not know is shown by its id');
 fs.rmSync(home, { recursive: true, force: true });

@@ -123,6 +123,39 @@ the task, so it is a property of the agent too. perch's approach is to
 own neither: it runs each vendor's agent as the vendor's own terminal
 would, and only shows what happens.
 
+### Where the cache lives: the vendor, Bedrock, a proxy
+
+The promise is only ever that the vendor's caching is left intact; whether
+a cache exists is the provider's doing, and the three kinds of provider
+differ.
+
+- **The vendor's own API** (claude.ai, api.anthropic.com, OpenAI) is the
+  reference: Anthropic caches where Claude Code puts its `cache_control`
+  markers and returns the 5m/1h split in `cache_creation`; OpenAI caches
+  any ≥1,024-token prefix on its own and reports hits and writes in
+  `usage`.
+- **Amazon Bedrock is not a proxy.** It hosts the models on its own
+  serving stack, so its caching is its own implementation of each
+  vendor's semantics, with no upstream to lose information between.
+  Measured for OpenAI models on 2026-10-06 (section 15): automatic prefix
+  caching within a thread, usage in OpenAI's shape with write counts.
+  Documented and used daily for Anthropic models: `cache_control`
+  honoured (the Converse API has its own `cachePoint` form), reads and
+  writes reported. Bedrock trails the vendors on newer options, though:
+  the hour-long TTL came later and only for some Claude models (which is
+  why LiteLLM checks the model before passing `ttl: "1h"` to Bedrock),
+  and the 5m/1h split in `cache_creation` is not returned (the zeroed
+  split seen through the gateway was almost certainly a Bedrock route);
+  for OpenAI models there is no published TTL and no cross-thread hit on
+  a first turn.
+- **A proxy** such as the C3 LiteLLM gateway sits between client and
+  provider, and whether the markers survive is a property of its route:
+  passed through unchanged to Anthropic direct, honoured on Bedrock for
+  some models and silently dropped for others, stripped on routes with
+  automatic caching, translated for the Responses API, and the usage
+  breakdown dropped (`c3-gateway.md`). The careful-implementation question
+  is a proxy's, not Bedrock's.
+
 ### The mechanisms
 
 1. **No request of perch's own.** perch never assembles a prompt, never
@@ -534,6 +567,7 @@ perch. A `Write` prompts every time in default mode.
 | Queueing | One turn at a time, so **perch holds the queue** and drains it as each turn ends, without the tab flickering to idle |
 | IDE context | Attached by perch (below) |
 | Stop | An `AbortSignal` on the turn |
+| Backends | Three, perch's own choice (`perch.codex.backend` in global state), given per process so a tab moves on its next turn: the ChatGPT login (nothing given); an OpenAI API key (`CODEX_API_KEY`, from VS Code's secret storage); Amazon Bedrock (`--config` overrides through the SDK's `config`: `model_provider` and `model_providers.<provider>.aws.{region,profile}`, `src/codexBedrock.js`). Codex 0.159 has the Bedrock provider built in, in two forms: `amazon-bedrock`, the Bedrock Mantle endpoint (`bedrock-mantle.<region>.api.aws/openai/v1`), and `amazon-bedrock-runtime`, the runtime's OpenAI-compatible endpoint; both sign with the AWS credential chain (profile, `AWS_*`, `AWS_BEARER_TOKEN_BEDROCK`). On Bedrock a model goes by its Bedrock id: `openai.<slug>` on Mantle, `us.openai.<slug>` on the runtime endpoint (on-demand throughput there wants a cross-region inference profile; `openai.gpt-6-luna` alone is refused), and a tab with no model of its own sends the catalog's default slug in that form, since Codex's own default (`config.toml`) is not a Bedrock name. The ChatGPT connector apps (`features.apps`: Gmail, Calendar, ChatGPT spaces and the rest) are turned off for a Bedrock process: they are features of a ChatGPT account and cannot work there, and for a model Codex's catalog does not know by its cross-region id Codex sends every one of their schemas in full with each request (captured 2026-10-06 against a stand-in endpoint: 236 KB a request with 25 tools on the runtime endpoint, 44 KB with 11 once the apps are off; Mantle with its recognised id and the apps on, 51 KB with `tool_search` deferring them). Measured with GPT-6 Luna and a one-line prompt, apps off: the runtime endpoint 7.9 K input tokens a request, Mantle 9.2 K (with the apps on they had been 37.5 K and 12.4 K). So the runtime endpoint is the default: every Bedrock region, the `bedrock:*` actions a machine on Claude-on-Bedrock already has, and the leaner request; Mantle is the setting, wants its own IAM action (`bedrock-mantle:CreateInference` on a project resource, which the seclab key lacks) and is not in every region (us-west-2 answered 404 for every model), so its region defaults to us-east-1 while the runtime endpoint follows the machine's. A thread cannot cross between OpenAI and Bedrock: its reasoning items are `encrypted_content`, encrypted for the provider that made them, and the other refuses them (`invalid_encrypted_content`, seen on seclab 2026-10-06 when a ChatGPT thread was resumed on Bedrock). So a switch across providers starts a new thread with the next message, said in a note, and a thread resumed from the sessions list on the other provider is started over once and the message sent again; the old thread stays on record. ChatGPT and the API key are the same provider, and a thread goes on between them |
 
 ### IDE context
 
@@ -1212,6 +1246,9 @@ track vendor updates. Without an extension, a tab shows a letter.
 | The gateway on a machine pinned to Bedrock, first run to first answer | seclab (2026-10-05): `CLAUDE_CODE_USE_BEDROCK=1` in both `~/.claude/settings.json` and the pod's environment, a Bedrock `ANTHROPIC_MODEL` exported, no gateway file. A tab put on the gateway held its message with the note and its two buttons; the file was made from the template, then filled; the next message was answered through the gateway (`via gpt-6-luna`, model button `nexus-auto-bargain[1m]`, cache pill 60m), the window's Bedrock tabs untouched |
 | Deleting a session, by each agent's own means | Two sessions made for the purpose in a temporary folder (2026-10-05): a Claude one, listed by the SDK before `deleteSession` and not after (`getSessionInfo` then answers nothing); a Codex one, whose rollout was there before `codex delete --force` and gone after |
 | A streamed response's token counts arrive at its end | One streamed request to the C3 gateway (2026-10-05): `message_start` usage `input 0, output 0, cache 0`; `message_delta` usage `input 9, output 17`. On seclab the estimate taken at the start had read ≈$0.0000 for a turn whose record shows 92,842 tokens written |
+| The runtime endpoint's extra tokens were the connector apps | Requests captured against a stand-in endpoint (2026-10-06): runtime with `us.openai.gpt-6-luna` 236 KB, 25 tools (218 KB: `mcp__codex_apps__chatgpt_space` 62 KB, `sites` 41 KB, `gmail` 33 KB, `google_calendar` 18 KB, …, `multi_agent_v1` 10 KB); Mantle with `openai.gpt-6-luna` 51 KB, 16 tools (27 KB, `tool_search` among them); instructions 18 KB and the three input items identical. Of five overrides tried, only `features.apps=false` changed anything: 44 KB, 11 tools. Real turns with it: runtime 7,914 in, Mantle 9,220 in, both `ok` |
+| Codex on Amazon Bedrock | `codex exec` with the built-in provider and the user's AWS profile (2026-10-06): Mantle in us-east-1 with `openai.gpt-6-luna` answered (12,412 in, 5 out); the runtime endpoint in us-west-2 with `us.openai.gpt-6-luna` answered (37,536 in); Mantle in us-west-2 was 404 for every spelling; the runtime endpoint refused `openai.gpt-6-luna` without the cross-region prefix. Then one turn through perch's `CodexAgent` with the Bedrock options and no model chosen: `ok`, the model sent as `openai.gpt-6-luna` |
+| Codex's prompt cache holds on Bedrock | Three one-line turns in one thread on Bedrock Mantle, GPT-6 Luna (2026-10-06), Codex's cumulative usage: input 12,438 / 24,894 / 37,425, cache reads 0 / 12,396 / 24,810, so each turn after the first read its whole prefix from the cache and wrote only its own ~12.4 K (the system instructions and tools; a turn's own text is a few hundred). The same three turns on the ChatGPT backend: input 14,508 / 29,511 / 44,542, cache reads 11,008 / 25,088 / 36,096 (the first turn already hit a shared prefix), no writes reported on the plan. So Bedrock Mantle carries OpenAI's prompt caching through: automatic prefix caching within a thread, and the usage in OpenAI's shape (`cached_input_tokens`, `cache_write_input_tokens`, so writes billed the GPT-5.6 way). Two differences: no cross-thread hit on a first turn (identical runs 15–20 minutes earlier had cached nothing reusable: the cache is scoped by `prompt_cache_key`, which Codex sets to the thread id, or its lifetime is shorter than OpenAI's 30 minutes), and no published TTL |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
@@ -1294,6 +1331,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | A tab the user has not named takes the title in its agent's record | Keep the first-message title on the tab; or show the tab's title in the list | Claude Code retitles a session as it goes and the list reads the records, so a tab could not be found in the list by the name on it. The record is the one name that outlives the tab |
 | Deleting a session goes through the agent's own delete, after a modal question | Remove the files by hand; no confirmation | Each agent knows what its record consists of (Codex keeps names apart from rollouts); a deleted conversation cannot be brought back, which is what a waiting dialog is for |
 | The cache clock restarts with each request, and a turn's token counts are read at each response's end | Once per turn, from the result and the assistant message | A long turn read "cold" throughout after an expiry; a gateway reports its counts only when a streamed response closes |
+| Codex on Bedrock through Codex's own provider, as `--config` overrides per process | A custom `[model_providers.x]` with Bedrock's OpenAI-compatible URL; a gateway only | Codex signs for Bedrock itself and knows the two endpoints; overrides per process leave `~/.codex/config.toml` alone, as the API key does, and a tab moves on its next turn |
+| The runtime endpoint by default, in the machine's region, with the ChatGPT connector apps off; Mantle by setting | Mantle by default (chosen first, for a third of the tokens); the apps left on | The token gap was the connector apps' schemas sent in full for a model id Codex's catalog does not know, not the endpoint; with the apps off, which cannot work on Bedrock anyway, the runtime endpoint is the leaner one, is in every region, and takes the IAM actions already granted |
 | The ways on from a held message are buttons under its note | A VS Code notification alone | A notification hides itself after a few seconds; on a first run it was gone before it was read. The notification stays for the longer explanation |
 | A gateway tab's process is given the gateway's variables as its own settings, over the user's | Hold the tab's first message and tell the user to switch the window to the subscription (as it did until 0.6.41) | On a machine whose only Claude login is Bedrock (seclab) the instruction had no good outcome: switching the window would strand the Bedrock tabs. Settings given on the command line outrank the user's file, so the tab can be made right by itself; the token is kept out of them, since a process's arguments are readable by others on the machine |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |

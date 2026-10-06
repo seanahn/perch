@@ -27,6 +27,15 @@ guarantee that. Claude Code and Codex do. A harness that replaces them
 with its own loop and its own prompt gets its own caching, its own
 compaction, and API billing instead of your subscription.
 
+The cache itself is the provider's. On the vendors' own APIs it is the
+reference. On Amazon Bedrock, which hosts the models rather than proxying
+the vendors, both vendors' caching works as their own does (measured for
+Codex on Bedrock: every turn after the first read its whole prefix from
+the cache), with a lag on the newest options (the hour-long Claude cache
+only on some models, no 5m/1h breakdown). Behind a proxy such as an LLM
+gateway, whether the markers survive depends on the route; perch shows
+what came back, and `design.md` says what was measured.
+
 ```
 PERCH TAB   (the vendor's agent lays out the prompt; perch never touches it)
 
@@ -405,14 +414,27 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 
 The footer follows the active tab.
 
-**Under a Codex tab**: a **backend switch** (`ChatGPT` or
-`API`), your ChatGPT plan, and the plan's usage: percent remaining and
-time to reset for the five-hour window and the week. The switch moves
-Codex between your ChatGPT login and an OpenAI API key: the first switch
-asks for the key and keeps it in VS Code's secret storage, never in a
-file of perch's; Codex gets it in its environment, per turn, so open tabs
-move on their next message with nothing restarted. On the key there is no
-plan and no limit to show, only per-token billing on your OpenAI account.
+**Under a Codex tab**: a **backend menu** (`ChatGPT`, `API` or
+`Bedrock`), your ChatGPT plan, and the plan's usage: percent remaining and
+time to reset for the five-hour window and the week. The menu moves
+Codex between your ChatGPT login, an OpenAI API key and Amazon Bedrock.
+Choosing the key the first time asks for it and keeps it in VS Code's
+secret storage, never in a file of perch's; Codex gets it in its
+environment, per turn, so open tabs move on their next message with
+nothing restarted. Bedrock uses Codex's own Bedrock provider with the AWS
+credentials on the machine (a profile, `AWS_*` variables, or
+`AWS_BEARER_TOKEN_BEDROCK`); the region and profile come from
+`perch.codex.bedrock.region` and `.profile`, else from the environment or
+the env block of `~/.claude/settings.json`, where a machine set up for
+Claude on Bedrock has them. By default Codex goes through the Bedrock
+runtime's OpenAI-compatible endpoint in your region, with models named
+`us.openai.<model>` and the same `bedrock:*` permissions Claude uses;
+`perch.codex.bedrock.endpoint: mantle` uses Bedrock Mantle instead
+(us-east-1 by default, `openai.<model>`, its own IAM action). The ChatGPT
+connector apps are off on Bedrock, where they cannot work; left on, their
+schemas cost about 25 K tokens a request. The model menu stays Codex's;
+each name is sent in Bedrock's form. On the key or on Bedrock there is no plan and no limit to show,
+only per-token billing on that account.
 `Perch: Set OpenAI API Key for Codex…` and `Perch: Forget the OpenAI API
 Key for Codex` manage the key. Codex records these in its session files after every turn, so
 perch reads them from `~/.codex/sessions/` and makes no request. The

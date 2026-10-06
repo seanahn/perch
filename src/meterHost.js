@@ -8,10 +8,11 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { createMeter, summarize } = require('./meter');
+const CodexBedrock = require('./codexBedrock');
 const { readCodexUsage } = require('./codexMeter');
 
 const CACHE_KEY = 'perch.meter.limits';
-const CODEX_BACKEND_KEY = 'perch.codex.backend';    // 'chatgpt' (the login) or 'api' (a key); perch's own choice, since Codex has no setting for it
+const CODEX_BACKEND_KEY = 'perch.codex.backend';    // 'chatgpt' (the login), 'api' (a key) or 'bedrock' (AWS credentials); perch's own choice, since Codex has no setting for it
 const CODEX_SECRET = 'perch.codex.apiKey';
 const STASH = 'perch.meter.stash.';
 const POLL_RETRY_MS = 15000;          // fast retry until the first successful fetch
@@ -67,9 +68,13 @@ class MeterHost {
     s.plan = u.plan || ''; s.reached = u.reached || null; s.credits = u.credits || null;
     s.asOf = true;                     // the reading is as old as the last Codex turn, not as the last poll
     s.backend = this.codexBackend();
-    s.backendLabel = s.backend === 'api' ? 'API' : 'ChatGPT';
-    s.backendTitle = s.backend === 'api' ? 'Codex runs with your OpenAI API key, billed per token; the plan\'s limits do not apply. Click to use the ChatGPT login instead.' : 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.';
+    s.backendLabel = s.backend === 'api' ? 'API' : s.backend === 'bedrock' ? 'Bedrock' : 'ChatGPT';
+    s.bedrock = this.codexBedrock();
+    s.backendTitle = s.backend === 'api' ? 'Codex runs with your OpenAI API key, billed per token; the plan\'s limits do not apply. Click to choose a backend.'
+      : s.backend === 'bedrock' ? `Codex runs on Amazon Bedrock (${s.bedrock.endpoint === 'runtime' ? 'the runtime endpoint' : 'Mantle'}, ${s.bedrock.region}${s.bedrock.profile ? ', profile ' + s.bedrock.profile : ''}) with your AWS credentials, billed to that account; the plan's limits do not apply. Click to choose a backend.`
+      : 'Codex runs on your ChatGPT login and its plan. Click to choose a backend.';
     if (s.backend === 'api') { s.segments = []; s.level = 'none'; s.lines = ['Codex is on your API key: billed per token, no plan limits.']; s.action = null; s.plan = ''; }
+    if (s.backend === 'bedrock') { s.segments = []; s.level = 'none'; s.lines = ['Codex is on Amazon Bedrock: billed to the AWS account, no plan limits.']; s.action = null; s.plan = ''; }
     return s;
   }
   refreshCodex() { this.emit('codex'); }
@@ -78,7 +83,16 @@ class MeterHost {
   // so the choice is perch's to keep, and a tab moves on its next turn with nothing restarted.
   /** The key the API backend would run with: the one stored, or OPENAI_API_KEY from the environment. */
   codexApiKey() { return this.codexKey || process.env.OPENAI_API_KEY || null; }
-  codexBackend() { return this.context.globalState.get(CODEX_BACKEND_KEY) === 'api' && this.codexApiKey() ? 'api' : 'chatgpt'; }
+  codexBackend() { const v = this.context.globalState.get(CODEX_BACKEND_KEY); return v === 'api' && this.codexApiKey() ? 'api' : v === 'bedrock' ? 'bedrock' : 'chatgpt'; }
+  /** How Codex reaches Bedrock: perch's settings, else the AWS region and profile of the environment and of Claude Code's settings. */
+  codexBedrock() { return CodexBedrock.bedrockSettings({ cfg: (k) => vscode.workspace.getConfiguration('perch').get(k), env: process.env, claudeEnv: this.meter.settingsEnv ? this.meter.settingsEnv() : {} }); }
+  /** The backend the user chose in the footer's menu. The API key is asked for first when there is none; false if that was declined. */
+  async chooseCodexBackend(backend) {
+    if (backend === 'api' && !this.codexApiKey() && !(await this.setCodexApiKey())) return false;
+    if (backend !== 'api' && backend !== 'bedrock') backend = 'chatgpt';
+    await this.setCodexBackend(backend);
+    return true;
+  }
   async setCodexBackend(backend) { await this.context.globalState.update(CODEX_BACKEND_KEY, backend); this.emit('codexBackend'); }
   /** Ask for a key and keep it in secret storage. Returns true when one is stored. */
   async setCodexApiKey() {
