@@ -87,7 +87,7 @@ class FakeAgent {
   setBackend(b) { (this.apiKeys = this.apiKeys || []).push(b.apiKey || null); (this.backends = this.backends || []).push(b); this.o.apiKey = b.apiKey || undefined; this.o.bedrock = b.bedrock || undefined; }
 }
 
-function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past } = {}) {
+function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders } = {}) {
   // the agents' own records of past sessions: what they list, and every name written to them
   const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [] }, past);
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
@@ -139,7 +139,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
+  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -181,7 +181,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: [{ uri: { fsPath: process.cwd() } }], getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
@@ -191,7 +191,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       tabGroups: { get activeTabGroup() { return ui.group ? ui.group() : this.all[0]; }, get all() { return [{ viewColumn: 2, tabs: [...ui.waiting, ...ui.panels.filter((p) => !p.disposed).map((p) => ({ label: p.title, input: { viewType: 'mainThreadWebview-' + p.viewType } })), { label: 'a.js', input: { uri: {} } }, { label: 'Other', input: { viewType: 'mainThreadWebview-other.view' } }] }]; },
         close: async (t) => { ui.closedTabs.push(t.label); const i = ui.waiting.indexOf(t); if (i >= 0) ui.waiting.splice(i, 1); return true; } },
       showTextDocument: async (doc, o) => { ui.columns.push(o && o.viewColumn); ui.opened.push([doc.uri.fsPath, o && o.selection ? [o.selection.a, o.selection.c] : null]); },
-      showInputBox: async (o) => { ui.asked.push(o); return ui.inputs.shift(); },
+      showInputBox: (o, token) => new Promise((resolve) => { ui.asked.push(o); if (ui.inputs.length) { resolve(ui.inputs.shift()); return; } ui.pendingInputs.push(resolve); if (token) token.onCancellationRequested(() => { const i = ui.pendingInputs.indexOf(resolve); if (i >= 0) ui.pendingInputs.splice(i, 1); resolve(undefined); }); }),
       createStatusBarItem: (id, align, prio) => { const it = { id, prio, text: '', tooltip: '', shown: false, disposed: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() { this.disposed = true; this.shown = false; } }; ui.bars.push(it); return it; },
       withProgress: async (o, task) => { ui.progress.push(o.title); return task({ report: (r) => ui.progress.push(r.message) }); },
       showOpenDialog: async (o) => { ui.dialogs.push(o); return ui.picked; },
@@ -213,6 +213,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     StatusBarAlignment: { Left: 1, Right: 2 },
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
     ThemeColor: class { constructor(id) { this.id = id; } },
+    CancellationTokenSource: class { constructor() { const subs = []; this.token = { isCancellationRequested: false, onCancellationRequested: (f) => { subs.push(f); return { dispose() {} }; } }; this._subs = subs; } cancel() { if (this.token.isCancellationRequested) return; this.token.isCancellationRequested = true; for (const f of this._subs) f(); } dispose() {} },
     ThemeIcon: class { constructor(id) { this.id = id; } },
     Range: class { constructor(a, b, c, d) { Object.assign(this, { a, b, c, d }); } },
     MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } appendCodeblock(v) { this.value += '\n```\n' + v + '\n```\n'; return this; } },

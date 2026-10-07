@@ -9,7 +9,8 @@ const vals = (list) => list.map((o) => o.value);
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
 
 (async () => {
-  const { perch, registered, commands, memento, picks, cats, loads } = install();
+  const extraRoot = '/git/perch-extra-root';
+  const { perch, registered, commands, memento, picks, cats, loads } = install(undefined, { workspaceFolders: [process.cwd(), extraRoot, extraRoot] });
   const p = registered['perch.main'];
   assert(p, 'single view registered');
 
@@ -80,6 +81,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   assert.strictEqual(created.length, 3, 'each used tab has its own agent');
   assert.deepStrictEqual(created[1].sent, ['second claude']); assert.deepStrictEqual(created[0].sent.length, 1, 'first agent untouched');
   assert.strictEqual(created[2].o.sandboxMode, 'workspace-write', 'codex tab got its sandbox');
+  assert.deepStrictEqual(created[2].o.additionalDirectories, [extraRoot], 'other folders in a multi-root workspace are added to Codex once');
 
   // mode: claude switches live, codex applies before start and notes after
   v1.fire({ type: 'setMode', sid: c1, value: 'plan' });
@@ -1152,6 +1154,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'noteAction', sid: q, action: 'codexChatgpt' }); await flush();
     assert.strictEqual(v.lastCodexMeter().backend, 'chatgpt', 'pressed again: nothing');
     m.box.codexLoggedIn = true; m.box.apiCreds = true;
+    // the key prompt left waiting (the user picked the key, then changed their mind to Bedrock from the menu): taken down, and its answer not acted on
+    v.fire({ type: 'codexBackend', value: 'chatgpt' }); await flush(); await flush();
+    await m.commands['perch.codex.clearApiKey'](); await flush();
+    const asked0 = m.ui.asked.length;
+    v.fire({ type: 'codexBackend', value: 'api' }); await flush();   // no key stored: the prompt opens and waits (no input queued)
+    assert.deepStrictEqual([m.ui.asked.length, m.ui.pendingInputs.length], [asked0 + 1, 1], 'the prompt is up');
+    v.fire({ type: 'codexBackend', value: 'bedrock' }); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.pendingInputs.length, v.lastCodexMeter().backend], [0, 'bedrock'], 'Bedrock chosen while it waited: the prompt is taken down, Codex is on Bedrock');
+    assert.strictEqual(await m.secrets.get('perch.codex.apiKey'), undefined, 'and no key was kept');
     m.perch.dispose();
     // the key comes back from secret storage in a new window
     const r = install(undefined, { meter: { secrets: { 'perch.codex.apiKey': 'sk-kept-0123456789abcdefghijklmnop' } } }); await flush();
@@ -1618,6 +1629,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   {
     const { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
     const out = [], a = { opts: {}, threadId: 't1', thread: null, sdk: null, emit: (e) => out.push(e) };
+    const options = CodexAgent.prototype._options.call({ opts: { cwd: '/git/one', additionalDirectories: ['/git/two', '/git/three'] } });
+    assert.deepStrictEqual([options.workingDirectory, options.additionalDirectories], ['/git/one', ['/git/two', '/git/three']], 'the real Codex SDK receives every multi-root workspace folder');
     CodexAgent.prototype.setBackend.call(a, { apiKey: 'sk-x' }); assert.strictEqual(a.fresh, undefined, 'ChatGPT to the API key: the same provider, the thread goes on');
     CodexAgent.prototype.setBackend.call(a, { bedrock: { provider: 'amazon-bedrock' } }); assert.strictEqual(a.fresh, true, 'to Bedrock: the thread cannot follow');
     a.fresh = undefined; a.threadId = null;

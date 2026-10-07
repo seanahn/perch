@@ -114,6 +114,12 @@ function cwd() {
   const f = vscode.workspace.workspaceFolders;
   return f && f.length ? f[0].uri.fsPath : require('os').homedir();
 }
+
+/** Every folder in a multi-root workspace except the primary working directory. */
+function additionalCwds() {
+  const primary = cwd();
+  return [...new Set((vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath))].filter((p) => p !== primary);
+}
 const IDE_MAX_CHARS = 12000;          // a selection longer than this is cut, and says so
 
 /**
@@ -362,6 +368,7 @@ class Session {
     } else {
       this.agent = new CodexAgent({
         cwd: cwd(), emit, resume,
+        additionalDirectories: additionalCwds(),
         sandboxMode: this.mode,
         approvalPolicy: cfg('codex.approvalPolicy'),
         model: this.model || undefined,

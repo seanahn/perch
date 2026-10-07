@@ -43,21 +43,35 @@ PERCH TAB   (the vendor's agent lays out the prompt; perch never touches it)
   turn 2   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×
   turn 3   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×
 
-HARNESS   (its own loop rebuilds the prompt every turn)
+A WELL-BUILT HARNESS   (Cursor, measured on the same model and provider)
+
+  turn 1   [system · tools · conversation so far] [new message]  → cache written
+  turn 2   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×   (~96 % read back)
+  turn 3   [same bytes, unchanged ................] [new message]  → cache hit, 0.1×
+
+A HARNESS THAT RE-RENDERS CONTEXT NEAR THE FRONT   (Continue, as its source lays it out)
 
   turn 1   [system · editor state A · @context · history] [message]  → cache written
   turn 2   [system · editor state B · @context' · history] [message] → prefix changed: cache miss, 1×
-  turn 3   [system · editor state C · @context'' · history] [message] → cache miss, 1×
 ```
+
+So the cache is not what separates a shell from a harness: a harness that
+keeps its prefix stable caches as well as the terminal does. What perch
+guarantees is narrower: it adds nothing that could bust the vendor's
+cache, and it keeps the vendor's billing. The rest of the difference is
+the billing path (a subscription applies only to the vendor's own agent;
+a harness is API billing by construction) and the agent itself (prompt,
+tools, compaction, permissions, tool-call style).
 
 ### Where the difference comes from
 
-1. **Prompt assembly.** A harness such as Continue, or an IDE such as
-   Cursor, runs its own agent loop over the vendor's model. To be useful
-   it writes the editor's state into the prompt (the open file, the
-   selection, @-mentioned files, the workspace tree), and that state
-   changes between turns, near the front of the prompt, where a change
-   invalidates everything after it. perch never builds a request. The
+1. **Prompt assembly.** A harness runs its own agent loop over the
+   vendor's model and writes the editor's state into the prompt (the open
+   file, the selection, @-mentioned files, the workspace tree). Where that
+   lands decides the cache: near the front, where it changes between
+   turns, it invalidates everything after it (Continue's context
+   providers, as its source lays them out); behind a stable prefix, it
+   costs nothing (Cursor, measured). perch never builds a request. The
    prompt an agent sends from a perch tab is the one it would send from a
    terminal, so a tab's cache hits are the terminal's cache hits, and a
    tab costs what a terminal session costs. IDE context in perch is
@@ -87,16 +101,20 @@ HARNESS   (its own loop rebuilds the prompt every turn)
 | | perch | Cursor | Continue |
 | --- | --- | --- | --- |
 | Agent | the vendor's own: Claude Code, Codex, through their SDKs | Cursor's own loop and middleware, in a forked editor | Continue's own harness, in an extension |
-| Prompt | laid out by the vendor's agent; perch adds nothing | rebuilt by the IDE each turn, with editor state | rebuilt each turn from @-context providers |
-| Cache behaviour | the terminal's: a stable prefix, hits turn after turn | editor state and selections in the prefix break the match | dynamic context in the prefix breaks the match |
+| Prompt | laid out by the vendor's agent; perch adds nothing | Cursor's own, closed source; its prefix stays stable in practice | rebuilt each turn from @-context providers |
+| Cache behaviour | the terminal's: a stable prefix, hits turn after turn | the same: ~96 % of each turn read back on turns 2+, measured (Claude Code 95 %) | dynamic context in the prefix breaks the match (from its source; not measured) |
 | Cost basis | your existing subscriptions and logins; API / Bedrock when you switch | Cursor's plans and request credits, or an API key | your own API key |
 | Compaction, memory, MCP | the vendor's: `CLAUDE.md`, hooks, skills, MCP, sub-agents | Cursor's own indexing and context filters | Continue's client-side providers |
-| Cost of a long session | that of a terminal session | several times a terminal session, by the reports of people who have measured it | several times a terminal session |
+| Cost of a long session | that of a terminal session | about 10 % more than Claude Code on the same model and provider (twice the tool calls, at cached rates), on Cursor's plans rather than your subscription | not measured; its prefix re-rendering says more than a terminal session |
 
-The multiples for harnesses are others' measurements, not perch's: what
-perch can show is that a tab's cache reads and costs are a terminal's,
-turn by turn, in its own footer. The full reasoning, with what has and
-has not been verified, is in [design.md](design.md), section 3.
+The Cursor figures are one controlled measurement (Claude Code and Cursor
+on Opus 5.5 through Bedrock, the same prompts, one price basis,
+2026-10-06); an earlier version of this page said "several times a
+terminal session" on no source, and a public 5.5× figure turns out to be
+one run on mixed models with no cache analysis. What perch can show is
+that a tab's cache reads and costs are a terminal's, turn by turn, in its
+own footer. The full reasoning, with what has and has not been verified,
+is in [design.md](design.md), sections 2 and 3.
 
 | Tab kind | Agent | How it runs | Auth |
 | --- | --- | --- | --- |

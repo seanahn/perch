@@ -86,8 +86,11 @@ class MeterHost {
   codexBackend() { const v = this.context.globalState.get(CODEX_BACKEND_KEY); return v === 'api' && this.codexApiKey() ? 'api' : v === 'bedrock' ? 'bedrock' : 'chatgpt'; }
   /** How Codex reaches Bedrock: perch's settings, else the AWS region and profile of the environment and of Claude Code's settings. */
   codexBedrock() { return CodexBedrock.bedrockSettings({ cfg: (k) => vscode.workspace.getConfiguration('perch').get(k), env: process.env, claudeEnv: this.meter.settingsEnv ? this.meter.settingsEnv() : {} }); }
+  /** Take down the API key prompt if one is waiting. */
+  cancelKeyPrompt() { const c = this.keyPrompt; this.keyPrompt = null; if (c) { try { c.cancel(); c.dispose(); } catch (_) { /* gone already */ } } }
   /** The backend the user chose in the footer's menu. The API key is asked for first when there is none; false if that was declined. */
   async chooseCodexBackend(backend) {
+    if (backend !== 'api') this.cancelKeyPrompt();   // a key prompt still waiting is overtaken by this choice
     if (backend === 'api' && !this.codexApiKey() && !(await this.setCodexApiKey())) return false;
     if (backend !== 'api' && backend !== 'bedrock') backend = 'chatgpt';
     await this.setCodexBackend(backend);
@@ -96,8 +99,15 @@ class MeterHost {
   async setCodexBackend(backend) { await this.context.globalState.update(CODEX_BACKEND_KEY, backend); this.emit('codexBackend'); }
   /** Ask for a key and keep it in secret storage. Returns true when one is stored. */
   async setCodexApiKey() {
-    const key = await vscode.window.showInputBox({ prompt: 'OpenAI API key for Codex', placeHolder: 'sk-…', password: true, ignoreFocusOut: true, validateInput: (v) => (v && v.trim().length > 20 ? null : 'That does not look like an API key') });
-    if (!key) return false;
+    // one prompt at a time: a choice made while it waits (another backend from the menu, say) takes it down, and its answer
+    // is then not acted on. Without that the box stayed open, and a key typed into it later would have put Codex back on the key
+    this.cancelKeyPrompt();
+    const cts = vscode.CancellationTokenSource ? new vscode.CancellationTokenSource() : null;
+    this.keyPrompt = cts;
+    let key;
+    try { key = await vscode.window.showInputBox({ prompt: 'OpenAI API key for Codex', placeHolder: 'sk-…', password: true, ignoreFocusOut: true, validateInput: (v) => (v && v.trim().length > 20 ? null : 'That does not look like an API key') }, cts ? cts.token : undefined); }
+    finally { if (this.keyPrompt === cts) this.keyPrompt = null; }
+    if (!key || (cts && cts.token.isCancellationRequested)) return false;
     this.codexKey = key.trim();
     try { if (this.context.secrets && this.context.secrets.store) await this.context.secrets.store(CODEX_SECRET, this.codexKey); } catch (_) { /* kept for this window at least */ }
     return true;

@@ -13,6 +13,7 @@ class CodexAgent {
   /**
    * @param {object} opts
    * @param {string} opts.cwd
+   * @param {string[]} [opts.additionalDirectories]  other roots in a multi-root workspace
    * @param {(ev: object) => void} opts.emit
    * @param {string} [opts.approvalPolicy]
    * @param {string} [opts.sandboxMode]
@@ -77,6 +78,7 @@ class CodexAgent {
   _options() {
     const topts = {
       workingDirectory: this.opts.cwd,
+      additionalDirectories: this.opts.additionalDirectories,
       skipGitRepoCheck: true,
       sandboxMode: this.opts.sandboxMode || 'workspace-write',
       approvalPolicy: this.opts.approvalPolicy || 'on-failure',

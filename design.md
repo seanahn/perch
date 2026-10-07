@@ -72,6 +72,7 @@ stable from call to call, which only the agent controls.
 | OpenCode | first two system messages and last two conversation messages | largely: a purpose-built coding agent | 5 minutes | API, per token |
 | Continue | opt-in, coarse (`cacheBehavior`) | no: context providers re-render near the front | 5 minutes | API, per token |
 | Continue behind LiteLLM | injected at the gateway | no, same | 5 minutes | API, per token, capped |
+| Cursor | its own, closed source | yes, measured: ~96 % of each turn read back on turns 2+ (bench 006, Bedrock Opus 5.5) | 5 minutes on Bedrock | Cursor's plans, or API |
 
 OpenCode's row was checked against its source
 (`packages/opencode/src/provider/transform.ts`, `applyCaching`). Its
@@ -82,6 +83,48 @@ harness.
 
 The same reasoning applies on the other side: Codex's agent manages its
 own caching against OpenAI's API.
+
+### What was claimed about Cursor, and what was measured
+
+Until 2026-10-06 this document and the README said a harness such as
+Cursor costs "several times a terminal session", and the README's diagram
+showed a harness missing the cache on every turn because it re-renders
+editor state near the front of the prompt. That was reasoning from
+Continue's source applied to Cursor by analogy, and the "several times"
+figure had no source of its own. Two sources now exist, and they say
+less than the claim did.
+
+- **A public comparison** ([futureproofing.dev, "Claude Code vs Cursor:
+  token efficiency, 2026"](https://www.futureproofing.dev/resources/ai-native-team/claude-code-vs-cursor-token-efficiency-2026))
+  reports Claude Code using 33 K tokens against Cursor Agent's 188 K on
+  one task, a Next.js build with Tailwind 4 and shadcn: 5.5×. Read
+  closely it does not support a caching claim: it is one run by one
+  developer, Claude Code on Opus against Cursor on GPT-5 (the authors
+  say so, and warn against "a universal constant across every task"),
+  it gives no cache hit rates and no cache-busting analysis, and it
+  states that "a controlled, multi-task, peer-reviewed token benchmark
+  across identical models does not exist in sourceable form".
+- **A controlled measurement**, the user's bench
+  (`/git/c3/docs/notes/006-claude-code-backend-bench.md`, 2026-10-06):
+  Claude Code and Cursor on the same model and provider, Opus 5.5 on
+  Bedrock, the same three prompts, on one price basis. Cache hits on
+  turns 2+: 95 % for Claude Code, 96 % for Cursor. Model cost per run:
+  $0.40 against $0.44 (tokens only), a 10 % gap, which is Cursor's
+  twice-as-many tool calls (19 against 8) at cached rates, not the cache.
+  An earlier 50 % figure in that bench came from pricing Opus 5.5 at Opus
+  4.x list; the corrected rates fit Claude Code's own accounting to a
+  cent.
+
+So the cache is not what separates a shell from a harness: a harness
+that lays its prompt out carefully, as Cursor evidently does, keeps its
+prefix stable too. What separates them is the billing path (a
+subscription applies only to the vendor's own agent; a harness is API
+billing by construction), the agent's own prompt, tools, compaction and
+permissions, and the agent's tool-call style. perch's claim is
+accordingly narrower than it was: it adds nothing that could bust the
+cache, which is a guarantee of not making it worse, and it keeps the
+vendor's billing. The 5.5× above is a mixed-model single run and is not
+cited as a multiple anywhere else in this document.
 
 ### What follows from the decision
 
@@ -336,6 +379,17 @@ throwaway directories and stand-in processes with no editor running.
 
 Both SDKs are ES modules. The extension is CommonJS, so they are loaded
 with a dynamic `import()`.
+
+### Multi-root workspaces
+
+The first folder in VS Code's `workspaceFolders` remains the agents'
+working directory. For Codex, every other folder is passed to the SDK as
+an `additionalDirectory`, which becomes a `codex exec --add-dir` argument.
+Thus **Workspace** mode keeps its sandbox while granting the Codex session
+read/write access to every root in a multi-root VS Code workspace; it is
+not silently limited to the first folder. Duplicate folder paths are
+removed before the thread starts. A running agent keeps the roots it was
+started with, so a workspace-folder change takes effect in a new session.
 
 ## 5. Sessions and surfaces
 
@@ -1246,9 +1300,11 @@ track vendor updates. Without an extension, a tab shows a letter.
 | The gateway on a machine pinned to Bedrock, first run to first answer | seclab (2026-10-05): `CLAUDE_CODE_USE_BEDROCK=1` in both `~/.claude/settings.json` and the pod's environment, a Bedrock `ANTHROPIC_MODEL` exported, no gateway file. A tab put on the gateway held its message with the note and its two buttons; the file was made from the template, then filled; the next message was answered through the gateway (`via gpt-6-luna`, model button `nexus-auto-bargain[1m]`, cache pill 60m), the window's Bedrock tabs untouched |
 | Deleting a session, by each agent's own means | Two sessions made for the purpose in a temporary folder (2026-10-05): a Claude one, listed by the SDK before `deleteSession` and not after (`getSessionInfo` then answers nothing); a Codex one, whose rollout was there before `codex delete --force` and gone after |
 | A streamed response's token counts arrive at its end | One streamed request to the C3 gateway (2026-10-05): `message_start` usage `input 0, output 0, cache 0`; `message_delta` usage `input 9, output 17`. On seclab the estimate taken at the start had read ≈$0.0000 for a turn whose record shows 92,842 tokens written |
+| What Codex's cache is worth on Luna through Bedrock | A five-turn session on `us.openai.gpt-6-luna` through the runtime endpoint (2026-10-06): read README and design, four questions on them. 401 K input tokens in all, of which 352,575 read from the cache, 48,424 written, 22 sent fresh; 4,474 out. As billed at Bedrock's list prices $0.0130; the same tokens with no cache $0.0466: 72 % less. The hits are within a turn as much as between turns: the first turn, a dozen file reads, already read 61,679 tokens from the cache of its own earlier steps |
 | The runtime endpoint's extra tokens were the connector apps | Requests captured against a stand-in endpoint (2026-10-06): runtime with `us.openai.gpt-6-luna` 236 KB, 25 tools (218 KB: `mcp__codex_apps__chatgpt_space` 62 KB, `sites` 41 KB, `gmail` 33 KB, `google_calendar` 18 KB, …, `multi_agent_v1` 10 KB); Mantle with `openai.gpt-6-luna` 51 KB, 16 tools (27 KB, `tool_search` among them); instructions 18 KB and the three input items identical. Of five overrides tried, only `features.apps=false` changed anything: 44 KB, 11 tools. Real turns with it: runtime 7,914 in, Mantle 9,220 in, both `ok` |
 | Codex on Amazon Bedrock | `codex exec` with the built-in provider and the user's AWS profile (2026-10-06): Mantle in us-east-1 with `openai.gpt-6-luna` answered (12,412 in, 5 out); the runtime endpoint in us-west-2 with `us.openai.gpt-6-luna` answered (37,536 in); Mantle in us-west-2 was 404 for every spelling; the runtime endpoint refused `openai.gpt-6-luna` without the cross-region prefix. Then one turn through perch's `CodexAgent` with the Bedrock options and no model chosen: `ok`, the model sent as `openai.gpt-6-luna` |
 | Codex's prompt cache holds on Bedrock | Three one-line turns in one thread on Bedrock Mantle, GPT-6 Luna (2026-10-06), Codex's cumulative usage: input 12,438 / 24,894 / 37,425, cache reads 0 / 12,396 / 24,810, so each turn after the first read its whole prefix from the cache and wrote only its own ~12.4 K (the system instructions and tools; a turn's own text is a few hundred). The same three turns on the ChatGPT backend: input 14,508 / 29,511 / 44,542, cache reads 11,008 / 25,088 / 36,096 (the first turn already hit a shared prefix), no writes reported on the plan. So Bedrock Mantle carries OpenAI's prompt caching through: automatic prefix caching within a thread, and the usage in OpenAI's shape (`cached_input_tokens`, `cache_write_input_tokens`, so writes billed the GPT-5.6 way). Two differences: no cross-thread hit on a first turn (identical runs 15–20 minutes earlier had cached nothing reusable: the cache is scoped by `prompt_cache_key`, which Codex sets to the thread id, or its lifetime is shorter than OpenAI's 30 minutes), and no published TTL |
+| Codex in a multi-root VS Code workspace | An eleven-folder workspace (2026-10-07): after Perch passed the ten secondary roots as SDK `additionalDirectories`, a new Codex session in **Workspace** mode reported every folder as a writable workspace root, including `/git/ai-assistant`; the offline host test also verifies deduplication and the real agent's SDK options |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
@@ -1333,6 +1389,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | The cache clock restarts with each request, and a turn's token counts are read at each response's end | Once per turn, from the result and the assistant message | A long turn read "cold" throughout after an expiry; a gateway reports its counts only when a streamed response closes |
 | Codex on Bedrock through Codex's own provider, as `--config` overrides per process | A custom `[model_providers.x]` with Bedrock's OpenAI-compatible URL; a gateway only | Codex signs for Bedrock itself and knows the two endpoints; overrides per process leave `~/.codex/config.toml` alone, as the API key does, and a tab moves on its next turn |
 | The runtime endpoint by default, in the machine's region, with the ChatGPT connector apps off; Mantle by setting | Mantle by default (chosen first, for a third of the tokens); the apps left on | The token gap was the connector apps' schemas sent in full for a model id Codex's catalog does not know, not the endpoint; with the apps off, which cannot work on Bedrock anyway, the runtime endpoint is the leaner one, is in every region, and takes the IAM actions already granted |
+| The Cursor cost claim withdrawn: "several times a terminal session" and the cache-miss diagram replaced by the measurement | Keep the claim with the public 5.5× as its source | The 5.5× is one run on mixed models with no cache analysis, by its own authors' account; the controlled bench (006) finds the same cache efficiency as Claude Code and a 10 % gap from tool calls. A design document that argues from caching cannot keep a caching claim it has measured to be wrong |
 | The ways on from a held message are buttons under its note | A VS Code notification alone | A notification hides itself after a few seconds; on a first run it was gone before it was read. The notification stays for the longer explanation |
 | A gateway tab's process is given the gateway's variables as its own settings, over the user's | Hold the tab's first message and tell the user to switch the window to the subscription (as it did until 0.6.41) | On a machine whose only Claude login is Bedrock (seclab) the instruction had no good outcome: switching the window would strand the Bedrock tabs. Settings given on the command line outrank the user's file, so the tab can be made right by itself; the token is kept out of them, since a process's arguments are readable by others on the machine |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |
@@ -1391,6 +1448,13 @@ track vendor updates. Without an extension, a tab shows a letter.
   `packages/opencode/src/provider/transform.ts`, `applyCaching`.
 - [Continue](https://github.com/continuedev/continue).
 - [LiteLLM prompt caching](https://docs.litellm.ai/docs/completion/prompt_caching).
+- [Claude Code vs Cursor: token efficiency, 2026](https://www.futureproofing.dev/resources/ai-native-team/claude-code-vs-cursor-token-efficiency-2026)
+  (futureproofing.dev): the public 5.5× figure, one run on mixed models,
+  no cache analysis; read in section 2 for what it does and does not
+  support.
+- `/git/c3/docs/notes/006-claude-code-backend-bench.md`: the controlled
+  bench, Claude Code and Cursor on Opus 5.5 through Bedrock, same prompts,
+  one price basis; the source of section 2's Cursor row.
 
 ### Observed, not documented
 
