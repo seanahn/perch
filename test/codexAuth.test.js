@@ -45,6 +45,52 @@ const alive = setInterval(() => {}, 1000);   // the wait's timer does not hold t
   assert.strictEqual(await p, true, 'seen when it lands');
   fs.unlinkSync(path.join(home, 'auth.json'));
   assert.strictEqual(await waitForLogin({ env: {}, home, intervalMs: 10, timeoutMs: 50 }), false, 'gives up in time');
+  // ---- a login Codex refuses: its codes, as `codex exec` wrote them for a revoked login on 2026-10-12, and nothing else
+  {
+    const { refused } = require('../src/codexAuth');
+    for (const t of [
+      'Reconnecting... 1/5 (workspace routing discovery unauthorized (401))',
+      'workspace routing discovery unauthorized (401)',
+      'ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, failing request, url: https://chatgpt.com/backend-api/codex/models?client_version=0.159.0, auth error: 401, auth error code: token_revoked',
+      'ERROR codex_login::auth::manager: Failed to refresh token status=401 Unauthorized detail=TokenErrorDetail { error_code: Some("refresh_token_invalidated"), error_message: Some("Your session has ended. Please log in again.") }',
+      'error_code: Some("refresh_token_reused")', 'refresh_token_expired', 'Your session has ended.', 'Please log in again.',
+    ]) assert.strictEqual(refused(t), true, t.slice(0, 60));
+    for (const t of [
+      'Reconnecting... 1/5 (stream disconnected before completion)', 'unexpected status 500 Internal Server Error', 'something else',
+      'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header',   // a bare 401 may be any server's
+      'mcp server `jira` failed: HTTP 401 Unauthorized', 'Incorrect API key provided: sk-…', 'token_revoked_by_someone_else_suffix', '', undefined, null,
+    ]) assert.strictEqual(refused(t), false, String(t).slice(0, 60));
+  }
+
+  // ---- which login auth.json holds: changed by a new login or a refresh, not by a failed refresh; null without a file
+  {
+    const { authStamp } = require('../src/codexAuth');
+    const h = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-stamp-'));
+    const file = path.join(h, 'auth.json');
+    assert.strictEqual(authStamp({ env: {}, home: h }), null);
+    fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: { refresh_token: 'r1' }, last_refresh: '2026-10-11T15:44:44Z' }));
+    const one = authStamp({ env: {}, home: h });
+    assert(one && one.endsWith(':2026-10-11T15:44:44Z') && !one.includes('r1'), 'the time, the size, the last refresh; no token');
+    assert.strictEqual(authStamp({ env: {}, home: h }), one, 'the same while the file is untouched');
+    fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: { refresh_token: 'r2' }, last_refresh: '2026-10-12T16:00:00Z' }));
+    assert.notStrictEqual(authStamp({ env: {}, home: h }), one, 'a new login, or a refresh: another stamp');
+    fs.writeFileSync(file, '{"torn');
+    assert(/^\d+:\d+:$/.test(authStamp({ env: {}, home: h })), 'a file caught mid-write: still a stamp');
+    // waiting for a login: with `since`, only one written after it ends the wait
+    fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: {}, last_refresh: 'refused' }));
+    const since = authStamp({ env: {}, home: h });
+    assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 60, since }), false, 'the refused login there already does not end it');
+    setTimeout(() => fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: {}, last_refresh: 'new login' })), 30);
+    assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 2000, since }), true, 'a new login does');
+    assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 60 }), true, 'without since: any login, as before');
+    // `codex login` removes the old auth.json as it starts (seen on 2026-10-12): no file is no login, and the wait goes on
+    const before = authStamp({ env: {}, home: h });
+    fs.rmSync(file);
+    assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 60, since: before }), false, 'removed, not yet written again: still waiting');
+    setTimeout(() => fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: {}, last_refresh: 'the new one' })), 30);
+    assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 2000, since: before }), true, 'written by the new login: done');
+    fs.rmSync(h, { recursive: true, force: true });
+  }
   fs.rmSync(home, { recursive: true, force: true });
   clearInterval(alive);
   console.log('CODEX AUTH OK');

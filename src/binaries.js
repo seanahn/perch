@@ -49,4 +49,21 @@ function resolveProgram(kind, { configured, vendorRoot, modules = path.join(__di
   return p ? { path: p, from: 'extension' } : { path: '', from: 'none' };
 }
 
-module.exports = { resolveProgram, vendorClaude, vendorCodex, bundled };
+/**
+ * The SDK's own `codex`, where its platform package keeps it (`@openai/codex-<platform>-<arch>/vendor/<target>/bin/codex`), for
+ * running the program directly, as a login does: the SDK finds it by itself when it runs it, so resolveProgram leaves the
+ * path empty, and `codex` alone names nothing unless the user has one on PATH. This machine's package first.
+ * @returns {string} '' when there is none
+ */
+function sdkCodex(modules = path.join(__dirname, '..', 'node_modules')) {
+  const scope = path.join(modules, '@openai');
+  const mine = `codex-${process.platform}-${process.arch}`;
+  const names = ls(scope).filter((n) => n.startsWith('codex-') && n !== 'codex-sdk').sort((a, b) => (b === mine) - (a === mine));
+  for (const n of names) {
+    const vendor = path.join(scope, n, 'vendor');
+    for (const t of ls(vendor)) for (const p of [path.join(vendor, t, 'bin', 'codex' + EXE), path.join(vendor, t, 'codex', 'codex' + EXE)]) if (isFile(p)) return p;
+  }
+  return '';
+}
+
+module.exports = { resolveProgram, vendorClaude, vendorCodex, bundled, sdkCodex };

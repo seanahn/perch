@@ -5,9 +5,23 @@
 
 const fs = require('fs');
 const { bedrockConfig, bedrockModel } = require('./codexBedrock');
+const { RolloutWatch } = require('./codexWatch');
+const { codexHome } = require('./codexAuth');
 const os = require('os');
 const path = require('path');
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
+
+/**
+ * The link Codex's ChatGPT-apps server (`codex_apps`) gives for an app the user has not connected, such as SharePoint:
+ * `result._meta._codex_apps.connector_auth_failure`. The result's own text says only that the app "is not connected", and
+ * the model is not shown the metadata, so without this the link is seen nowhere. Only a chatgpt.com link is taken: the
+ * sign-in happens there, in the user's browser, and nothing of it passes through perch.
+ */
+function connectLink(result) {
+  const f = result && result._meta && result._meta._codex_apps && result._meta._codex_apps.connector_auth_failure;
+  if (!f || !f.is_auth_failure || typeof f.install_url !== 'string' || !/^https:\/\/chatgpt\.com\//.test(f.install_url)) return null;
+  return { url: f.install_url, connector: String(f.connector_id || ''), message: String(f.message || '') };
+}
 
 class CodexAgent {
   /**
@@ -71,6 +85,7 @@ class CodexAgent {
   }
   /** Leave the thread behind and start another with the next message: its record cannot be carried to this provider. */
   _startOver(why) {
+    this._unwatch();                 // the new thread's file is another; it is watched once its id is known
     this.threadId = null; this.thread = null; this.changed = false; this.fresh = false; this.crossed = false;
     this.emit({ kind: 'note', text: why });
   }
@@ -121,9 +136,11 @@ class CodexAgent {
     if (!(await this.ready)) return;
     if (this.running) { this.emit({ kind: 'error', text: 'Codex is still working on the previous turn.' }); return; }
     this.running = true;
+    this.connectSaid = new Set();     // the connect links said this turn: one note for each, however many calls fail
     this.turnAbort = new AbortController();
     this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text }, pics.length ? { images: pics.length } : {}, shown && shown.tag ? { tag: shown.tag } : {}));
     this.emit({ kind: 'busy', busy: true });
+    this._watch();                   // a resumed thread's file now; a new thread's once Codex has named it
     const t0 = Date.now();
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -141,15 +158,28 @@ class CodexAgent {
         this._startOver(`This conversation was recorded on ${this.opts.bedrock ? 'OpenAI' : 'Bedrock'}, whose reasoning is encrypted for it, and ${this.opts.bedrock ? 'Bedrock' : 'OpenAI'} cannot read it: a new thread starts with this message. The old one stays in the sessions list.`);
       }
     } finally {
+      this._unwatch();               // a last read first: the turn's final sub-agent lines belong before the turn ends
       this.running = false;
       this.emit({ kind: 'busy', busy: false });
     }
   }
 
+  /**
+   * While a turn runs, read its thread's rollout file for what the SDK does not stream: the sub-agents the turn starts and
+   * hears from, and questions asked without waiting (src/codexWatch.js). `opts.watch === false` turns it off.
+   */
+  _watch() {
+    if (this.watch || !this.threadId || this.opts.watch === false) return;
+    const W = this.opts.Watch || RolloutWatch;
+    try { this.watch = new W({ id: this.threadId, home: this.opts.codexHome || codexHome(), emit: (ev) => this.emit(ev) }); this.watch.start(); }
+    catch (_) { this.watch = null; }
+  }
+  _unwatch() { const w = this.watch; this.watch = null; if (w) { try { w.stop(); } catch (_) { /* gone */ } } }
+
   _onEvent(e, t0) {
     switch (e.type) {
       case 'thread.started':
-        if (!this.threadId) { this.threadId = e.thread_id; this.emit({ kind: 'session', id: e.thread_id }); }
+        if (!this.threadId) { this.threadId = e.thread_id; this.emit({ kind: 'session', id: e.thread_id }); if (this.running) this._watch(); }
         return;
       case 'item.started':
       case 'item.updated':
@@ -173,6 +203,7 @@ class CodexAgent {
           case 'mcp_tool_call':
             if (e.type === 'item.started') this.emit({ kind: 'tool_use', id: it.id, name: `${it.server}.${it.tool}`, input: it.arguments });
             if (final) this.emit({ kind: 'tool_result', id: it.id, text: it.error ? it.error.message : JSON.stringify(it.result && it.result.structured_content || it.result || '').slice(0, 4000), isError: !!it.error });
+            if (final) this._connect(it);
             return;
           case 'web_search':
             if (e.type === 'item.started') this.emit({ kind: 'tool_use', id: it.id, name: 'web_search', input: { query: it.query } });
@@ -204,6 +235,17 @@ class CodexAgent {
     }
   }
 
+  /** An app the turn tried to use is not connected to the ChatGPT account: a note, with the way to connect it. */
+  _connect(it) {
+    const c = connectLink(it && it.result);
+    if (!c) return;
+    const said = this.connectSaid || (this.connectSaid = new Set());
+    if (said.has(c.url)) return;
+    said.add(c.url);
+    const app = String((it.tool || '').split('.')[0] || it.server || 'An app');
+    this.emit({ kind: 'note', text: `${app} is not connected to the ChatGPT account Codex signs in with. ${c.message || 'Connect this app on ChatGPT to use it in Codex.'} The sign-in happens on chatgpt.com, in your browser, in the account and workspace of this machine's Codex login; then send the message again.`, actions: [{ id: 'connectApp', label: 'Connect on ChatGPT', url: c.url }] });
+  }
+
   /** Codex says that a thread is being carried on under another model as an error. It is the user's own choice: a note. */
   _said(text) {
     if (/invalid_encrypted_content/.test(String(text))) { this.crossed = true; return; }   // the thread cannot cross providers: handled in send
@@ -224,9 +266,10 @@ class CodexAgent {
 
   async interrupt() { if (this.turnAbort && this.running) this.turnAbort.abort(); }
   dispose() {
+    this._unwatch();
     if (this.turnAbort) this.turnAbort.abort();
     if (this.imageDir) { try { fs.rmSync(this.imageDir, { recursive: true, force: true }); } catch (_) { /* the OS clears its temp directory */ } this.imageDir = null; }
   }
 }
 
-module.exports = { CodexAgent };
+module.exports = { CodexAgent, connectLink };

@@ -67,6 +67,16 @@ ${glyphCss}
   .work .what { color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .work .for { flex: none; font-variant-numeric: tabular-nums; }
   .work.ask .sp { border-color: var(--vscode-charts-red); animation: none; }
+  /* A turn's sub-agents: a count at the foot that opens to a table of them, each with its model and what its turns cost. */
+  .sa { cursor: pointer; text-decoration: underline dotted; }
+  .subs { font-size: 11px; color: var(--vscode-descriptionForeground); overflow-x: auto; }
+  .work + .subs { flex: none; padding: 0 12px 6px; }
+  .subs table { border-collapse: collapse; }
+  .subs th, .subs td { padding: 1px 10px 1px 0; text-align: left; white-space: nowrap; vertical-align: baseline; }
+  .subs th { font-weight: 600; }
+  .subs td.n { font-variant-numeric: tabular-nums; }
+  .subs .who { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+  .result .subs { text-align: left; margin-top: 2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
   /* a message of the user's stands apart from the answers: to the right, a filled tint of the foreground so it shows in any theme, and space above it that marks where a turn begins */
@@ -74,6 +84,9 @@ ${glyphCss}
   .user:first-child { margin-top: 4px; }
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
+  .user .unq { float: right; margin: -3px -6px 0 6px; padding: 0 4px; border: none; background: none; color: var(--vscode-descriptionForeground); font-size: 14px; line-height: 1; cursor: pointer; border-radius: 3px; }
+  .user .unq:hover { color: var(--vscode-errorForeground); background: var(--vscode-toolbar-hoverBackground); }
+  .user .unq:disabled { opacity: .4; cursor: default; }
   .user .pics { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
   /* pasted images in a sent message: small, as the vendors' own panels show them; a click shows one at the size it was kept, another puts it back */
   .user .pics img { max-height: 48px; max-width: 96px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); display: block; cursor: zoom-in; }
@@ -119,6 +132,11 @@ ${glyphCss}
   .toolres.open::after { content: none; }
   .toolres.err { border-left-color: var(--vscode-charts-red); color: var(--vscode-errorForeground); }
   .status { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: center; }
+  .status .done { margin-top: 4px; color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+  .status.sub { text-align: left; padding-left: 4px; }
+  .status.sub::before { content: '\\2937\\00a0'; }
+  .status.sub .who { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+  .ask .aside { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 0 0 8px; }
   .error { color: var(--vscode-errorForeground); border-left: 3px solid var(--vscode-charts-red); }
   .result { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: right; }
   .perm { border: 1px solid var(--vscode-inputValidation-warningBorder); background: var(--vscode-inputValidation-warningBackground); }
@@ -397,9 +415,10 @@ ${glyphCss}
     const log = el('div', 'log');
     const work = el('div', 'work'), what = el('span', 'what'), took = el('span', 'for'); work.hidden = true; work.setAttribute('role', 'status');
     work.append(el('span', 'sp'), what, took);
-    root.append(log, work); $panes.append(root);
+    const subs = el('div', 'subs'); subs.hidden = true;   // the running turn's sub-agents as a table, opened from the count at the foot
+    root.append(log, work, subs); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sent, hist: null, root, log, work, what, took, doing: '', asking: 0, live: null, liveText: '', tools: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const p = { sent, hist: null, root, log, work, what, took, subs, subsOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -417,8 +436,42 @@ ${glyphCss}
       p.what.textContent = p.asking ? 'Waiting for your answer' : (p.doing || 'Working') + '…';
       p.took.textContent = t.busySince ? span(Date.now() - t.busySince) : '';
       if (t.queued) p.took.textContent += (p.took.textContent ? ' · ' : '') + t.queued + ' queued';
-    } else { p.doing = ''; p.asking = 0; }
+      // Codex: the sub-agents the turn has started, which its SDK does not report; each by name in the tooltip, and the
+      // count opens a table of them, each with its model and what its turns cost, read from its own thread file
+      const sa = t.subagents;
+      if (sa && Array.isArray(sa.list) && sa.list.length) {
+        const parts = [sa.working ? sa.working + ' working' : '', sa.finished ? sa.finished + ' done' : '', sa.interrupted ? sa.interrupted + ' stopped' : ''].filter(Boolean);
+        const count = el('span', 'sa', (sa.list.length > 1 ? 'sub-agents: ' : 'sub-agent: ') + parts.join(', '));
+        count.title = 'Click for each one: its model and what its turns have cost';
+        count.addEventListener('click', () => { p.subsOpen = !p.subsOpen; syncWork(sid); });
+        p.took.append((p.took.textContent ? ' · ' : ''), count);
+        p.took.title = sa.list.map(subWords).join('\\n');
+        p.subs.hidden = !p.subsOpen;
+        if (p.subsOpen) subsTable(p.subs, sa.list);
+      } else { p.took.title = ''; p.subs.hidden = true; }
+    } else { p.doing = ''; p.asking = 0; p.subs.hidden = true; }
     if (was !== p.work.hidden) pin(p);
+  }
+  // A sub-agent in words: its name, its state, its reports, and what its own thread file has said: the model of its latest
+  // turn and its effort (every model it used, when it changed), its turns, and its tokens.
+  const subState = (st) => ({ working: 'working', finished: 'done', interrupted: 'stopped' }[st] || st);
+  function subModel(x) { return x.models && x.models.length > 1 ? x.models.map((m) => m.model + ' ×' + m.turns).join(' → ') : x.model ? x.model + (x.effort ? ' · ' + x.effort : '') : ''; }
+  function subTokens(x) { const k = x.tokens || {}; return 'in ' + fmtTok(k.input) + (k.cached ? ' (cached ' + fmtTok(k.cached) + ')' : '') + ' · out ' + fmtTok(k.output); }
+  function subWords(x) { return x.name + ': ' + subState(x.state) + (x.reports ? ', ' + x.reports + (x.reports > 1 ? ' reports' : ' report') : '') + (x.model ? ' · ' + subModel(x) + ' · ' + subTokens(x) : ''); }
+  /** The table of a turn's sub-agents, built again each time it is shown. */
+  function subsTable(box, list) {
+    box.textContent = '';
+    const table = el('table'), head = el('tr');
+    for (const h of ['agent', 'state', 'model', 'turns', 'tokens', 'reports']) head.append(el('th', null, h));
+    table.append(head);
+    for (const x of list) {
+      const tr = el('tr'), who = el('td'), name = el('span', 'who', x.name);
+      if (x.nickname) name.title = x.nickname;
+      who.append(name);
+      tr.append(who, el('td', null, subState(x.state)), el('td', null, x.model ? subModel(x) : '…'), el('td', 'n', x.model ? String(x.turns || 0) : ''), el('td', 'n', x.model ? subTokens(x) : ''), el('td', 'n', x.reports ? String(x.reports) : ''));
+      table.append(tr);
+    }
+    box.append(table);
   }
   setInterval(() => { if (active) syncWork(active); }, 1000);
 
@@ -759,7 +812,8 @@ ${glyphCss}
     // what it is doing now, for the line at the foot of the transcript
     const doing = { delta: 'Writing', text: 'Working', thinking: 'Thinking', tool_result: 'Working', user: 'Working' }[m.kind];
     if (doing) p.doing = doing; else if (m.kind === 'tool_start' || m.kind === 'tool_use') p.doing = 'Running ' + m.name;
-    if (m.kind === 'permission' || m.kind === 'question') p.asking++; else if (m.kind === 'clear') { p.asking = 0; p.doing = ''; }
+    else if (m.kind === 'subagent' && m.state === 'waiting') p.doing = 'Waiting for sub-agents';
+    if (m.kind === 'permission' || (m.kind === 'question' && !m.async)) p.asking++; else if (m.kind === 'clear') { p.asking = 0; p.doing = ''; }
     if (m.kind === 'voice') { if (m.phase === 'idle') voice.delete(sid); else voice.set(sid, m); if (sid === active) syncComposer(); return; }
     switch (m.kind) {
       case 'user': {
@@ -767,6 +821,12 @@ ${glyphCss}
         const thumbs = Array.isArray(m.thumbs) ? m.thumbs.filter((t) => typeof t === 'string' && /^data:image\\/(png|jpeg|webp);base64,/.test(t)) : [];
         const unseen = (m.images || 0) - thumbs.length;    // images with no thumbnail are counted instead
         const tags = [m.queued ? 'queued' : '', unseen > 0 ? unseen + (unseen > 1 ? ' images' : ' image') : '', m.tag || ''].filter(Boolean);
+        // a queued message can be taken back until its turn starts; its words stay in the arrow-up history of the box
+        if (m.queued && m.qid) {
+          const x = el('button', 'unq', '\u00d7'); x.type = 'button'; x.title = 'Remove from the queue. Its words stay in the message box\\'s history: press the up arrow there to get them back.';
+          x.addEventListener('click', (e) => { e.stopPropagation(); x.disabled = true; vscode.postMessage({ type: 'unqueue', sid, qid: m.qid }); });
+          d.append(x); p.queued[m.qid] = d;
+        }
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
         if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; i.title = 'Click to see it larger'; i.addEventListener('click', () => { i.classList.toggle('big'); i.title = i.classList.contains('big') ? 'Click to shrink it' : 'Click to see it larger'; }); row.append(i); } d.append(row); }
         d.append(m.text); break; }
@@ -793,7 +853,15 @@ ${glyphCss}
         }
         d.append(head, ...pv.body, btns); p.stick = true; break; }
       case 'question': { endLive(p); asking(add(p, 'ask', ''), m, sid, p); p.stick = true; break; }
-      case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers || {}); break; }
+      case 'answered': { endLive(p); answered(add(p, 'ask done', ''), m.questions, m.answers === null ? null : m.answers || {}); break; }   // null: asked in an earlier session, answered or not by what followed
+      case 'subagent': {
+        const say = { started: 'started', tasked: 'given a follow-up task', reported: 'reported', finished: 'finished its task', interrupted: 'interrupted' }[m.state];
+        if (say && m.name) {
+          const d = add(p, 'status sub', ''); d.append(el('span', 'who', m.name), ' ' + say);
+          // its end says what its own thread file did: the model that answered it, and what its turns cost
+          if (m.info && m.info.model) { d.append(' · ' + subModel(m.info) + ' · ' + subTokens(m.info)); if (m.info.nickname) d.title = m.info.nickname; }
+        }
+        break; }
       case 'result': { endLive(p); const u = m.usage || {};
         // through a gateway, which model answered: a turn is several requests, and a routed name may send each anywhere
         const via = Array.isArray(m.via) && m.via.length ? ' · via ' + m.via.map((v) => (v.short || v.model) + (v.n > 1 ? ' ×' + v.n : '')).join(', ') : '';
@@ -806,23 +874,55 @@ ${glyphCss}
         else if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far ≈$' + usd(m.cost) + '.' : 'The whole conversation so far ≈$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (sub ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : '');
         if (via) d.title = (d.title ? d.title + ' ' : '') + 'Answered through the gateway by ' + m.via.map((v) => v.model + (v.n > 1 ? ' (' + v.n + ' requests)' : '')).join(', ') + ', as the gateway reported.' + (gw || est ? '' : ' A gateway\\'s own billing is not Anthropic\\'s list price.');
         if (typeof m.keySpend === 'number') d.title = (d.title ? d.title + ' ' : '') + 'The gateway counts $' + gwUsd(m.keySpend) + ' spent on this token in all, every use of it included, as of this answer.';
+        // Codex: the turn's sub-agents as they ended, a count that opens to the table of them
+        const sa = m.subagents;
+        if (sa && Array.isArray(sa.list) && sa.list.length) {
+          const count = el('span', 'sa', sa.list.length + (sa.list.length > 1 ? ' sub-agents' : ' sub-agent')), box = el('div', 'subs'); box.hidden = true;
+          count.title = sa.list.map(subWords).join('\\n');
+          count.addEventListener('click', () => { box.hidden = !box.hidden; if (!box.hidden) subsTable(box, sa.list); });
+          d.append(' · ', count, box);
+        }
         break; }
       case 'note': { endLive(p); const d = addLinked(p, 'status', m.text);
+        if (m.nid) d.dataset.nid = m.nid;                 // a note the host can mark done later (a login made)
+        if (m.done) d.append(el('div', 'done', m.done));   // replayed after it was
         // what can be done about it stays with the note: a notification is gone in seconds
         if (Array.isArray(m.actions) && m.actions.length) {
           const btns = el('div', 'btns');
-          m.actions.forEach((a, i) => { const b = el('button', i ? null : 'primary', a.label); b.addEventListener('click', () => vscode.postMessage({ type: 'noteAction', sid, action: a.id })); btns.append(b); });
+          // an action may be a link (an app to connect on chatgpt.com, say), which the host opens in the browser if it is one it allows
+          m.actions.forEach((a, i) => { const b = el('button', i ? null : 'primary', a.label); b.addEventListener('click', () => vscode.postMessage(a.url ? { type: 'openExternal', url: a.url } : { type: 'noteAction', sid, action: a.id })); btns.append(b); });
           d.append(btns); p.stick = true;
         }
         break; }
+      case 'dequeued': settleQueued(p, m.qid); break;      // its turn has started: an ordinary bubble now
+      case 'unqueued': {
+        const d = p.queued[m.qid];
+        if (m.ok) { if (d) d.remove(); delete p.queued[m.qid]; break; }   // taken back, or dropped with a stopped turn (the note says so)
+        settleQueued(p, m.qid, m.why === 'unsupported');
+        add(p, 'status', m.why === 'unsupported' ? 'This version of Claude Code cannot take a queued message back; it will run.' : 'Not removed: its turn had already started.');
+        break; }
+      case 'noteDone':                                   // what the notes of this kind asked for is done: their buttons give way to the word
+        for (const d of p.log.querySelectorAll('.status[data-nid="' + m.nid + '"]')) { const b = d.querySelector('.btns'); if (b) b.remove(); if (!d.querySelector('.done')) d.append(el('div', 'done', m.text)); }
+        break;
       case 'session': p.work.title = 'session ' + m.id; break;
       case 'error': endLive(p); addLinked(p, 'error', m.text); break;
-      case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.stick = true; p.sent.length = 0; p.hist = null; break;
+      case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.queued = {}; p.stick = true; p.sent.length = 0; p.hist = null; break;
       case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
       case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
     }
     syncWork(sid);
     pin(p);
+  }
+
+  /** A queued message's bubble once it can no longer be taken back: no x; and, unless it is still waiting, no longer marked queued. */
+  function settleQueued(p, qid, stillQueued) {
+    const d = p.queued[qid]; if (!d) return;
+    delete p.queued[qid];
+    const x = d.querySelector('.unq'); if (x) x.remove();
+    if (stillQueued) return;
+    d.classList.remove('queued');
+    const tag = d.querySelector('.tag');
+    if (tag) { const rest = tag.textContent.split(' · ').filter((t) => t !== 'queued'); if (rest.length) tag.textContent = rest.join(' · '); else tag.remove(); }
   }
 
   // ---- a question from the agent. Each question is answered by a choice or a line of your own; all are sent together.
@@ -839,15 +939,18 @@ ${glyphCss}
   function asking(d, m, sid, p) {
     const qs = (m.questions || []).filter((q) => q && typeof q.question === 'string');
     const picks = qs.map(() => new Set()), others = qs.map(() => ''), marks = [];
-    const send = el('button', 'primary', qs.length > 1 ? 'Answer all' : 'Answer'), skip = el('button', null, 'Skip');
+    // Codex can ask without waiting (request_user_input_async): it carries on, and the answer goes as the next message
+    const send = el('button', 'primary', m.async ? (qs.length > 1 ? 'Send answers' : 'Send answer') : qs.length > 1 ? 'Answer all' : 'Answer'), skip = el('button', null, m.async ? 'Dismiss' : 'Skip');
+    if (m.async) d.append(el('div', 'aside', 'Codex asked this and carried on without waiting. Your answer goes to it as your next message, queued behind the turn if it is still working.'));
     const ready = () => qs.every((q, i) => picks[i].size || others[i].trim());
     const refresh = () => { for (const f of marks) f(); send.disabled = !ready(); };
     const answers = () => { const out = {}; qs.forEach((q, i) => { out[q.question] = [...(q.options || []).filter((o) => o && picks[i].has(o.label)).map((o) => o.label), others[i].trim()].filter(Boolean).join(', '); }); return out; };
     const finish = (decision) => {
       vscode.postMessage(decision === 'answer' ? { type: 'permission', sid, id: m.id, decision, answers: answers() } : { type: 'permission', sid, id: m.id, decision });
       d.textContent = '';
-      if (decision === 'answer') { d.className = 'msg ask done'; answered(d, qs, answers()); } else { d.className = 'msg status'; d.textContent = 'question skipped'; }
-      p.asking = Math.max(0, p.asking - 1); syncWork(sid);
+      if (decision === 'answer') { d.className = 'msg ask done'; answered(d, qs, answers()); } else { d.className = 'msg status'; d.textContent = m.async ? 'question dismissed' : 'question skipped'; }
+      if (!m.async) p.asking = Math.max(0, p.asking - 1);
+      syncWork(sid);
     };
     qs.forEach((q, i) => {
       const sec = el('div', 'q'); if (q.header) sec.append(el('span', 'chip', q.header));
@@ -859,7 +962,7 @@ ${glyphCss}
         marks.push(() => b.classList.toggle('on', picks[i].has(o.label)));
         sec.append(b);
       }
-      const inp = el('input', 'other'); inp.type = 'text'; inp.placeholder = q.multiSelect ? 'Something else, as well or instead…' : 'Something else…';
+      const inp = el('input', 'other'); inp.type = 'text'; inp.placeholder = !(q.options || []).length ? 'Your answer…' : q.multiSelect ? 'Something else, as well or instead…' : 'Something else…';
       inp.addEventListener('input', () => { others[i] = inp.value; if (!q.multiSelect && inp.value.trim()) picks[i].clear(); refresh(); });
       inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && ready()) { e.preventDefault(); finish('answer'); } });
       inp.addEventListener('click', (e) => e.stopPropagation());

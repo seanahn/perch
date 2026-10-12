@@ -319,8 +319,23 @@ is copied from elsewhere, so a fresh remote has neither.
   code, for a machine with no forwarding, which ChatGPT has to allow first
   (Settings → Security and login → App security → "Enable device code
   sign-in"). Either way Perch notices when the login lands and says so;
-  send the message again. The same offer appears if Codex later answers
-  401, a login that has expired.
+  send the message again.
+  A login can also end later: ChatGPT ends the session on a logout, a
+  password change, a revoked session, or when the same login is refreshed
+  on another machine. **Give each machine its own login: never copy
+  `~/.codex/auth.json` from one machine to another**, since the two copies
+  share one session and the first to refresh it ends the other's. When
+  Codex reports its login refused (`token_revoked`,
+  `refresh_token_invalidated`, "Your session has ended"), the tab puts the
+  message, and any queued behind it, back in the box, says why under the
+  error with **Log In** and **Device Code**, and holds further messages on
+  that machine until there is a new login (or until another Codex there
+  refreshes the file), across window reloads. The login waits for a new
+  `auth.json`, so signing in again works though the old file is still
+  there. One login runs at a time (it listens on a fixed port): pressed
+  again while one waits, from the note, the notification, or another tab,
+  a button opens the same sign-in page again; once the login lands, every
+  login note in every Codex tab says so in place of its buttons.
   On the gateway the model menu is the file's names, not Claude Code's
   catalog: the default is `ANTHROPIC_MODEL`, and opus, sonnet and haiku
   are what `ANTHROPIC_DEFAULT_*_MODEL` map them to, which is what the
@@ -373,6 +388,44 @@ and a round send button. Codex runs on this machine through the SDK;
 Codex Cloud tasks are not offered (the SDK has no way to run a thread
 there), so there is no "Work locally" chooser as in the Codex extension.
 
+**ChatGPT apps and plugins in a Codex tab** (Gmail, SharePoint, and the
+rest of ChatGPT's plugin directory) are Codex's own: perch runs `codex
+exec`, which takes the plugins installed in the ChatGPT account it is
+logged in with and the apps connected there. Two things happen outside
+perch, once, on the machine where the tab's Codex runs (over Remote-SSH,
+the remote host, as the remote user):
+
+1. Install the plugin with the same `codex` perch runs there (the one in
+   the ChatGPT extension when perch's own is not packaged):
+   `codex plugin list`, then `codex plugin add sharepoint@openai-curated-remote`.
+   It is recorded in the ChatGPT account and cached under `~/.codex/plugins/`.
+2. Connect the app on chatgpt.com, in your browser, signed in to the same
+   ChatGPT account and workspace as that machine's `~/.codex/auth.json`.
+   The first call to an app that is not connected shows a note with a
+   **Connect on ChatGPT** button: the link Codex gives, which its own reply
+   does not show. Microsoft's sign-in happens there; nothing of it passes
+   through perch or the host.
+
+To keep an app read-only, block its tools that say they write, in
+`~/.codex/config.toml` on that machine:
+`[apps.<connector_id>]` `destructive_enabled = false` (SharePoint's id is
+`connector_1e4f6a44acf14e3ca1d96672f8c945bc`).
+
+When a Codex turn starts **sub-agents**, each shows as a line in the
+transcript when it starts, reports, takes a follow-up task, and finishes
+(`⤷ desktop_audio_transport started`), and the line at the foot says how
+many are working (`sub-agents: 2 working, 1 done`, each by name in its
+tooltip). Click that count for a table of them: each one's model and
+reasoning effort, turns, and tokens, read from the sub-agent's own thread
+file as it grows; a sub-agent's end line says the same, as does a past
+turn's when a session is read back, and the line that ends the turn opens
+to the same table. What they report is encrypted, so only that they
+reported can be shown. A **question Codex asks without waiting** shows as a card that
+says so: the turn carries on, and your answers go to it as your next
+message, queued behind the turn if it is still working. The SDK streams
+neither, so perch reads them from the thread's own record in
+`~/.codex/sessions/` as the turn runs.
+
 **IDE context**, on both kinds of tab, is on by default for new tabs
 (`perch.ideContext`) and remembered per tab. The toggle is green when on
 and grey when off. When on, each message carries
@@ -392,7 +445,10 @@ writing returns.
 **Queueing.** Enter always sends. While the agent is working, the message
 is queued behind the current turn and marked so. Claude Code queues it
 itself; Codex takes one turn at a time, so perch holds the queue and feeds
-it as each turn ends. Stop ends the turn and drops what is queued.
+it as each turn ends. The × on a queued message takes it back until its
+turn starts (its words stay in the box's history: press the up arrow to
+get them back); once a turn has taken it up, the tab says it was too
+late. Stop ends the turn and drops what is queued.
 
 Not included: Codex's microphone. A webview cannot open the microphone;
 Codex does it with a companion extension that records natively. perch could

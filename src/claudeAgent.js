@@ -46,6 +46,7 @@ class ClaudeAgent {
     this.sessionId = opts.resume || null;
     this.running = false;
     this.pending = 0;                // messages sent and not yet answered
+    this.waiting = [];               // the uuids of queued messages Claude Code has not yet taken up, oldest first
     this.lastAnswer = '';
     this.lastCost = typeof opts.costBefore === 'number' ? opts.costBefore : null;   // Claude Code reports the session's whole cost; a turn's is the difference
     this.live = '';          // streamed text for the in-flight assistant message
@@ -107,7 +108,7 @@ class ClaudeAgent {
     } catch (err) {
       if (!this.abort.signal.aborted) this.emit({ kind: 'error', text: String(err && err.message || err) });
     } finally {
-      this.running = false; this.pending = 0;
+      this.running = false; this.pending = 0; this._settle();
       if (this.relay) { this.relay.stop(); this.relay = null; }
       this.emit({ kind: 'busy', busy: false });
     }
@@ -120,7 +121,7 @@ class ClaudeAgent {
    */
   _state(state) {
     this.stated = (this.stated || 0) + 1;    // how many times the CLI has said; the live test checks the signal arrives at all
-    if (state === 'idle') { if (this.running || this.pending) { this.running = false; this.pending = 0; this.emit({ kind: 'busy', busy: false }); } }
+    if (state === 'idle') { this._settle(); if (this.running || this.pending) { this.running = false; this.pending = 0; this.emit({ kind: 'busy', busy: false }); } }
     else if (state === 'running' && !this.running) { this.running = true; this.pending = Math.max(1, this.pending); this.emit({ kind: 'busy', busy: true }); }
   }
 
@@ -134,8 +135,23 @@ class ClaudeAgent {
     try { this.emit({ kind: 'commands', list: await this.query.supportedCommands() }); } catch (_) { /* older CLI */ }
   }
 
+  /**
+   * Claude Code says which queued messages a turn has taken up: the client uuids it was given, on the turn's first stream
+   * event and first assistant message (`user_message_uuids`, and `user_message_uuid` for the last of them). Each is no longer
+   * queued from then: it can no longer be removed, and its bubble is an ordinary one.
+   */
+  _taken(m) {
+    if (!this.waiting.length || !m) return;
+    const ids = new Set([].concat(Array.isArray(m.user_message_uuids) ? m.user_message_uuids : [], typeof m.user_message_uuid === 'string' ? [m.user_message_uuid] : []));
+    if (!ids.size) return;
+    this.waiting = this.waiting.filter((q) => { if (!ids.has(q)) return true; this.emit({ kind: 'dequeued', qid: q }); return false; });
+  }
+  /** Nothing is queued any more (the session is idle, or its process ended): any bubble still marked queued is not. */
+  _settle() { for (const q of this.waiting.splice(0)) this.emit({ kind: 'dequeued', qid: q }); }
+
   _onMessage(m) {
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.emit({ kind: 'session', id: m.session_id }); }
+    this._taken(m);
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') { if (m.model) this.emit({ kind: 'model', id: m.model }); }   // the model actually in use, for the tab's tooltip
@@ -221,13 +237,36 @@ class ClaudeAgent {
     const pics = Array.isArray(images) ? images : [];
     if (!text.trim() && !pics.length) return;
     const queued = this.running;
+    // a queued message carries a uuid of perch's: Claude Code can be asked to drop it by that uuid while it waits, and says
+    // by it when a turn takes it up
+    const qid = queued ? randomUUID() : undefined;
     this.pending++;
     this.running = true;
-    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text, queued }, pics.length ? { images: pics.length } : {}, shown && shown.tag ? { tag: shown.tag } : {}));
+    this.emit(Object.assign({ kind: 'user', text: shown ? shown.text : text, queued }, qid ? { qid } : {}, pics.length ? { images: pics.length } : {}, shown && shown.tag ? { tag: shown.tag } : {}));
     this.emit({ kind: 'busy', busy: true });
     const content = pics.map((p) => ({ type: 'image', source: { type: 'base64', media_type: p.mime, data: p.data } }));
     if (text.trim()) content.push({ type: 'text', text });
-    this.queue.push({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, priority: queued ? 'next' : undefined, message: { role: 'user', content } });
+    if (qid) this.waiting.push(qid);
+    this.queue.push(Object.assign({ type: 'user', session_id: this.sessionId || '', parent_tool_use_id: null, priority: queued ? 'next' : undefined, message: { role: 'user', content } }, qid ? { uuid: qid } : {}));
+  }
+
+  /**
+   * Take a queued message back before a turn takes it up: from perch's own input stream if Claude Code has not been handed
+   * it yet, else from Claude Code's queue (`cancel_async_message`, which Claude Code answers with whether it was still
+   * there). @returns {Promise<{ok: boolean, why?: 'taken'|'unsupported'}>} taken: a turn has taken it up already;
+   *   unsupported: this Claude Code cannot be asked, and the message stays queued
+   */
+  async unqueue(qid) {
+    if (!this.waiting.includes(qid)) return { ok: false, why: 'taken' };
+    let ok = false, why = 'taken';
+    const k = this.queue.items.findIndex((x) => x && x.uuid === qid);
+    if (k >= 0) { this.queue.items.splice(k, 1); ok = true; }
+    else if (this.query && typeof this.query.cancelAsyncMessage === 'function') { try { ok = !!(await this.query.cancelAsyncMessage(qid)); } catch (_) { why = 'unsupported'; } }
+    else why = 'unsupported';
+    const i = this.waiting.indexOf(qid);
+    if (i >= 0 && (ok || why === 'taken')) this.waiting.splice(i, 1);   // either way it waits no longer; an unsupported cancel leaves it waiting
+    if (ok) this.pending = Math.max(this.running ? 1 : 0, this.pending - 1);
+    return ok ? { ok } : { ok, why };
   }
 
   /** Stops the current turn. Messages already queued are dropped with it, so nothing runs that the user did not see start. */

@@ -78,6 +78,54 @@ assert.strictEqual(paneA.querySelectorAll('select').length, 0, 'no selector row:
 ev('a', { kind: 'user', text: 'later', queued: true });
 const q = [...paneA.querySelectorAll('.user')].pop();
 assert.deepStrictEqual([q.classList.contains('queued'), q.querySelector('.tag').textContent, q.textContent], [true, 'queued', 'queuedlater'], 'a queued message is marked');
+assert.strictEqual(q.querySelector('.unq'), null, 'one the host gave no id to cannot be taken back');
+// a queued message with an id: an x takes it back until its turn starts
+{
+  out.length = 0;
+  ev('a', { kind: 'user', text: 'take me back', queued: true, qid: 'q-1' });
+  ev('a', { kind: 'user', text: 'run me', queued: true, qid: 'q-2', tag: 'a.js:3' });
+  ev('a', { kind: 'user', text: 'too late', queued: true, qid: 'q-3' });
+  ev('a', { kind: 'user', text: 'cannot', queued: true, qid: 'q-4' });
+  ev('a', { kind: 'user', text: 'dropped', queued: true, qid: 'q-5' });
+  const users = () => [...paneA.querySelectorAll('.user')];
+  const byText = (t) => users().find((u) => u.textContent.endsWith(t));
+  const x1 = byText('take me back').querySelector('.unq');
+  assert(x1 && /Remove from the queue/.test(x1.title) && /up arrow/.test(x1.title), 'an x, which says the words can be had back from the box');
+  x1.click();
+  assert.deepStrictEqual([out.pop(), x1.disabled], [{ type: 'unqueue', sid: 'a', qid: 'q-1' }, true], 'asked once: the x waits for the answer');
+  ev('a', { kind: 'unqueued', qid: 'q-1', ok: true });
+  assert.strictEqual(byText('take me back'), undefined, 'taken back: the bubble goes');
+  // its turn starts: an ordinary bubble, with its other tags kept
+  ev('a', { kind: 'dequeued', qid: 'q-2' });
+  const r2 = byText('run me');
+  assert.deepStrictEqual([r2.classList.contains('queued'), r2.querySelector('.unq'), r2.querySelector('.tag').textContent], [false, null, 'a.js:3']);
+  // too late: the page is told why
+  const before = paneA.querySelectorAll('.status').length;
+  ev('a', { kind: 'unqueued', qid: 'q-3', ok: false, why: 'taken' });
+  const r3 = byText('too late');
+  assert.deepStrictEqual([r3.classList.contains('queued'), r3.querySelector('.unq'), r3.querySelector('.tag'), [...paneA.querySelectorAll('.status')].pop().textContent], [false, null, null, 'Not removed: its turn had already started.']);
+  // a Claude Code that cannot be asked: no x, but still queued, and it will run
+  ev('a', { kind: 'unqueued', qid: 'q-4', ok: false, why: 'unsupported' });
+  const r4 = byText('cannot');
+  assert.deepStrictEqual([r4.classList.contains('queued'), r4.querySelector('.unq'), r4.querySelector('.tag').textContent, [...paneA.querySelectorAll('.status')].pop().textContent], [true, null, 'queued', 'This version of Claude Code cannot take a queued message back; it will run.']);
+  // dropped with a stopped turn: the bubble goes, and the host's note says how many
+  ev('a', { kind: 'unqueued', qid: 'q-5', ok: true, quiet: true });
+  assert.deepStrictEqual([byText('dropped'), paneA.querySelectorAll('.status').length], [undefined, before + 2]);
+  ev('a', { kind: 'unqueued', qid: 'nope', ok: true }); ev('a', { kind: 'dequeued', qid: 'nope' });   // one the page does not know: nothing
+  // a note the host marks done later: its buttons give way to the word, in place; a note replayed after it carries the word
+  ev('a', { kind: 'note', nid: 'codexLogin', text: 'Codex is not logged in here.', actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
+  ev('a', { kind: 'note', text: 'another note', actions: [{ id: 'x', label: 'X' }] });
+  ev('a', { kind: 'noteDone', nid: 'codexLogin', text: 'Logged in on host at 09:29: send the message again.' });
+  { const notes = [...paneA.querySelectorAll('.status')].slice(-2);
+    assert.deepStrictEqual(notes.map((d) => [d.querySelector('.btns') ? d.querySelectorAll('.btns button').length : 0, d.querySelector('.done') ? d.querySelector('.done').textContent : '']), [[0, 'Logged in on host at 09:29: send the message again.'], [1, '']], 'only the notes of that kind'); }
+  ev('a', { kind: 'note', nid: 'codexLogin', text: 'Codex is not logged in here.', done: 'Logged in on host at 09:29: send the message again.' });
+  { const d = [...paneA.querySelectorAll('.status')].pop(); assert.deepStrictEqual([d.querySelector('.btns'), d.querySelector('.done').textContent], [null, 'Logged in on host at 09:29: send the message again.']); }
+  // a note's button may be a link: an app to connect on chatgpt.com. The host decides whether to open it
+  ev('a', { kind: 'note', text: 'microsoft_sharepoint is not connected.', actions: [{ id: 'connectApp', label: 'Connect on ChatGPT', url: 'https://chatgpt.com/plugins/plugin_connector_x' }] });
+  const link = [...paneA.querySelectorAll('.status .btns button')].pop();
+  out.length = 0; link.click();
+  assert.deepStrictEqual([link.textContent, out.pop()], ['Connect on ChatGPT', { type: 'openExternal', url: 'https://chatgpt.com/plugins/plugin_connector_x' }]);
+}
 
 // ---- composer, Claude tab
 assert.strictEqual($('#composer').className, 'claude');
@@ -742,8 +790,8 @@ window.close();
   const foot = (i) => { const n = p6.$$('.pane')[i || 0].querySelector('.work'); return n.hidden ? null : [n.className, n.querySelector('.what').textContent, n.querySelector('.for').textContent]; };
   tabs6();
   assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
-  const kids = [...p6.$$('.pane')[0].children].map((n) => n.className);
-  assert.deepStrictEqual(kids, ['log', 'work'], 'under the transcript, above the message; nothing over it');
+  const kids = [...p6.$$('.pane')[0].children].map((n) => [n.className, n.hidden]);
+  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true]], 'under the transcript, above the message; nothing over it, and the sub-agents\' table hidden until a turn has some');
 
   tabs6({ busy: true, busySince: Date.now() - 75000 });
   assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');
@@ -764,6 +812,65 @@ window.close();
   tabs6({ busy: false }); assert.strictEqual(foot(), null);
   tabs6({ busy: true, busySince: Date.now() }); assert.deepStrictEqual(foot(), ['work', 'Working…', '0s']);
   tabs6({}, { busy: true, busySince: 0 }); assert.deepStrictEqual([foot(0), foot(1)], [null, ['work', 'Working…', '']]);
+
+  // a Codex turn's sub-agents: lines in the transcript for each start and end, and a count at the foot, each by name in its tooltip
+  tabs6({}, { busy: true, busySince: Date.now() - 5000, subagents: { working: 2, finished: 1, interrupted: 0, list: [{ name: 'desk_audio', state: 'working', reports: 1 }, { name: 'desk_local', state: 'working', reports: 0 }, { name: 'desk_speech', state: 'finished', reports: 2 }] } });
+  assert.deepStrictEqual(foot(1), ['work', 'Working…', '5s · sub-agents: 2 working, 1 done']);
+  assert.strictEqual(p6.$$('.pane')[1].querySelector('.for').title, 'desk_audio: working, 1 report\ndesk_local: working\ndesk_speech: done, 2 reports');
+  // the count opens a table of them: each with its model and what its turns cost, once its own thread file has said so
+  const pane1 = p6.$$('.pane')[1];
+  assert.strictEqual(pane1.querySelector('.subs').hidden, true, 'closed until asked');
+  pane1.querySelector('.for .sa').click();
+  tabs6({}, { busy: true, busySince: Date.now() - 5000, subagents: { working: 2, finished: 1, interrupted: 0, list: [
+    { name: 'desk_audio', state: 'working', reports: 1, model: 'gpt-6.1-sol', effort: 'ultra', turns: 3, tokens: { input: 2400000, cached: 2300000, output: 23000 }, nickname: 'Popper' },
+    { name: 'desk_local', state: 'working', reports: 0 },
+    { name: 'desk_speech', state: 'finished', reports: 2, model: 'gpt-5.6-sol', effort: 'low', turns: 2, tokens: { input: 1500, cached: 900, output: 75 }, models: [{ model: 'gpt-6.1-sol', turns: 1 }, { model: 'gpt-5.6-sol', turns: 1 }] },
+  ] } });
+  assert.strictEqual(pane1.querySelector('.subs').hidden, false, 'open, and kept open as the foot is redrawn');
+  assert.deepStrictEqual([...pane1.querySelectorAll('.subs tr')].map((r) => [...r.children].map((c) => c.textContent)), [
+    ['agent', 'state', 'model', 'turns', 'tokens', 'reports'],
+    ['desk_audio', 'working', 'gpt-6.1-sol · ultra', '3', 'in 2.4M (cached 2.3M) · out 23k', '1'],
+    ['desk_local', 'working', '…', '', '', ''],
+    ['desk_speech', 'done', 'gpt-6.1-sol ×1 → gpt-5.6-sol ×1', '2', 'in 2k (cached 900) · out 75', '2'],
+  ], 'one whose file has said nothing yet waits; one moved between models shows each with its turns');
+  assert.strictEqual(pane1.querySelector('.subs .who').title, 'Popper', 'the nickname Codex gave it, on its name');
+  assert.strictEqual(pane1.querySelector('.for').title, 'desk_audio: working, 1 report · gpt-6.1-sol · ultra · in 2.4M (cached 2.3M) · out 23k\ndesk_local: working\ndesk_speech: done, 2 reports · gpt-6.1-sol ×1 → gpt-5.6-sol ×1 · in 2k (cached 900) · out 75');
+  pane1.querySelector('.for .sa').click();
+  assert.strictEqual(pane1.querySelector('.subs').hidden, true, 'and closes');
+  e6({ kind: 'subagent', name: 'desk_audio', state: 'started' }, 'b'); e6({ kind: 'subagent', name: 'desk_audio', state: 'reported' }, 'b'); e6({ kind: 'subagent', name: 'desk_speech', state: 'finished' }, 'b'); e6({ kind: 'subagent', name: 'x', state: 'active' }, 'b');
+  const subs = [...p6.$$('.pane')[1].querySelectorAll('.status.sub')];
+  assert.deepStrictEqual(subs.map((n) => [n.querySelector('.who').textContent, n.textContent]), [['desk_audio', 'desk_audio started'], ['desk_audio', 'desk_audio reported'], ['desk_speech', 'desk_speech finished its task']], 'a state with nothing to say is no line');
+  e6({ kind: 'subagent', name: '', state: 'waiting' }, 'b');
+  assert.deepStrictEqual([foot(1)[1], p6.$$('.pane')[1].querySelectorAll('.status.sub').length], ['Waiting for sub-agents…', 3], 'the wait is said at the foot, and is not a line');
+  // its end line says what its own file did: the model that answered it, and what its turns cost; the turn's result opens to the table of them
+  e6({ kind: 'subagent', name: 'desk_audio', state: 'finished', info: { model: 'gpt-6.1-sol', effort: 'ultra', turns: 3, tokens: { input: 2400000, cached: 2300000, output: 23000 }, nickname: 'Popper' } }, 'b');
+  const endLine = [...pane1.querySelectorAll('.status.sub')].pop();
+  assert.deepStrictEqual([endLine.textContent, endLine.title], ['desk_audio finished its task · gpt-6.1-sol · ultra · in 2.4M (cached 2.3M) · out 23k', 'Popper']);
+  e6({ kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, subagents: { working: 0, finished: 2, interrupted: 0, list: [{ name: 'desk_audio', state: 'finished', reports: 1, model: 'gpt-6.1-sol', effort: 'ultra', turns: 3, tokens: { input: 2400000, cached: 2300000, output: 23000 } }, { name: 'desk_speech', state: 'finished', reports: 2 }] } }, 'b');
+  const resLine = [...pane1.querySelectorAll('.result')].pop();
+  assert.deepStrictEqual([resLine.querySelector('.sa').textContent, resLine.querySelector('.subs').hidden], ['2 sub-agents', true]);
+  resLine.querySelector('.sa').click();
+  assert.deepStrictEqual([resLine.querySelector('.subs').hidden, [...resLine.querySelectorAll('.subs tr')].map((r) => r.children[2].textContent)], [false, ['model', 'gpt-6.1-sol · ultra', '…']], 'opens to the table, as the foot\'s');
+  e6({ kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 } }, 'b');
+  assert.strictEqual([...pane1.querySelectorAll('.result')].pop().querySelector('.sa'), null, 'a turn without sub-agents says nothing of them');
+  // a question Codex asked without waiting: a card, and the foot does not say the tab waits on it
+  e6({ kind: 'question', id: 'cq', async: true, questions: [{ question: 'Where should replies play?', options: [{ label: 'Default output' }, { label: 'I will say' }], multiSelect: false }, { question: 'Anything else?', options: [], multiSelect: false }] }, 'b');
+  assert.deepStrictEqual(foot(1).slice(0, 2), ['work', 'Waiting for sub-agents…'], 'not "Waiting for your answer": Codex carries on');
+  const cq = p6.$$('.pane')[1].querySelector('.ask');
+  assert(/carried on without waiting\. Your answer goes to it as your next message/.test(cq.querySelector('.aside').textContent));
+  assert.deepStrictEqual([cq.querySelector('.btns .primary').textContent, cq.querySelector('.btns button:not(.primary)').textContent, [...cq.querySelectorAll('.other')].map((i) => i.placeholder)], ['Send answers', 'Dismiss', ['Something else…', 'Your answer…']], 'a question with no choices asks for an answer, not for something else');
+  cq.querySelector('.opt').click();
+  const own = [...cq.querySelectorAll('.other')][1]; own.value = 'No'; own.dispatchEvent(new p6.w.Event('input', { bubbles: true }));
+  cq.querySelector('.btns .primary').click();
+  assert.deepStrictEqual(p6.out.pop(), { type: 'permission', sid: 'b', id: 'cq', decision: 'answer', answers: { 'Where should replies play?': 'Default output', 'Anything else?': 'No' } });
+  assert.deepStrictEqual([cq.className, foot(1)[1]], ['msg ask done', 'Waiting for sub-agents…']);
+  e6({ kind: 'question', id: 'cq2', async: true, questions: [{ question: 'Q?', options: [] }] }, 'b');
+  const cq2 = [...p6.$$('.pane')[1].querySelectorAll('.ask')].pop(); cq2.querySelector('.btns button:not(.primary)').click();
+  assert.deepStrictEqual([p6.out.pop(), cq2.textContent, foot(1)[0]], [{ type: 'permission', sid: 'b', id: 'cq2', decision: 'deny' }, 'question dismissed', 'work']);
+  // one asked in an earlier session, read back from the thread's file, shows what was asked and no answer either way
+  e6({ kind: 'answered', questions: [{ question: 'Asked before?', options: [] }], answers: null }, 'b');
+  assert.strictEqual([...p6.$$('.pane')[1].querySelectorAll('.ask.done')].pop().querySelector('.a').textContent, '');
+  tabs6({}, { busy: true, busySince: Date.now(), subagents: null }); assert.strictEqual(p6.$$('.pane')[1].querySelector('.for').title, '', 'no sub-agents: no tooltip');
   p6.w.close();
 }
 

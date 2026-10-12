@@ -17,6 +17,31 @@ function loggedIn({ env = process.env, home = codexHome(env) } = {}) {
   catch (_) { return false; }
 }
 
+/**
+ * Codex's own word that its ChatGPT login was refused: ChatGPT ended the session (a logout, a password change, a session
+ * revoked, or the same login refreshed on another machine, since a copy of one machine's auth.json ends when either copy
+ * refreshes), so the refresh token is dead and nothing but a new login helps. Matched on what `codex exec` writes: its JSON
+ * errors as it retries (`workspace routing discovery unauthorized (401)`) and its log (`token_revoked`,
+ * `refresh_token_invalidated`, "Your session has ended. Please log in again."). Only these: a 401 of some MCP server of the
+ * user's is no reason to log in again. Meaningful for the ChatGPT login only; on an API key a 401 is the key's.
+ */
+const REFUSED = /refresh_token_(?:invalidated|reused|expired)|\btoken_revoked\b|session has ended|please log in again|invalidated oauth token|routing discovery unauthorized/i;
+function refused(text) { return REFUSED.test(String(text === undefined || text === null ? '' : text)); }
+
+/**
+ * Which login auth.json holds, as far as telling a new one from one that was refused needs: when the file was written, its
+ * size, and when Codex last refreshed it. No token is read out of it. A failed refresh leaves the file as it was; a new
+ * login, or a refresh by another Codex on this machine, rewrites it. Null when there is no file.
+ */
+function authStamp({ env = process.env, home = codexHome(env) } = {}) {
+  const p = path.join(home, 'auth.json');
+  let st;
+  try { st = fs.statSync(p); } catch (_) { return null; }
+  let last = '';
+  try { const j = JSON.parse(fs.readFileSync(p, 'utf8')); last = String((j && j.last_refresh) || ''); } catch (_) { /* written as we read: the time and size still tell */ }
+  return `${Math.floor(st.mtimeMs)}:${st.size}:${last}`;
+}
+
 /** Device-code sign-in, for a terminal: it prints a link and a one-time code. ChatGPT must allow it (a setting, off by default). */
 function loginCommand(program) { return (program === 'codex' ? 'codex' : JSON.stringify(program)) + ' login --device-auth'; }
 
@@ -47,10 +72,15 @@ function startLogin(program, o = {}) {
   });
 }
 
-/** Resolves true once the login is there, false when the wait runs out. Polled: the directory may not exist yet. */
-function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15 * 60000, intervalMs = 2000 } = {}) {
+/**
+ * Resolves true once a login is there, false when the wait runs out. Polled: the directory may not exist yet. With `since`
+ * (an authStamp), only a login written after it counts: a file that is there already, holding a login Codex refused, does
+ * not end the wait, or the sign-in would be stopped before the browser came back to it. `codex login` removes the old file
+ * as it starts; no file is no login, so the wait goes on until the new one is written.
+ */
+function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15 * 60000, intervalMs = 2000, since } = {}) {
   return new Promise((resolve) => {
-    const check = () => loggedIn({ env, home });
+    const check = () => loggedIn({ env, home }) && (since === undefined || authStamp({ env, home }) !== since);
     if (check()) { resolve(true); return; }
     const t0 = Date.now();
     const timer = setInterval(() => {
@@ -61,4 +91,4 @@ function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15
   });
 }
 
-module.exports = { codexHome, loggedIn, loginCommand, startLogin, waitForLogin, CALLBACK_PORT };
+module.exports = { codexHome, loggedIn, refused, authStamp, loginCommand, startLogin, waitForLogin, CALLBACK_PORT };

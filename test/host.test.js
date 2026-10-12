@@ -563,7 +563,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v2.fire({ type: 'send', sid: x, text: 'hold it' });
     v2.fire({ type: 'send', sid: x, text: 'queued about one' });
     m.ui.editor = editor(path.join(process.cwd(), 'two.js'), 'javascript', 'TWO', sel(0, 0, 0, 3));
-    assert.deepStrictEqual(v2.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'queued about one', queued: true, tag: 'one.js:1' });
+    { const { qid, ...u } = v2.events(x).filter((e) => e.kind === 'user').pop(); assert.deepStrictEqual([typeof qid, u], ['string', { kind: 'user', text: 'queued about one', queued: true, tag: 'one.js:1' }], 'a queued message has an id the page can name to take it back'); }
     cx.finish(); await flush(); await flush();
     assert(/queued about one\n\n<ide_context>\nActive file: one\.js/.test(cx.sent.pop()) , 'the queued message carries the file that was open when it was written');
     assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user' && e.text === 'queued about one').length, 1);
@@ -1172,6 +1172,112 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- a Codex turn's sub-agents and its questions asked without waiting, as the agent reads them from the thread's file
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hold the turn' }); await flush();
+    const a = created[created.length - 1];
+    assert.deepStrictEqual([v.tab(x).busy, v.tab(x).subagents], [true, null], 'no sub-agents yet: nothing about them');
+    for (const [name, state] of [['desk_audio', 'started'], ['desk_speech', 'started'], ['desk_audio', 'reported'], ['desk_speech', 'finished'], ['desk_speech', 'answered'], ['desk_speech', 'reported'], ['desk_audio', 'active'], ['', 'waiting'], ['desk_old', 'active']]) a.emit({ kind: 'subagent', name, state });
+    assert.deepStrictEqual(v.tab(x).subagents, { working: 2, finished: 1, interrupted: 0, list: [{ name: 'desk_audio', state: 'working', reports: 1 }, { name: 'desk_speech', state: 'finished', reports: 2 }, { name: 'desk_old', state: 'working', reports: 0 }] },
+      'two at work and one done; a report delivered after its sender finished does not set it working again; one heard of only now is at work');
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'subagent').map((e) => e.name + ' ' + e.state), ['desk_audio started', 'desk_speech started', 'desk_audio reported', 'desk_speech finished', 'desk_speech reported', ' waiting'],
+      'the page is told each start, report, and end, and that the root waits; not its final answer, nor the root speaking to it');
+    // what each one's own thread file says: its model and what its turns cost, for the foot's table, its end line, and the turn's result
+    a.emit({ kind: 'subagent', name: 'desk_audio', state: 'usage', model: 'gpt-6.1-sol', effort: 'ultra', turns: 3, tokens: { input: 1000, cached: 900, output: 50 }, nickname: 'Popper' });
+    a.emit({ kind: 'subagent', name: 'desk_new', state: 'usage', model: 'gpt-5.6-sol', effort: 'low', turns: 2, tokens: { input: 10, cached: 0, output: 1 }, models: [{ model: 'gpt-6.1-sol', turns: 1 }, { model: 'gpt-5.6-sol', turns: 1 }] });
+    assert.deepStrictEqual(v.tab(x).subagents.list.map((s) => [s.name, s.state, s.model || '', s.turns || 0, (s.tokens || {}).input || 0, s.nickname || '', s.models ? s.models.length : 0]),
+      [['desk_audio', 'working', 'gpt-6.1-sol', 3, 1000, 'Popper', 0], ['desk_speech', 'finished', '', 0, 0, '', 0], ['desk_old', 'working', '', 0, 0, '', 0], ['desk_new', 'working', 'gpt-5.6-sol', 2, 10, '', 2]],
+      'each by name with what is known of it; one heard of only by its usage is at work; its usage is no line of the transcript');
+    assert(!v.events(x).some((e) => e.kind === 'subagent' && e.state === 'usage'));
+    a.emit({ kind: 'subagent', name: 'desk_audio', state: 'finished' });
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'subagent' && e.state === 'finished').pop(),
+      { kind: 'subagent', name: 'desk_audio', state: 'finished', info: { model: 'gpt-6.1-sol', effort: 'ultra', turns: 3, tokens: { input: 1000, cached: 900, output: 50 }, nickname: 'Popper' } }, 'its end line keeps what its file had said by then');
+    a.emit({ kind: 'result', ok: true, duration_ms: 5, usage: { input: 1, cache_read: 0, output: 1 } });
+    const res = v.events(x).filter((e) => e.kind === 'result').pop();
+    assert.deepStrictEqual(res.subagents.list.map((s) => s.name + ':' + s.state + ':' + (s.model || '-')), ['desk_audio:finished:gpt-6.1-sol', 'desk_speech:finished:-', 'desk_old:working:-', 'desk_new:working:gpt-5.6-sol'], 'the turn\'s result carries them all as they stand');
+    assert.deepStrictEqual(res.subagents.list[3].models, [{ model: 'gpt-6.1-sol', turns: 1 }, { model: 'gpt-5.6-sol', turns: 1 }]);
+    // a question Codex asked without waiting: a card, with the tab not waiting on it
+    const qs = [{ question: 'Where should replies play?', options: [{ label: 'Default output' }, { label: 'I will say' }], multiSelect: false }, { question: 'Anything else?', options: [], multiSelect: false }];
+    a.emit({ kind: 'question', id: 'call_q', async: true, questions: qs });
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'question').pop(), { kind: 'question', id: 'call_q', async: true, questions: qs });
+    // a page made again is given the transcript's lines, and the question as it stands
+    const n = v.got.length; v.fire({ type: 'ready' }); await flush();
+    const replay = v.got.slice(n).filter((g) => g.type === 'event' && g.sid === x).map((g) => g.ev);
+    assert.deepStrictEqual(replay.filter((e) => e.kind === 'subagent').map((e) => e.name + ' ' + e.state + (e.info ? ' · ' + e.info.model : '')), ['desk_audio started', 'desk_speech started', 'desk_audio reported', 'desk_speech finished', 'desk_speech reported', 'desk_audio finished · gpt-6.1-sol'], 'the waiting is not a line of the transcript; an end line keeps its model');
+    assert(replay.some((e) => e.kind === 'question' && e.id === 'call_q'));
+    // answered: nothing waits for it, so the answers go as the next message, queued behind the turn
+    v.fire({ type: 'permission', sid: x, id: 'call_q', decision: 'answer', answers: { 'Where should replies play?': 'Default output', 'Anything else?': '  ' } }); await flush();
+    const answer = 'Answers to the questions you asked:\n- Where should replies play?\n  Default output\n- Anything else?\n  (no answer)';
+    { const { qid, ...u } = v.events(x).filter((e) => e.kind === 'user').pop(); assert.deepStrictEqual([v.tab(x).queued, typeof qid, u], [1, 'string', { kind: 'user', text: answer, queued: true }]); }
+    const n2 = v.got.length; v.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(v.got.slice(n2).filter((g) => g.type === 'event' && g.sid === x && (g.ev.kind === 'answered' || g.ev.kind === 'question')).map((g) => g.ev), [{ kind: 'answered', questions: qs, answers: { 'Where should replies play?': 'Default output' } }], 'replayed as answered');
+    // the turn ends: its sub-agents end with its process, and the answer goes
+    a.finish(); await flush(); await flush();
+    assert.strictEqual(a.sent[a.sent.length - 1], answer, 'sent to Codex as the next message');
+    a.finish(); await flush(); await flush();
+    assert.deepStrictEqual([v.tab(x).busy, v.tab(x).subagents], [false, null], 'no sub-agents once the turn is over');
+    // a question dismissed sends nothing; one answered while Codex is idle goes at once
+    a.emit({ kind: 'question', id: 'q2', async: true, questions: [qs[1]] });
+    v.fire({ type: 'permission', sid: x, id: 'q2', decision: 'deny' }); await flush();
+    const sent = a.sent.length;
+    a.emit({ kind: 'question', id: 'q3', async: true, questions: [qs[1]] });
+    v.fire({ type: 'permission', sid: x, id: 'q3', decision: 'answer', answers: { 'Anything else?': 'No' } }); await flush();
+    assert.deepStrictEqual([a.sent.length, a.sent[a.sent.length - 1]], [sent + 1, 'An answer to the question you asked:\n- Anything else?\n  No'], 'dismissed: nothing; answered while idle: sent now');
+    m.perch.dispose();
+  }
+
+  // ---- a queued message can be taken back until its turn starts: from perch's own queue for Codex, from Claude Code's for Claude
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const replayed = async (sid) => { const n = v.got.length; v.fire({ type: 'ready' }); await flush(); return v.got.slice(n).filter((g) => g.type === 'event' && g.sid === sid && g.ev.kind === 'user').map((g) => g.ev.text + (g.ev.queued ? ' (queued)' : '')); };
+    // Codex: the queue is perch's own
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hold on' }); await flush();
+    const a = created[created.length - 1];
+    for (const t of ['one', 'two', 'one']) v.fire({ type: 'send', sid: x, text: t });
+    const qd = v.events(x).filter((e) => e.kind === 'user' && e.queued);
+    assert.deepStrictEqual([v.tab(x).queued, qd.map((e) => e.text), new Set(qd.map((e) => e.qid)).size], [3, ['one', 'two', 'one'], 3], 'each queued message has an id of its own, whatever its words');
+    v.fire({ type: 'unqueue', sid: x, qid: qd[0].qid }); await flush();
+    assert.deepStrictEqual([v.tab(x).queued, v.events(x).filter((e) => e.kind === 'unqueued').pop()], [2, { kind: 'unqueued', qid: qd[0].qid, ok: true }], 'taken back: out of the queue, and the page told');
+    assert.deepStrictEqual(await replayed(x), ['hold on', 'two (queued)', 'one (queued)'], 'and gone from what a page made again is given');
+    // the turn ends: the next queued message starts, and is an ordinary message from then on; the one taken back never reaches Codex
+    a.finish(); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([a.sent, v.events(x).filter((e) => e.kind === 'dequeued').map((e) => e.qid)], [['hold on', 'two', 'one'], [qd[1].qid, qd[2].qid]]);
+    assert.deepStrictEqual(await replayed(x), ['hold on', 'two', 'one'], 'each echo dropped once, though two queued messages had the same words: no bubble twice, none lost');
+    v.fire({ type: 'unqueue', sid: x, qid: qd[1].qid }); await flush();
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'unqueued').pop(), { kind: 'unqueued', qid: qd[1].qid, ok: false, why: 'taken' }, 'too late once its turn has started');
+    // Stop drops what is queued: the note says how many, the bubbles go
+    v.fire({ type: 'send', sid: x, text: 'hold again' }); await flush();
+    v.fire({ type: 'send', sid: x, text: 'three' }); v.fire({ type: 'send', sid: x, text: 'four' });
+    const dropped = v.events(x).filter((e) => e.kind === 'user' && e.queued).slice(-2).map((e) => e.qid);
+    v.fire({ type: 'stop', sid: x }); await flush();
+    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'unqueued').slice(-2), dropped.map((qid) => ({ kind: 'unqueued', qid, ok: true, quiet: true })));
+    assert(v.events(x).some((e) => e.kind === 'note' && e.text === '2 queued messages dropped'));
+    assert.deepStrictEqual((await replayed(x)).slice(-1), ['hold again']);
+    // Claude: Claude Code holds the queue; perch asks it to take a message back
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hold the line' }); await flush();
+    const b = created[created.length - 1];
+    v.fire({ type: 'send', sid: c, text: 'c1' }); v.fire({ type: 'send', sid: c, text: 'c2' }); await flush();
+    const cq = v.events(c).filter((e) => e.kind === 'user' && e.queued).map((e) => e.qid);
+    v.fire({ type: 'unqueue', sid: c, qid: cq[0] }); await flush();
+    assert.deepStrictEqual([v.events(c).filter((e) => e.kind === 'unqueued').pop(), b.waiting.map(String)], [{ kind: 'unqueued', qid: cq[0], ok: true }, ['c2']]);
+    knobs.unqueue = 'unsupported';
+    try {
+      v.fire({ type: 'unqueue', sid: c, qid: cq[1] }); await flush();
+      assert.deepStrictEqual(v.events(c).filter((e) => e.kind === 'unqueued').pop(), { kind: 'unqueued', qid: cq[1], ok: false, why: 'unsupported' }, 'a Claude Code that cannot be asked: it stays queued');
+      assert.deepStrictEqual((await replayed(c)).slice(-1), ['c2 (queued)']);
+    } finally { knobs.unqueue = undefined; }
+    b.finish(); await flush(); await flush();
+    assert.deepStrictEqual([v.events(c).filter((e) => e.kind === 'dequeued').map((e) => e.qid), (await replayed(c))], [[cq[1]], ['hold the line', 'c2']], 'taken up by a turn: an ordinary message from then on');
+    v.fire({ type: 'unqueue', sid: 'nope', qid: 'x' }); v.fire({ type: 'unqueue', sid: c }); await flush();
+    m.perch.dispose();
+  }
+
   // ---- the page's copy button: the host puts the text on the clipboard
   {
     const m = install(); await flush();
@@ -1253,11 +1359,86 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.box.codexLoggedIn = false; m.box.codexLoginFails = 'spawn ENOENT'; m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
     assert.strictEqual(m.ui.errors.pop(), 'Perch: the Codex login could not start. spawn ENOENT');
     m.box.codexLoginFails = null; m.box.codexLoggedIn = true;
-    // a login that expires later shows as 401 from the API; the same offer follows the error
-    created[created.length - 1].emit({ kind: 'error', text: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header' }); await flush();
-    assert(/^Codex was refused: the login on .+ has expired or is missing\. Perch runs it/.test(m.ui.warnings.pop()));
-    const w = m.ui.warnings.length; created[created.length - 1].emit({ kind: 'error', text: 'something else' }); await flush();
-    assert.strictEqual(m.ui.warnings.length, w, 'other errors are not a login matter');
+    // a login Codex refuses later (ChatGPT ended the session: revoked, invalidated, the same login refreshed on another
+    // machine): the turn's message and its queue go back to the box, a lasting note offers the login, and messages are held
+    // until auth.json holds a new login. The errors are those `codex exec` wrote on 2026-10-12 for a revoked login.
+    m.box.codexStamp = 'stamp-old';
+    v.fire({ type: 'send', sid: y, text: 'hold this' }); await flush();
+    const ag = created[created.length - 1];
+    v.fire({ type: 'send', sid: y, text: 'queued behind' });
+    m.ui.warnings.length = 0;
+    for (const t of ['Reconnecting... 1/5 (workspace routing discovery unauthorized (401))', 'Reconnecting... 2/5 (workspace routing discovery unauthorized (401))',
+      'Codex Exec exited with code 1: Reading prompt from stdin...\nERROR codex_login::auth::manager: Failed to refresh token status=401 Unauthorized detail=TokenErrorDetail { error_code: Some("refresh_token_invalidated"), error_message: Some("Your session has ended. Please log in again.") }']) ag.emit({ kind: 'error', text: t });
+    await flush();
+    const refusedNotes = () => v.events(y).filter((e) => e.kind === 'note' && /was refused/.test(e.text));
+    assert.deepStrictEqual([refusedNotes().length, refusedNotes()[0].actions.map((x) => x.id), /The messages are back in the box\.$/.test(refusedNotes()[0].text), /a copy of another machine's auth\.json ends when either copy refreshes/.test(refusedNotes()[0].text)],
+      [1, ['codexLogin', 'codexDevice'], true, true], 'said once, though Codex said it three times; with why, and with the ways in');
+    assert.deepStrictEqual([v.events(y).filter((e) => e.kind === 'insert').pop().text, v.tab(y).queued], ['hold this\n\nqueued behind', 0], 'the turn\'s message and the one queued behind it, back in the box in order; the queue is empty');
+    assert.strictEqual(m.ui.warnings.filter((x) => /was refused: ChatGPT ended its session/.test(x)).length, 1, 'one notification');
+    assert.strictEqual(m.globalState._dump()['perch.codex.refusedLogin'], 'stamp-old', 'which login was refused, kept across reloads');
+    ag.finish(); await flush(); await flush();
+    const sentBefore = ag.sent.length;
+    // the next message is held: no turn starts on a login Codex has refused
+    v.fire({ type: 'send', sid: y, text: 'try again' }); await flush();
+    assert.deepStrictEqual([ag.sent.length, /was refused, and no new one has been made/.test(refusedNotes().pop().text), v.events(y).filter((e) => e.kind === 'insert').pop().text], [sentBefore, true, 'try again']);
+    // the note's Log In runs a login, though auth.json is there, and waits for one other than the refused one
+    const logins = m.box.codexLogins.length;
+    v.fire({ type: 'noteAction', sid: y, action: 'codexLogin' }); await flush(); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, m.box.codexWaitSince, m.globalState._dump()['perch.codex.refusedLogin']], [logins + 1, 'stamp-old', undefined]);
+    // a new login is there: messages go again
+    v.fire({ type: 'send', sid: y, text: 'after login' }); await flush();
+    assert.strictEqual(String(ag.sent[ag.sent.length - 1]), 'after login');
+    // a refused login is also ended by a refresh elsewhere on this machine: auth.json rewritten
+    ag.emit({ kind: 'error', text: 'Reconnecting... 1/5 (workspace routing discovery unauthorized (401))' }); await flush();
+    m.box.codexStamp = 'stamp-refreshed-by-the-codex-extension';
+    v.fire({ type: 'send', sid: y, text: 'refreshed' }); await flush();
+    assert.strictEqual(String(ag.sent[ag.sent.length - 1]), 'refreshed', 'the file changed: not held');
+    // other errors are no login matter; nor is a bare 401, which may be any server's
+    const w = m.ui.warnings.length; ag.emit({ kind: 'error', text: 'something else' }); ag.emit({ kind: 'error', text: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header' }); await flush();
+    assert.deepStrictEqual([m.ui.warnings.length, m.globalState._dump()['perch.codex.refusedLogin']], [w, undefined], 'other errors are not a login matter');
+    m.perch.dispose();
+  }
+
+  // ---- a login note's buttons always answer: a login waiting already is brought back, not dropped; one done marks every
+  // login note done, in place, in every Codex tab, and so in what is replayed (seen 2026-10-12: the note's Log In did nothing)
+  {
+    const m = install(undefined, { meter: { codexLoggedIn: false } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'new', kind: 'codex' }); const z = v.lastTabs().active;
+    let release; m.box.codexLoginHold = new Promise((r) => { release = r; });
+    v.fire({ type: 'send', sid: x, text: 'hi' }); v.fire({ type: 'send', sid: z, text: 'there' }); await flush(); await flush();
+    const note = v.events(x).filter((e) => e.kind === 'note').pop();
+    assert.deepStrictEqual([note.nid, note.actions.map((a) => a.id)], ['codexLogin', ['codexLogin', 'codexDevice']]);
+    // the note's Log In: a login starts, its page opens, and it waits for the browser
+    m.ui.external.length = 0; m.ui.infos.length = 0;
+    v.fire({ type: 'noteAction', sid: x, action: 'codexLogin' }); await flush(); await flush(); await flush();
+    const page = m.ui.external[0];
+    assert.deepStrictEqual([m.box.codexLogins.length, typeof page, /^https:\/\/auth\.openai\.com\//.test(page)], [1, 'string', true]);
+    // pressed again while it waits, from the other tab: no second login; the same page again, and said so
+    v.fire({ type: 'noteAction', sid: z, action: 'codexLogin' }); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, m.ui.external.length, m.ui.external[1], /already waiting for you: its sign-in page is open again/.test(m.ui.infos.pop())], [1, 2, page, true]);
+    // the browser comes back: every login note is done, in place, in each tab
+    release(); for (let i = 0; i < 6; i++) await flush();
+    for (const sid of [x, z]) {
+      const done = v.events(sid).filter((e) => e.kind === 'noteDone');
+      assert.deepStrictEqual([done.length, done[0] && done[0].nid, done[0] && /^Logged in on .+ at \d\d:\d\d: send the message again\.$/.test(done[0].text)], [1, 'codexLogin', true], 'in ' + sid);
+    }
+    // and in what a page made again is given: the note without its buttons, with the word
+    const n = v.got.length; v.fire({ type: 'ready' }); await flush();
+    const replayed = v.got.slice(n).filter((g) => g.type === 'event' && g.sid === x && g.ev.kind === 'note' && g.ev.nid === 'codexLogin').map((g) => g.ev);
+    assert.deepStrictEqual(replayed.map((e) => [e.actions, /^Logged in on /.test(e.done)]), [[undefined, true]]);
+    // pressed after the login: said, not a login
+    v.fire({ type: 'noteAction', sid: x, action: 'codexLogin' }); await flush();
+    assert.deepStrictEqual([m.box.codexLogins.length, m.ui.infos.pop()], [1, 'Perch: Codex is logged in. Send your message again.']);
+    // the device code, waiting: pressed again, its terminal comes back
+    m.box.codexLoggedIn = false; m.box.codexLoginHold = new Promise((r) => { release = r; });
+    v.fire({ type: 'noteAction', sid: x, action: 'codexDevice' }); await flush();
+    const shown = m.ui.terminals.length;
+    v.fire({ type: 'noteAction', sid: x, action: 'codexDevice' }); await flush();
+    assert.deepStrictEqual([m.ui.terminals.length, /already waiting for you, in the Codex login terminal/.test(m.ui.infos.pop())], [shown, true]);
+    release(); for (let i = 0; i < 4; i++) await flush();
+    m.box.codexLoginHold = null;
     m.perch.dispose();
   }
 
@@ -1604,7 +1785,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   // ---- the prompt cache is warm from each response of a turn, not only from the turn's end: a long turn must not read "cold" throughout
   {
     const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
-    const out = [], a = { live: '', emit: (e) => out.push(e) };
+    const out = [], a = { live: '', waiting: [], emit: (e) => out.push(e), _taken: ClaudeAgent.prototype._taken };
     ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'message_start' } });
     assert.deepStrictEqual([out.length, out[0].kind, typeof out[0].at], [1, 'responded', 'number'], 'a response has begun: the request that brought it touched the cache');
     ClaudeAgent.prototype._onMessage.call(a, { type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: 'toolu_1' });
@@ -1625,6 +1806,50 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       'the counts as they stood at the end, each conversation\'s own; only the main thread\'s response restarts the cache clock');
   }
 
+  // ---- the real Codex agent: an app the turn tried is not connected (SharePoint, as seen on 2026-10-09): the connect link
+  // Codex's apps server gives in the result's _meta is said in a note, once a turn, as a button to chatgpt.com
+  {
+    const { CodexAgent, connectLink } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const P = CodexAgent.prototype, out = [];
+    const a = { connectSaid: new Set(), emit: (e) => out.push(e), _connect: P._connect, _said: P._said };
+    const failed = (url) => ({ type: 'item.completed', item: { id: 'm1', type: 'mcp_tool_call', server: 'codex_apps', tool: 'microsoft_sharepoint.search', arguments: { query: 'SSP' }, error: null, status: 'completed',
+      result: { content: [{ type: 'text', text: 'connector_1e4f6a44acf14e3ca1d96672f8c945bc is not connected' }], structured_content: { error: 'connector_1e4f6a44acf14e3ca1d96672f8c945bc is not connected', error_code: 'USER_NOT_LOGGED_IN' },
+        _meta: { _codex_apps: { connector_auth_failure: { is_auth_failure: true, auth_reason: 'missing_link', connector_id: 'connector_1e4f6a44acf14e3ca1d96672f8c945bc', install_url: url, message: 'Connect this app on ChatGPT to use it in Codex.' } } } } } });
+    const URL = 'https://chatgpt.com/plugins/plugin_connector_1e4f6a44acf14e3ca1d96672f8c945bc';
+    P._onEvent.call(a, failed(URL), Date.now());
+    assert.deepStrictEqual(out.map((e) => e.kind), ['tool_result', 'note'], 'the result as before, then the note');
+    assert.strictEqual(out[0].text, '{"error":"connector_1e4f6a44acf14e3ca1d96672f8c945bc is not connected","error_code":"USER_NOT_LOGGED_IN"}', 'the result shows what it always showed');
+    assert.deepStrictEqual(out[1].actions, [{ id: 'connectApp', label: 'Connect on ChatGPT', url: URL }]);
+    assert(/^microsoft_sharepoint is not connected to the ChatGPT account Codex signs in with\. Connect this app on ChatGPT to use it in Codex\. The sign-in happens on chatgpt\.com, in your browser/.test(out[1].text));
+    P._onEvent.call(a, failed(URL), Date.now());
+    assert.deepStrictEqual(out.map((e) => e.kind), ['tool_result', 'note', 'tool_result'], 'a second failing call in the turn: no second note');
+    assert.strictEqual(connectLink(failed('https://evil.example/x').item.result), null, 'only a chatgpt.com link is taken');
+    assert.deepStrictEqual([connectLink(null), connectLink({}), connectLink({ _meta: { _codex_apps: { connector_auth_failure: { is_auth_failure: false, install_url: URL } } } })], [null, null, null]);
+    out.length = 0; P._onEvent.call(a, { type: 'item.completed', item: { id: 'm2', type: 'mcp_tool_call', server: 'codex_apps', tool: 'gmail.search', result: { content: [], structured_content: { ok: 1 } } } }, Date.now());
+    assert.deepStrictEqual(out.map((e) => e.kind), ['tool_result'], 'a call that worked: nothing more');
+  }
+
+  // ---- the real Codex agent watches its thread's file while a turn runs, for what the SDK does not stream
+  {
+    const { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const made = [];
+    class FakeWatch { constructor(o) { this.o = o; this.started = 0; this.stopped = 0; made.push(this); } start() { this.started++; } stop() { this.stopped++; } }
+    const out = [], P = CodexAgent.prototype;
+    const a = { opts: { Watch: FakeWatch, codexHome: '/h' }, threadId: null, watch: null, running: true, emit: (e) => out.push(e), _watch: P._watch, _unwatch: P._unwatch };
+    P._watch.call(a); assert.strictEqual(made.length, 0, 'a new thread has no file to watch until Codex names it');
+    P._onEvent.call(a, { type: 'thread.started', thread_id: 't9' }, Date.now());
+    assert.deepStrictEqual([made.length, made[0].o.id, made[0].o.home, made[0].started, out[0]], [1, 't9', '/h', 1, { kind: 'session', id: 't9' }], 'named: watched from then on');
+    P._watch.call(a); assert.strictEqual(made.length, 1, 'one watch at a time');
+    made[0].o.emit({ kind: 'subagent', name: 'a', state: 'started' });
+    assert.deepStrictEqual(out.pop(), { kind: 'subagent', name: 'a', state: 'started' }, 'what it reads, the agent says');
+    P._unwatch.call(a); assert.deepStrictEqual([made[0].stopped, a.watch], [1, null], 'stopped, after its last read, when the turn ends');
+    a.opts.watch = false; P._watch.call(a); assert.strictEqual(made.length, 1, 'turned off');
+    a.opts.watch = undefined; P._watch.call(a); const w = a.watch;
+    P._startOver.call(a, 'another provider'); assert.deepStrictEqual([w.stopped, a.watch, a.threadId], [1, null, null], 'a thread started over: the old one\'s watch goes');
+    class Broken { constructor() { throw new Error('no'); } }
+    const b = { opts: { Watch: Broken }, threadId: 't', watch: null }; P._watch.call(b); assert.strictEqual(b.watch, null, 'a watch that cannot start stops no turn');
+  }
+
   // ---- the real Codex agent: a thread cannot cross between OpenAI and Bedrock, so a switch across them, or a refusal for encrypted reasoning, starts a new thread
   {
     const { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
@@ -1643,10 +1868,49 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(out.pop().kind, 'note', 'Codex\'s word on the model change is a note, as before');
   }
 
+  // ---- the real Claude agent: a queued message carries a uuid, can be taken back before a turn takes it up, and is said to start
+  {
+    const { ClaudeAgent, AsyncQueue } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
+    const P = ClaudeAgent.prototype, out = [];
+    const a = { running: true, pending: 1, waiting: [], sessionId: 's1', queue: new AsyncQueue(), query: null, emit: (e) => out.push(e) };
+    P.send.call(a, 'first queued'); P.send.call(a, 'second queued');
+    const users = out.filter((e) => e.kind === 'user');
+    assert.deepStrictEqual(users.map((u) => [u.text, u.queued, typeof u.qid]), [['first queued', true, 'string'], ['second queued', true, 'string']]);
+    const [q1, q2] = users.map((u) => u.qid);
+    assert.deepStrictEqual([a.waiting, a.queue.items.map((m) => [m.uuid, m.priority]), a.pending], [[q1, q2], [[q1, 'next'], [q2, 'next']], 3], 'each goes to Claude Code with its uuid, behind the turn');
+    // not yet handed to Claude Code: taken out of perch's own input stream
+    assert.deepStrictEqual(await P.unqueue.call(a, q1), { ok: true });
+    assert.deepStrictEqual([a.waiting, a.queue.items.map((m) => m.uuid), a.pending], [[q2], [q2], 2]);
+    // handed over already: Claude Code is asked, and says whether it still had it
+    a.queue.items.length = 0; const asked = [];
+    a.query = { cancelAsyncMessage: async (u) => { asked.push(u); return true; } };
+    assert.deepStrictEqual([await P.unqueue.call(a, q2), asked, a.waiting, a.pending], [{ ok: true }, [q2], [], 1], 'cancelled in Claude Code; the turn that runs still counts');
+    P.send.call(a, 'third'); const q3 = out.filter((e) => e.kind === 'user').pop().qid;
+    a.queue.items.length = 0; a.query = { cancelAsyncMessage: async () => false };
+    assert.deepStrictEqual([await P.unqueue.call(a, q3), a.waiting], [{ ok: false, why: 'taken' }, []], 'a turn had taken it up: too late, and it waits no longer');
+    P.send.call(a, 'fourth'); const q4 = out.filter((e) => e.kind === 'user').pop().qid;
+    a.queue.items.length = 0; a.query = {};
+    assert.deepStrictEqual([await P.unqueue.call(a, q4), a.waiting], [{ ok: false, why: 'unsupported' }, [q4]], 'a Claude Code that cannot be asked: it stays queued, and will run');
+    a.query = { cancelAsyncMessage: async () => { throw new Error('unknown subtype'); } };
+    assert.deepStrictEqual(await P.unqueue.call(a, q4), { ok: false, why: 'unsupported' });
+    assert.deepStrictEqual(await P.unqueue.call(a, 'nope'), { ok: false, why: 'taken' }, 'one never queued, or long gone');
+    // a turn takes queued messages up: said for each, by the uuids Claude Code stamps on the turn's first messages
+    P.send.call(a, 'fifth'); const q5 = out.filter((e) => e.kind === 'user').pop().qid; out.length = 0;
+    P._taken.call(a, { type: 'stream_event', user_message_uuids: [q4, 'other'], user_message_uuid: q5 });
+    assert.deepStrictEqual([out, a.waiting], [[{ kind: 'dequeued', qid: q4 }, { kind: 'dequeued', qid: q5 }], []]);
+    P._taken.call(a, { type: 'assistant', user_message_uuids: [q4] }); assert.strictEqual(out.length, 2, 'each once');
+    // idle, or the process gone: nothing is queued any more
+    P.send.call(a, 'sixth'); const q6 = out.filter((e) => e.kind === 'user').pop().qid; out.length = 0;
+    P._settle.call(a); assert.deepStrictEqual([out, a.waiting], [[{ kind: 'dequeued', qid: q6 }], []]);
+    // a message sent while nothing runs is no queued one: no uuid, nothing to take back
+    const b = { running: false, pending: 0, waiting: [], sessionId: '', queue: new AsyncQueue(), emit: (e) => out.push(e) };
+    P.send.call(b, 'now'); assert.deepStrictEqual([out.pop().qid, out.pop().qid, b.queue.items[0].uuid, b.waiting], [undefined, undefined, undefined, []]);
+  }
+
   // ---- the real Claude agent takes Claude Code's word on whether a turn runs: a lost result must not leave a tab working
   {
     const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
-    const out = [], a = { running: true, pending: 2, emit: (e) => out.push(e), _context() {}, _state: ClaudeAgent.prototype._state };
+    const out = [], a = { running: true, pending: 2, waiting: [], emit: (e) => out.push(e), _context() {}, _state: ClaudeAgent.prototype._state, _taken: ClaudeAgent.prototype._taken, _settle: ClaudeAgent.prototype._settle };
     ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'requires_action' });
     assert.deepStrictEqual([a.running, a.pending, out], [true, 2, []], 'waiting on the user is still a running turn');
     ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'idle' });
@@ -1720,9 +1984,9 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const xa = created[created.length - 1];
     assert.deepStrictEqual([xa.sent, xa.images, xa.shownAs], [['hold this'], [[PNG]], [{ text: 'hold this', tag: undefined }]]);
     v.fire({ type: 'send', sid: x, text: 'next', images: [JPG, PNG] }); await flush();
-    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'next', queued: true, images: 2 });
+    { const { qid, ...u } = v.events(x).filter((e) => e.kind === 'user').pop(); assert.deepStrictEqual([typeof qid, u], ['string', { kind: 'user', text: 'next', queued: true, images: 2 }]); }
     v.fire({ type: 'send', sid: x, text: 'with thumb', images: [Object.assign({ thumb: T }, PNG)] }); await flush();
-    assert.deepStrictEqual(v.events(x).filter((e) => e.kind === 'user').pop(), { kind: 'user', text: 'with thumb', queued: true, images: 1, thumbs: [T] }, 'a queued Codex message shows its thumbnail at once');
+    { const { qid, ...u } = v.events(x).filter((e) => e.kind === 'user').pop(); assert.deepStrictEqual([typeof qid, u], ['string', { kind: 'user', text: 'with thumb', queued: true, images: 1, thumbs: [T] }], 'a queued Codex message shows its thumbnail at once'); }
     assert.strictEqual(xa.sent.length, 1, 'waiting behind the turn');
     xa.finish(); await flush(); await flush();
     assert.deepStrictEqual([xa.sent, xa.images[1]], [['hold this', 'next', 'with thumb'], [JPG, PNG]], 'a queued message keeps its images');
@@ -1730,7 +1994,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
     // the real Codex agent hands images over as files, and takes them away with it
     const fs = require('fs'), { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
-    const a = { imageDir: null, imageCount: 0, turnAbort: null };
+    const a = { imageDir: null, imageCount: 0, turnAbort: null, _unwatch: CodexAgent.prototype._unwatch };
     const input = CodexAgent.prototype._input.call(a, 'look', [PNG, JPG]);
     assert.deepStrictEqual(input.map((i) => [i.type, i.text || require('path').basename(i.path)]), [['text', 'look'], ['local_image', '1.png'], ['local_image', '2.jpg']]);
     assert.deepStrictEqual(fs.readFileSync(input[1].path), Buffer.from(PNG.data, 'base64'));

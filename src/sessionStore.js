@@ -204,15 +204,221 @@ function claudeEvents(messages) {
   return out;
 }
 
+// ---- what a Codex thread does beyond its own turn: sub-agents, and questions it asks without waiting
+// The Codex SDK streams a turn's messages, commands, and edits, but not the sub-agents a turn starts (`spawn_agent` and the
+// rest of the `collaboration` tools) nor `request_user_input_async`, a question the agent asks and does not wait for. Both
+// are in the thread's rollout file: a sub-agent's life as `SubAgentActivity` items (started, interacted, completed,
+// interrupted), its reports as `agent_message` items addressed to `/root` (MESSAGE as it goes, FINAL_ANSWER at the end of
+// a task; their text is encrypted, so only the fact of a report can be shown), and the root's calls to it.
+const COLLAB_TOOLS = new Set(['spawn_agent', 'send_message', 'followup_task', 'wait_agent', 'list_agents', 'interrupt_agent', 'request_user_input_async']);
+
+/** A sub-agent's name as the transcript shows it: its path under the root (`/root/desk_audio` is `desk_audio`). The root itself is ''. */
+function agentName(v) {
+  const s = String(v || '').trim();
+  if (!s || s === '/root' || s === 'root') return '';
+  return s.replace(/^\/?root\//, '');
+}
+
+/** Codex's questions ({title, options: [string]}) in the form the question card takes ({question, options: [{label}]}). */
+function codexQuestions(list) {
+  return (Array.isArray(list) ? list : []).map((q) => {
+    const question = q && typeof q === 'object' ? String(q.title || q.question || '').trim() : '';
+    if (!question) return null;
+    const options = (Array.isArray(q.options) ? q.options : []).map((o) => (typeof o === 'string' ? { label: o } : o && typeof o.label === 'string' ? Object.assign({ label: o.label }, typeof o.description === 'string' && o.description ? { description: o.description } : {}) : null)).filter((o) => o && o.label.trim());
+    return { question, options, multiSelect: false };
+  }).filter(Boolean);
+}
+
+/**
+ * One rollout record as an event of the sub-agents or of a question, or null for anything else.
+ * {kind: 'subagent', name, state}: state is started, active (the root spoke to it), tasked (a follow-up task), reported (a
+ * progress message), answered (its final answer), finished, interrupted, or waiting (the root waits on its sub-agents; name '').
+ * {kind: 'question', id, async: true, questions}: asked without waiting; the answer can only be the user's next message.
+ */
+function collabEvent(o) {
+  const p = o && o.payload;
+  if (!p || typeof p !== 'object') return null;
+  if (o.type === 'event_msg' && p.type === 'item_completed' && p.item && p.item.type === 'SubAgentActivity') {
+    const name = agentName(p.item.agent_path), state = { started: 'started', interacted: 'active', completed: 'finished', interrupted: 'interrupted' }[p.item.kind];
+    if (!name || !state) return null;
+    // each names its own thread, whose file says which model answers it and what it costs (UsageTally). Every kind carries
+    // it: a sub-agent started in an earlier turn is first heard of in this one by a follow-up's `interacted`
+    const thread = typeof p.item.agent_thread_id === 'string' ? p.item.agent_thread_id.trim() : '';
+    return thread ? { kind: 'subagent', name, state, thread } : { kind: 'subagent', name, state };
+  }
+  if (o.type === 'response_item' && p.type === 'agent_message' && agentName(p.recipient) === '') {
+    const name = agentName(p.author);
+    if (!name) return null;
+    const head = (Array.isArray(p.content) ? p.content : []).map((c) => (c && c.type === 'input_text' && typeof c.text === 'string' ? c.text : '')).join('');
+    return { kind: 'subagent', name, state: /Message Type: FINAL_ANSWER/.test(head) ? 'answered' : 'reported' };
+  }
+  if (o.type === 'response_item' && p.type === 'function_call' && COLLAB_TOOLS.has(p.name)) {
+    let a = {}; try { a = JSON.parse(p.arguments || '{}') || {}; } catch (_) { /* not JSON: nothing to read */ }
+    if (p.name === 'request_user_input_async') { const questions = codexQuestions(a.questions); return questions.length ? { kind: 'question', id: String(p.call_id || p.id || ''), async: true, questions } : null; }
+    if (p.name === 'followup_task') { const name = agentName(a.target); return name ? { kind: 'subagent', name, state: 'tasked' } : null; }
+    if (p.name === 'wait_agent') return { kind: 'subagent', name: '', state: 'waiting' };
+    return null;                     // spawn_agent is said by its SubAgentActivity; send_message and interrupt_agent by theirs; list_agents says nothing
+  }
+  return null;
+}
+
+// ---- what a sub-agent's own thread file says of it: which model answered its turns, at what effort, and what they cost
+/**
+ * A tally of one thread's turns and tokens, fed its rollout lines one at a time (src/codexWatch.js feeds a file as it
+ * grows; `rolloutUsage` a whole one). Three records are read: `turn_context` (the model and effort of each turn, so a
+ * thread moved to another model mid-way shows both), `token_usage_record` (what each turn cost) and `session_meta` (the
+ * nickname Codex gives the agent). A line is parsed only if it names one of them; most lines name none.
+ */
+class UsageTally {
+  /**
+   * @param {{since?: number, until?: number}} [window]  epoch ms. Turns and tokens count only for records stamped inside
+   *   it (an unstamped record counts). A turn before it still says which model the thread was on, so a sub-agent resumed
+   *   from an earlier turn shows its model before it works in this one; a record after it says nothing, so a thread read
+   *   back later shows itself as it was then.
+   */
+  constructor({ since = -Infinity, until = Infinity } = {}) {
+    this.since = since; this.until = until;
+    this.nickname = ''; this.model = ''; this.effort = ''; this.turns = 0; this.byModel = new Map(); this.input = 0; this.cached = 0; this.output = 0;
+  }
+  /** @returns {boolean} whether the line changed the tally */
+  feed(line) {
+    if (!isUsageLine(line)) return false;
+    let o; try { o = JSON.parse(line); } catch (_) { return false; }
+    return this.feedRecord(o);
+  }
+  /** One parsed rollout record. @returns {boolean} whether it changed the tally */
+  feedRecord(o) {
+    const p = o && o.payload;
+    if (!p || typeof p !== 'object') return false;
+    const at = Date.parse(o.timestamp);              // NaN when unstamped, which neither comparison holds for
+    if (at > this.until) return false;
+    const inside = !(at < this.since);
+    if (o.type === 'session_meta') {
+      const nickname = typeof p.agent_nickname === 'string' ? p.agent_nickname.trim() : '';
+      if (!nickname || nickname === this.nickname) return false;
+      this.nickname = nickname; return true;
+    }
+    if (o.type === 'turn_context') {
+      const model = typeof p.model === 'string' ? p.model.trim() : '';
+      if (!model) return false;
+      const effort = typeof p.effort === 'string' ? p.effort.trim() : '';
+      const changed = inside || model !== this.model || effort !== this.effort;
+      this.model = model; this.effort = effort;
+      if (inside) { this.turns++; this.byModel.set(model, (this.byModel.get(model) || 0) + 1); }
+      return changed;
+    }
+    if (o.type === 'token_usage_record') {
+      const u = p.usage;
+      if (!inside || !u || typeof u !== 'object') return false;
+      const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+      this.input += n(u.input_tokens); this.cached += n(u.cached_input_tokens); this.output += n(u.output_tokens);
+      return true;
+    }
+    return false;
+  }
+  /**
+   * What the tally says: the model of the latest turn and its effort, the turns, the tokens; `nickname` when the file
+   * gave one; `models`, each with its turns in the order first used, only when there was more than one.
+   */
+  summary() {
+    const out = { model: this.model, effort: this.effort, turns: this.turns, tokens: { input: this.input, cached: this.cached, output: this.output } };
+    if (this.nickname) out.nickname = this.nickname;
+    if (this.byModel.size > 1) out.models = [...this.byModel.entries()].map(([model, turns]) => ({ model, turns }));
+    return out;
+  }
+}
+
+const isUsageLine = (line) => !!line && (line.indexOf('turn_context') >= 0 || line.indexOf('token_usage_record') >= 0 || line.indexOf('session_meta') >= 0);
+
+/** The records of a rollout a tally reads, parsed once. @param {string} text */
+function usageRecords(text) {
+  const out = [];
+  for (const line of String(text || '').split('\n')) { if (!isUsageLine(line)) continue; try { out.push(JSON.parse(line)); } catch (_) { /* half a line */ } }
+  return out;
+}
+
+/** The tally of a whole rollout file, or of a window of it. @param {string} text */
+function rolloutUsage(text, window) { const t = new UsageTally(window); for (const o of usageRecords(text)) t.feedRecord(o); return t.summary(); }
+
+/**
+ * Where each sub-agent's end in a root thread's file falls, in the order `codexEvents` gives the end lines: its name, its
+ * thread, and the turn it ended in, from that turn's start (`task_started`) to the end itself.
+ * @param {string} text  the root's whole rollout file
+ */
+function subagentEnds(text) {
+  const out = [];
+  let turnAt = -Infinity;
+  for (const line of String(text || '').split('\n')) {
+    if (!line || (line.indexOf('task_started') < 0 && line.indexOf('SubAgentActivity') < 0)) continue;
+    let o; try { o = JSON.parse(line); } catch (_) { continue; }
+    if (o && o.type === 'event_msg' && o.payload && o.payload.type === 'task_started') { const t = Date.parse(o.timestamp); if (!Number.isNaN(t)) turnAt = t; continue; }
+    const c = collabEvent(o);
+    if (!c || c.kind !== 'subagent' || (c.state !== 'finished' && c.state !== 'interrupted')) continue;
+    const at = Date.parse(o.timestamp);
+    out.push({ name: c.name, thread: c.thread || '', since: turnAt, until: Number.isNaN(at) ? Infinity : at });
+  }
+  return out;
+}
+
+/**
+ * Give each sub-agent's end line in a transcript read back from a file what its own thread's file says of it (`info`: a
+ * tally summary), so a past turn's lines show which model answered each sub-agent and what it cost, as a live turn's do.
+ * With the root's file (`text`), each end counts the turn it ended in, up to the end, as the live line did; without it,
+ * the thread's whole file. The thread is the one the end names, or else the one of the start before it.
+ * @param {object[]} events  from `codexEvents`, changed in place
+ * @param {string} home  Codex's home, whose sessions hold the sub-agents' files
+ */
+function addSubagentUsage(events, home, { text = null, read = (f) => fs.readFileSync(f, 'utf8'), find = null } = {}) {
+  let index = null;                  // the sessions tree, walked once for all of them
+  const locate = find || ((thread) => {
+    if (!index) { try { index = newestRollouts(path.join(home, 'sessions'), Infinity); } catch (_) { index = []; } }
+    const end = '-' + thread + '.jsonl', hit = index.find((f) => f.file.endsWith(end));
+    return hit ? hit.file : null;
+  });
+  const ends = text === null ? null : subagentEnds(text);
+  const threads = new Map(), records = new Map();   // a thread's file, read and parsed once for all its ends
+  const recordsOf = (thread) => {
+    if (!records.has(thread)) { let rs = null; try { const f = locate(thread); if (f) rs = usageRecords(read(f)); } catch (_) { rs = null; } records.set(thread, rs); }
+    return records.get(thread);
+  };
+  let k = 0;
+  for (const e of events) {
+    if (!e || e.kind !== 'subagent' || !e.name) continue;
+    if (e.state === 'started') { if (e.thread) threads.set(e.name, e.thread); continue; }
+    if (e.state !== 'finished' && e.state !== 'interrupted') continue;
+    let thread = e.thread || threads.get(e.name), window;
+    if (ends) {
+      const w = ends[k++];
+      if (!w || w.name !== e.name) continue;           // not the same end: nothing, rather than another's figures
+      thread = w.thread || thread; window = { since: w.since, until: w.until };
+    }
+    const rs = thread ? recordsOf(thread) : null;
+    if (!rs) continue;
+    const t = new UsageTally(window);
+    for (const o of rs) t.feedRecord(o);
+    const u = t.summary();
+    if (u.model) e.info = u;
+  }
+  return events;
+}
+
 /** @param {string} text  a whole rollout file */
 function codexEvents(text) {
   const out = [];
   const flat = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.map((x) => (x && typeof x.text === 'string' ? x.text : '')).join('') : v && typeof v === 'object' ? String(v.content || v.output || JSON.stringify(v)) : '');
+  const collabCalls = new Set();     // the ids of the collaboration calls: their outputs are not shown either
   for (const line of String(text || '').split('\n')) {
     if (!line) continue;
     let o; try { o = JSON.parse(line); } catch (_) { continue; }
+    // sub-agents and questions, in the place in the conversation where they happened. A question of the past is shown as
+    // asked, not as a card to answer: it was answered, or not, by what the user wrote next.
+    const c = collabEvent(o);
+    if (c && c.kind === 'question') { out.push({ kind: 'answered', questions: c.questions, answers: null }); }
+    else if (c && c.kind === 'subagent' && !['active', 'waiting', 'answered', 'usage'].includes(c.state)) out.push(c);
     const p = o && o.type === 'response_item' && o.payload;
     if (!p) continue;
+    if ((p.type === 'function_call' || p.type === 'custom_tool_call') && COLLAB_TOOLS.has(p.name)) { collabCalls.add(p.call_id || p.id); continue; }
+    if ((p.type === 'function_call_output' || p.type === 'custom_tool_call_output') && collabCalls.has(p.call_id || p.id)) continue;
     if (p.type === 'message' && Array.isArray(p.content)) {
       if (p.role === 'user') {
         const said = p.content.filter((c) => c && c.type === 'input_text' && typeof c.text === 'string' && !c.text.trim().startsWith('<')).map((c) => c.text).join('\n');
@@ -252,7 +458,7 @@ async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.
   let events = [];
   if (!id) return { events, earlier: 0 };
   if (kind === 'claude') events = claudeEvents(await (sdk || await claudeSdk()).getSessionMessages(id, dir ? { dir } : undefined));
-  else if (kind === 'codex') { const file = codexRollout(id, home); if (file) events = codexEvents(fs.readFileSync(file, 'utf8')); }
+  else if (kind === 'codex') { const file = codexRollout(id, home); if (file) { const text = fs.readFileSync(file, 'utf8'); events = addSubagentUsage(codexEvents(text), home, { text }); } }
   const earlier = Math.max(0, events.length - limit);
   return { events: earlier ? events.slice(earlier) : events, earlier };
 }
@@ -304,4 +510,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

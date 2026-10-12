@@ -44,14 +44,15 @@ function storageDir() {
   }
   return storage;
 }
+let fakeQueued = 0;
 class FakeAgent {
-  constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
+  constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
   send(t, a, b) {
     const shown = this.claude ? b : a, images = (this.claude ? a : b) || [];   // the two agents take their arguments as the real ones do
     this.sent.push(t); (this.images = this.images || []).push(images);
     const n = images.length ? { images: images.length } : {};
     if (shown) { this.shownAs = this.shownAs || []; this.shownAs.push(shown); t = Object.assign(new String(t), { shown }); }
-    if (this.running) { this.emit(Object.assign({ kind: 'user', text: t, queued: true }, n)); this.waiting.push(t); return; }   // only Claude is ever sent a message mid-turn
+    if (this.running) { const qid = 'fq-' + (++fakeQueued); this.emit(Object.assign({ kind: 'user', text: t, queued: true, qid }, n)); this.waiting.push(t); this.waitingIds.push(qid); return; }   // only Claude is ever sent a message mid-turn
     this.emit(Object.assign({ kind: 'user', text: t.shown ? t.shown.text : String(t), queued: false }, n, t.shown && t.shown.tag ? { tag: t.shown.tag } : {}));
     this.begin(String(t));
   }
@@ -72,12 +73,18 @@ class FakeAgent {
     if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: 'claude-' + (this.o.model || 'opus') + '-resolved' }); }
     if (this.claude && this.o.gateway) this.emit({ kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache_read: 0, output: 3 } });   // the turn's result, which carries what answered; only agents on a gateway send one here, so no other test's event sequence changes
     this.held = null;
-    if (this.waiting.length) { this.begin(this.waiting.shift()); return; }
+    if (this.waiting.length) { this.emit({ kind: 'dequeued', qid: this.waitingIds.shift() }); this.begin(this.waiting.shift()); return; }
     this.running = false;
     this.emit({ kind: 'busy', busy: false });
   }
   finish() { if (this.held) this.answer(this.held); }
-  interrupt() { this.interrupted++; this.waiting = []; if (this.running) { this.running = false; this.held = null; this.emit({ kind: 'busy', busy: false }); } }
+  interrupt() { this.interrupted++; this.waiting = []; this.waitingIds = []; if (this.running) { this.running = false; this.held = null; this.emit({ kind: 'busy', busy: false }); } }
+  /** Claude: take a queued message back, as Claude Code would; `knobs.unqueue` says how a Claude Code that cannot be asked answers */
+  async unqueue(qid) {
+    if (knobs.unqueue === 'unsupported') return { ok: false, why: 'unsupported' };
+    const i = this.waitingIds.indexOf(qid); if (i < 0) return { ok: false, why: 'taken' };
+    this.waitingIds.splice(i, 1); this.waiting.splice(i, 1); return { ok: true };
+  }
   setPermissionMode(m) { this.modes.push(m); }
   setSandboxMode(m) { this.modes.push(m); }
   setEffort(e) { this.efforts.push(e); }
@@ -228,7 +235,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, and is counted
-    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, waitForLogin: async () => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexLoggedIn = true; return true; },
+    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; if (box.codexLoginHold) await box.codexLoginHold; box.codexLoggedIn = true; box.codexStamp = 'stamp-new-' + box.codexWaits; return true; },
       // the browser sign-in: what program was run, and the page it printed; box.codexLoginFails makes it fail to start
       startLogin: async (program) => { (box.codexLogins = box.codexLogins || []).push(program); if (box.codexLoginFails) throw new Error(box.codexLoginFails); return { url: 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', child: { kill() { box.codexKilled = (box.codexKilled || 0) + 1; } } }; } });
     if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };

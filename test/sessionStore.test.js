@@ -164,5 +164,113 @@ function rollout(home, day, id, lines, mtime) {
   assert.deepStrictEqual(S.splitIde('one line\n\n<ide_context>\nActive file: /tmp/x.py\nSelection: lines 7-7 (first 12000 characters)\n</ide_context>'), { text: 'one line', tag: 'x.py:7' });
   assert.deepStrictEqual([S.splitIde('plain'), S.splitIde(''), S.splitIde(undefined)], [{ text: 'plain' }, { text: '' }, { text: '' }]);
   assert.deepStrictEqual(S.claudeEvents([{ type: 'user', message: { role: 'user', content: 'hangs\n\n<ide_context>\nActive file: docs/notes/658.md (markdown)\nCursor: line 7\n</ide_context>' } }]), [{ kind: 'user', text: 'hangs', queued: false, tag: '658.md' }], 'a Claude record too');
+
+  // ---- what a Codex thread does that its SDK does not stream: sub-agents and questions asked without waiting, as the rollout records them
+  {
+    const ev = (payload) => ({ type: 'event_msg', payload });
+    const it = (payload) => ({ type: 'response_item', payload });
+    const act = (kind, agent_path) => ev({ type: 'item_completed', thread_id: 'root', item: { type: 'SubAgentActivity', id: 'c', kind, agent_thread_id: 'x', agent_path } });
+    const said = (author, type) => it({ type: 'agent_message', author, recipient: '/root', content: [{ type: 'input_text', text: 'Message Type: ' + type + '\nTask name: /root\nSender: ' + author + '\nPayload:\n' }, { type: 'encrypted_content', encrypted_content: 'gAAAA' }] });
+    const call = (name, args, call_id = 'k') => it({ type: 'function_call', name, namespace: 'collaboration', arguments: JSON.stringify(args), call_id });
+    const sub = (name, state, thread) => Object.assign({ kind: 'subagent', name, state }, thread ? { thread } : {});
+    assert.deepStrictEqual(S.collabEvent(act('started', '/root/desk_audio')), sub('desk_audio', 'started', 'x'), 'a sub-agent by its path under the root, with its own thread');
+    assert.deepStrictEqual(S.collabEvent(ev({ type: 'item_completed', item: { type: 'SubAgentActivity', kind: 'started', agent_path: '/root/a' } })), sub('a', 'started'), 'a start that names no thread');
+    assert.deepStrictEqual([act('interacted', '/root/a'), act('completed', '/root/a'), act('interrupted', '/root/a/b'), act('started', '/root'), act('bogus', '/root/a')].map(S.collabEvent),
+      [sub('a', 'active', 'x'), sub('a', 'finished', 'x'), sub('a/b', 'interrupted', 'x'), null, null], 'each kind names its thread (one started earlier is first heard of by a follow-up); the root itself, and kinds not known, are nothing');
+    assert.deepStrictEqual([said('/root/a', 'MESSAGE'), said('/root/a', 'FINAL_ANSWER')].map(S.collabEvent), [sub('a', 'reported'), sub('a', 'answered')], 'its reports: their words are sealed, only that they came');
+    assert.strictEqual(S.collabEvent(it({ type: 'agent_message', author: '/root', recipient: '/root/a', content: [] })), null, 'the root\'s own messages to it are not its reports');
+    assert.deepStrictEqual([S.collabEvent(call('followup_task', { target: 'a', message: 'gAAAA' })), S.collabEvent(call('wait_agent', { timeout_ms: 10000 }))], [sub('a', 'tasked'), sub('', 'waiting')]);
+    assert.deepStrictEqual([call('spawn_agent', { task_name: 'a' }), call('send_message', { target: 'a' }), call('list_agents', {}), call('followup_task', {})].map(S.collabEvent), [null, null, null, null], 'said by the activity that follows, or nothing to say');
+    const q = call('request_user_input_async', { questions: [{ title: 'Where should replies play?', options: ['Default output', 'I will say'] }, { title: 'Anything else?' }, { title: '  ' }, null, { title: 'Mixed?', options: [{ label: 'One', description: 'the first' }, { label: ' ' }, 7] }] }, 'call_q');
+    assert.deepStrictEqual(S.collabEvent(q), { kind: 'question', id: 'call_q', async: true, questions: [
+      { question: 'Where should replies play?', options: [{ label: 'Default output' }, { label: 'I will say' }], multiSelect: false },
+      { question: 'Anything else?', options: [], multiSelect: false },
+      { question: 'Mixed?', options: [{ label: 'One', description: 'the first' }], multiSelect: false },
+    ] }, 'Codex\'s questions as the card takes them; a question with no text is none');
+    assert.deepStrictEqual([S.collabEvent(call('request_user_input_async', { questions: [] })), S.collabEvent(null), S.collabEvent({}), S.collabEvent(it({ type: 'function_call', name: 'followup_task', arguments: 'not json' }))], [null, null, null, null]);
+    // read back later: the lifecycle in place, the collaboration calls and their outputs not as tool calls, a question as it was asked
+    const lines = [meta('mmm', '/w'), msg('user', 'go'),
+      call('spawn_agent', { task_name: 'a' }, 's1'), act('started', '/root/a'), it({ type: 'function_call_output', call_id: 's1', output: '{"task_name":"/root/a"}' }),
+      q, it({ type: 'function_call_output', call_id: 'call_q', output: '{"accepted":true}' }),
+      said('/root/a', 'MESSAGE'), call('send_message', { target: 'a' }, 's2'), act('interacted', '/root/a'), it({ type: 'function_call_output', call_id: 's2', output: '' }),
+      call('wait_agent', { timeout_ms: 10000 }, 'w1'), it({ type: 'function_call_output', call_id: 'w1', output: '{"message":"Wait completed.","timed_out":false}' }),
+      act('completed', '/root/a'), said('/root/a', 'FINAL_ANSWER'), it({ type: 'function_call', name: 'shell', call_id: 'c9', arguments: '{"command":["ls"]}' }), msg('assistant', 'All done.')].map((x) => (typeof x === 'string' ? x : JSON.stringify(x)));
+    assert.deepStrictEqual(S.codexEvents(lines.join('\n')), [
+      { kind: 'user', text: 'go', queued: false },
+      sub('a', 'started', 'x'),
+      { kind: 'answered', questions: S.collabEvent(q).questions, answers: null },
+      sub('a', 'reported'),
+      sub('a', 'finished', 'x'),
+      { kind: 'tool_use', id: 'c9', name: 'shell', input: { command: ['ls'] } },
+      { kind: 'text', text: 'All done.' },
+    ], 'the root\'s messages to it, its waits, and its final answer (which follows its end) are not lines of the transcript');
+  }
+
+  // ---- what a sub-agent's own file says of it: the model and effort of each turn, and what the turns cost
+  {
+    const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't', model, effort } });
+    const cost = (i, c, o) => JSON.stringify({ type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, output_tokens: o } } });
+    const nick = (n) => JSON.stringify({ type: 'session_meta', payload: { id: 'c1', parent_thread_id: 'r', agent_nickname: n } });
+    const t = new S.UsageTally();
+    assert.deepStrictEqual([t.feed(''), t.feed('{"type":"event_msg","payload":{"type":"token_count"}}'), t.feed('not json turn_context'), t.feed(JSON.stringify({ type: 'turn_context', payload: {} })), t.feed(JSON.stringify({ type: 'token_usage_record', payload: {} }))], [false, false, false, false, false], 'lines that say nothing of it');
+    assert.deepStrictEqual(t.summary(), { model: '', effort: '', turns: 0, tokens: { input: 0, cached: 0, output: 0 } });
+    assert.deepStrictEqual([t.feed(nick('Popper')), t.feed(nick('Popper')), t.feed(turn('gpt-6.1-sol', 'ultra')), t.feed(cost(1000, 900, 50))], [true, false, true, true]);
+    assert.deepStrictEqual(t.summary(), { model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 1000, cached: 900, output: 50 }, nickname: 'Popper' });
+    t.feed(turn('gpt-5.6-sol', 'low')); t.feed(cost(500, 0, 25)); t.feed(cost(-5, 'x', null));
+    assert.deepStrictEqual(t.summary(), { model: 'gpt-5.6-sol', effort: 'low', turns: 2, tokens: { input: 1500, cached: 900, output: 75 }, nickname: 'Popper', models: [{ model: 'gpt-6.1-sol', turns: 1 }, { model: 'gpt-5.6-sol', turns: 1 }] },
+      'moved to another model: the latest, and each with its turns; a count that is not a number is nothing');
+    assert.deepStrictEqual(S.rolloutUsage([nick('A'), turn('m', 'high'), cost(1, 2, 3)].join('\n')), { model: 'm', effort: 'high', turns: 1, tokens: { input: 1, cached: 2, output: 3 }, nickname: 'A' });
+    assert.deepStrictEqual([S.rolloutUsage(''), S.rolloutUsage(null)], [{ model: '', effort: '', turns: 0, tokens: { input: 0, cached: 0, output: 0 } }, { model: '', effort: '', turns: 0, tokens: { input: 0, cached: 0, output: 0 } }]);
+    // read back later: each sub-agent's end line is given what its thread's file says, the thread named by the start before it
+    const act = (kind, agent_path, agent_thread_id) => JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'c', kind, agent_thread_id, agent_path } } });
+    const root = [act('started', '/root/a', 'c1'), act('completed', '/root/a'), act('started', '/root/b', 'c2'), act('interrupted', '/root/b'), act('started', '/root/a', 'c3'), act('completed', '/root/a'), act('started', '/root/d', 'c4'), act('completed', '/root/d'), act('completed', '/root/never')].join('\n');
+    const files = { c1: 'f1', c2: 'f2', c3: 'f3' };
+    const texts = { f1: [nick('One'), turn('gpt-6.1-sol', 'ultra'), cost(10, 0, 1)].join('\n'), f2: [turn('gpt-5.6-sol', 'low'), cost(20, 0, 2)].join('\n'), f3: 'nothing of it' };
+    const reads = [];
+    const events = S.addSubagentUsage(S.codexEvents(root), '/h', { find: (th) => files[th] || null, read: (f) => { reads.push(f); if (!(f in texts)) throw new Error('gone'); return texts[f]; } });
+    assert.deepStrictEqual(events.map((e) => [e.name, e.state, e.info || null]), [
+      ['a', 'started', null], ['a', 'finished', { model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 10, cached: 0, output: 1 }, nickname: 'One' }],
+      ['b', 'started', null], ['b', 'interrupted', { model: 'gpt-5.6-sol', effort: 'low', turns: 1, tokens: { input: 20, cached: 0, output: 2 } }],
+      ['a', 'started', null], ['a', 'finished', null],
+      ['d', 'started', null], ['d', 'finished', null],
+      ['never', 'finished', null],
+    ], 'a name used again takes the later thread; a file that says nothing, or is not found, or an end with no start, gives nothing');
+    assert.deepStrictEqual(reads, ['f1', 'f2', 'f3'], 'each file once');
+    assert.deepStrictEqual(S.addSubagentUsage([], '/h'), [], 'nothing to give');
+
+    // a window: turns and tokens inside it; a turn before it still names the model, a record after it says nothing
+    const stamp = (iso, rec) => JSON.stringify(Object.assign({ timestamp: iso }, JSON.parse(rec)));
+    const life = [stamp('2026-10-09T10:00:00Z', turn('gpt-5.6-sol', 'low')), stamp('2026-10-09T10:01:00Z', cost(900, 800, 90)),
+      stamp('2026-10-12T16:33:19Z', turn('gpt-6.1-sol', 'ultra')), stamp('2026-10-12T16:33:25Z', cost(241, 240, 3)),
+      stamp('2026-10-13T09:00:00Z', turn('gpt-7-sol', 'high')), stamp('2026-10-13T09:00:05Z', cost(5, 0, 1))].join('\n');
+    const loose = life + '\n' + cost(1, 0, 0);       // and a record with no stamp
+    assert.deepStrictEqual(S.rolloutUsage(loose, { since: Date.parse('2026-10-12T16:30:08Z'), until: Date.parse('2026-10-12T16:34:16Z') }),
+      { model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 242, cached: 240, output: 3 } }, 'its turn in the window; an unstamped record counts; a later model is not this one');
+    assert.deepStrictEqual(S.rolloutUsage(loose, { since: Date.parse('2026-10-12T00:00:00Z'), until: Date.parse('2026-10-12T01:00:00Z') }),
+      { model: 'gpt-5.6-sol', effort: 'low', turns: 0, tokens: { input: 1, cached: 0, output: 0 } }, 'nothing in the window but an unstamped count: the model it was on then');
+
+    // read back with the root's file: each end counts the turn it ended in, up to itself, as the live line did
+    const at = (iso, rec) => stamp(iso, typeof rec === 'string' ? rec : JSON.stringify(rec));
+    const task = (iso) => at(iso, { type: 'event_msg', payload: { type: 'task_started', turn_id: 'k' } });
+    const rootLines = [
+      task('2026-10-09T09:59:00Z'), at('2026-10-09T09:59:30Z', act('started', '/root/cap', 'old')), at('2026-10-09T10:02:00Z', act('completed', '/root/cap', 'old')),
+      task('2026-10-12T16:30:08Z'), at('2026-10-12T16:33:18Z', act('interacted', '/root/cap', 'old')), at('2026-10-12T16:34:10Z', act('completed', '/root/cap', 'old')),
+      at('2026-10-12T16:34:12Z', act('completed', '/root/gone', 'missing')),
+    ].join('\n');
+    assert.deepStrictEqual(S.subagentEnds(rootLines), [
+      { name: 'cap', thread: 'old', since: Date.parse('2026-10-09T09:59:00Z'), until: Date.parse('2026-10-09T10:02:00Z') },
+      { name: 'cap', thread: 'old', since: Date.parse('2026-10-12T16:30:08Z'), until: Date.parse('2026-10-12T16:34:10Z') },
+      { name: 'gone', thread: 'missing', since: Date.parse('2026-10-12T16:30:08Z'), until: Date.parse('2026-10-12T16:34:12Z') },
+    ]);
+    const back = S.addSubagentUsage(S.codexEvents(rootLines), '/h', { text: rootLines, find: (th) => (th === 'old' ? 'fo' : null), read: () => life });
+    assert.deepStrictEqual(back.filter((e) => e.state === 'finished').map((e) => [e.name, e.info || null]), [
+      ['cap', { model: 'gpt-5.6-sol', effort: 'low', turns: 1, tokens: { input: 900, cached: 800, output: 90 } }],
+      ['cap', { model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 241, cached: 240, output: 3 } }],
+      ['gone', null],
+    ], 'the same sub-agent ending in two turns: each end its own turn\'s model and cost, not the thread\'s whole life');
+    // an end the root's file does not have where the events do is given nothing, rather than another end's figures
+    const odd = [{ kind: 'subagent', name: 'other', state: 'finished', thread: 'old' }];
+    assert.deepStrictEqual(S.addSubagentUsage(odd, '/h', { text: rootLines, find: () => 'fo', read: () => life })[0].info, undefined);
+  }
 console.log('SESSIONS OK');
 })().catch((e) => { console.error('SESSIONS FAILED:', e.stack || e.message); process.exit(1); });

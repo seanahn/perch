@@ -7,7 +7,7 @@ const { getHtml } = require('./webview');
 const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
-const { resolveProgram } = require('./binaries');
+const { resolveProgram, sdkCodex } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
@@ -26,6 +26,7 @@ const EFFORTS = {
 };
 const STATE_KEY = 'perch.sessions.v1';
 const GATEWAY_DEFAULT_KEY = 'perch.claude.newTabsOnGateway';   // true once the gateway was chosen for a tab, until the subscription or API / Bedrock is; new Claude tabs follow it
+const REFUSED_LOGIN_KEY = 'perch.codex.refusedLogin';   // the authStamp of the Codex login Codex last refused here, until auth.json holds another
 const UNSANDBOXED_KEY = 'perch.codex.unsandboxed';   // { hostname: true } for machines where Codex's sandbox cannot start
 const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
 // how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
@@ -177,6 +178,21 @@ function defaultModel(kind) { return String((kind === 'claude' ? cfg('claude.mod
 function defaultMode(kind) { return kind === 'claude' ? (cfg('claude.permissionMode') || 'default') : (cfg('codex.sandboxMode') || 'workspace-write'); }
 
 /** One tab: one agent process, one context. The host owns the transcript so the page can be rebuilt at any time. */
+/** The answers to a question Codex asked without waiting, as the message that carries them to it. */
+function codexAnswer(questions, answers) {
+  const qs = (questions || []).filter((q) => q && typeof q.question === 'string');
+  const lines = qs.map((q) => `- ${q.question}\n  ${answers[q.question] || '(no answer)'}`);
+  return (qs.length > 1 ? 'Answers to the questions you asked:' : 'An answer to the question you asked:') + '\n' + lines.join('\n');
+}
+
+/** What a sub-agent's own thread file has said of it, as the page shows it: its model and effort, turns, tokens, nickname, and every model it used when there was more than one. */
+function collabInfo(a) {
+  const out = { model: a.model, effort: a.effort || '', turns: a.turns || 0, tokens: Object.assign({ input: 0, cached: 0, output: 0 }, a.tokens || {}) };
+  if (a.nickname) out.nickname = a.nickname;
+  if (Array.isArray(a.models) && a.models.length > 1) out.models = a.models;
+  return out;
+}
+
 class Session {
   constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate }) {
     this.view = view;
@@ -203,6 +219,7 @@ class Session {
     this.context = null;             // claude only: { percent, used, max } of the context window
     this.respondedAt = 0;            // when the agent last answered: the prompt cache is warm from then
     this.costSoFar = typeof costSoFar === 'number' ? costSoFar : null;   // claude only: the session's cost at API rates, as last reported, so each turn's own cost can be told
+    this.collab = new Map();         // codex only: the sub-agents of the running turn, by name: { state: working|finished|interrupted, at, reports }
     this.queue = [];                 // codex only: messages waiting for the current turn to end
     this.thumbs = [];                // the thumbnails of each message sent, until the agent reports the message and they join it
     this.kept = Array.isArray(kept) ? kept : [];   // the thumbnails of every message sent with images, oldest first, saved with the tab: the agent's record has the images, not these
@@ -273,8 +290,8 @@ class Session {
   }
 
   post(ev) {
-    // a login that has expired shows as 401 from the API; the same offer follows the error
-    if (ev.kind === 'error' && this.kind === 'codex' && /\b401\b.*Unauthorized/i.test(String(ev.text))) this.view.codexLogin(`Codex was refused: the login on ${require('os').hostname()} has expired or is missing.`);
+    // Codex's own word that its ChatGPT login was refused (revoked, invalidated, ended): acted on once the error is shown
+    const refusedLogin = ev.kind === 'error' && this.kind === 'codex' && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && codexAuth.refused(ev.text);
     // Codex's Linux sandbox is bubblewrap, which needs user namespaces; a container that forbids them fails every command this way
     if (ev.kind === 'tool_result' && this.kind === 'codex' && this.mode !== 'danger-full-access' && !this.sandboxAsked && /bwrap: No permissions to create a new namespace/.test(String(ev.text))) { this.sandboxAsked = true; this.view.codexNoSandbox(this); }
     switch (ev.kind) {
@@ -284,11 +301,12 @@ class Session {
         if (!/^(idle|working|ready)\b/.test(String(ev.text))) this.post({ kind: 'note', text: String(ev.text) });
         break;
       case 'busy':
-        if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown, next.images); }); return; }   // stay busy: the next queued message starts now
+        if (!ev.busy && this.queue.length && this.agent && !this.stopping) { const next = this.queue.shift(); this.started(next.qid); this.view.sendTabs(); setImmediate(() => { if (this.agent) this.agent.send(next.text, next.shown, next.images); }); return; }   // stay busy: the next queued message starts now
         this.stopping = false;
         if (!ev.busy && this.kind === 'codex' && this.busy) { const t = setTimeout(() => this.view.meter.refreshCodex(), 400); if (t.unref) t.unref(); }   // Codex has just recorded its limits
-        if (ev.busy && !this.busy) this.busySince = Date.now(); else if (!ev.busy) this.busySince = 0;
-        this.busy = !!ev.busy; this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
+        if (ev.busy && !this.busy) { this.busySince = Date.now(); this.refusedTurn = false; } else if (!ev.busy) this.busySince = 0;
+        this.busy = !!ev.busy; if (!this.busy) this.collab.clear();   // a turn's sub-agents end with its process
+        this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
         if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
         if (!this.busy) this.view.syncTitle(this);         // and a tab the user has not named takes the title its agent's record has by now
         if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
@@ -322,13 +340,46 @@ class Session {
         if (this.viaEstimate !== null) { this.gatewayEstimate += this.viaEstimate; ev.gatewayEstimate = this.viaEstimate; ev.gatewayEstimateSoFar = this.gatewayEstimate; this.viaEstimate = null; this.view.persist(); }
         if (this.keySpend !== null) ev.keySpend = this.keySpend;
         this.viaQueue = [];
+        // Codex: the turn's sub-agents as they ended, each with its model and cost, under the line that ends the turn
+        if (this.kind === 'codex' && this.collab.size) ev.subagents = this.collabSummary();
         break;
       }
+      case 'subagent': {             // Codex: a sub-agent's life, read from the thread's file (src/codexWatch.js)
+        if (ev.state === 'usage') {  // and, from its own file, which model answers it and what its turns cost
+          if (ev.name) {
+            const a = this.collab.get(ev.name) || { state: 'working', at: Date.now(), reports: 0 };
+            Object.assign(a, { model: ev.model || '', effort: ev.effort || '', turns: ev.turns || 0, tokens: ev.tokens || { input: 0, cached: 0, output: 0 } });
+            if (ev.nickname) a.nickname = ev.nickname;
+            if (ev.models) a.models = ev.models;
+            this.collab.set(ev.name, a);
+            this.view.sendTabs();
+          }
+          return;
+        }
+        if (ev.name) {
+          const was = this.collab.get(ev.name), now = Date.now();
+          // a progress report can be delivered after its sender finished: it does not make a finished sub-agent work again
+          const state = { started: 'working', tasked: 'working', finished: 'finished', answered: 'finished', interrupted: 'interrupted' }[ev.state] || (was ? was.state : 'working');
+          this.collab.set(ev.name, Object.assign(was || {}, { state, at: now, reports: ((was && was.reports) || 0) + (ev.state === 'reported' || ev.state === 'answered' ? 1 : 0) }));
+          this.view.sendTabs();
+        }
+        // in the transcript: its start, its follow-up tasks, its reports, its end. The root's own messages to it are not
+        // shown (they are encrypted, and many), nor its final answer, which follows its end
+        if (['started', 'tasked', 'reported', 'finished', 'interrupted'].includes(ev.state) && ev.name) {
+          // its end keeps what its file has said of it by then, as a past turn's end lines do (sessionStore.addSubagentUsage)
+          if (ev.state === 'finished' || ev.state === 'interrupted') { const a = this.collab.get(ev.name); if (a && a.model) ev.info = collabInfo(a); }
+          this.history.push(ev); break;
+        }
+        if (ev.state === 'waiting') this.view.sendEvent(this.id, ev);   // what the foot of the transcript says, not a line of it
+        return;
+      }
+      case 'dequeued': this.started(ev.qid); return;   // Claude: a turn has taken up a queued message
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
       case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
       case 'clear': this.history = []; this.resumed = null; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
       case 'user':
+        if (this.kind === 'codex' && !ev.queued) this.turnText = ev.text;   // the running turn's message: put back in the box if Codex's login is refused
         // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
         if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
         if (ev.images && this.thumbs.length) { const t = this.thumbs.shift(); if (t.some(Boolean)) ev.thumbs = t; this.keep(t); }
@@ -341,6 +392,7 @@ class Session {
     }
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
     this.view.sendEvent(this.id, ev);
+    if (refusedLogin) this.loginRefused();
   }
 
   ensureAgent() {
@@ -425,11 +477,13 @@ class Session {
       this.view.deliver(this.id, text);
       return;
     }
-    // Codex with no login here would only be refused (401, five reconnects, an error): hold the message, offer the login
-    if (this.kind === 'codex' && !this.agent && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && !codexAuth.loggedIn()) {
-      this.post({ kind: 'note', text: `Codex is not logged in on ${require('os').hostname()}. Log in, then send the message again.`, actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
+    // Codex with no login here, or with one Codex has refused, would only be refused again (401, reconnects, an error): hold
+    // the message, offer the login. A refused login is held until auth.json holds another (PerchView.codexLoginRefused).
+    if (this.kind === 'codex' && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && (!codexAuth.loggedIn() || this.view.codexLoginRefused()) && (!this.agent || !this.busy)) {
+      const none = !codexAuth.loggedIn(), host = require('os').hostname();
+      this.post({ kind: 'note', nid: 'codexLogin', text: none ? `Codex is not logged in on ${host}. Log in, then send the message again.` : `Codex's login on ${host} was refused, and no new one has been made: log in again, then send the message again.`, actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
       this.view.deliver(this.id, text);
-      this.view.codexLogin();
+      this.view.codexLogin(none ? undefined : `Codex's login on ${host} was refused.`);
       return;
     }
     const agent = this.ensureAgent();
@@ -439,8 +493,9 @@ class Session {
     const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? ctx.tag : undefined };
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
-      this.queue.push({ text: full, shown, images: sent }); (this.shown = this.shown || []).push(text);
-      this.post(Object.assign({ kind: 'user', text, queued: true }, sent.length ? { images: sent.length } : {}, thumbs.some(Boolean) ? { thumbs } : {}, shown.tag ? { tag: shown.tag } : {}));
+      const qid = require('crypto').randomUUID();
+      this.queue.push({ qid, text: full, shown, images: sent }); (this.shown = this.shown || []).push(text);
+      this.post(Object.assign({ kind: 'user', text, queued: true, qid }, sent.length ? { images: sent.length } : {}, thumbs.some(Boolean) ? { thumbs } : {}, shown.tag ? { tag: shown.tag } : {}));
       this.view.sendTabs();          // the queue count is part of the tab
       return;
     }
@@ -449,6 +504,78 @@ class Session {
   }
 
   setIde(on) { this.ide = !!on; this.view.persist(); }
+
+  /**
+   * Codex refused its ChatGPT login (codexAuth.refused). Remember which login, so messages are held until there is another;
+   * put this turn's message, and any queued behind it, back in the box; say why, with the ways to log in again. Once a turn:
+   * Codex says it each time it retries.
+   */
+  loginRefused() {
+    const first = !this.view.codexLoginRefused();
+    this.view.codexRefused();
+    if (this.refusedTurn) return;
+    this.refusedTurn = true;
+    const back = [this.turnText].concat(this.queue.map((q) => q.shown && q.shown.text)).filter((t) => t && String(t).trim());
+    for (const q of this.queue) this.gone(q.qid, true);
+    this.queue = []; this.shown = [];
+    const host = require('os').hostname();
+    this.post({ kind: 'note', nid: 'codexLogin', text: `Codex's login on ${host} was refused: ChatGPT ended its session, by a logout, a password change, a revoked session, or the same login refreshed on another machine (a copy of another machine's auth.json ends when either copy refreshes). Log in again here, with this machine's own login.` + (back.length ? ` ${back.length > 1 ? 'The messages are' : 'The message is'} back in the box.` : ''), actions: [{ id: 'codexLogin', label: 'Log In' }, { id: 'codexDevice', label: 'Device Code' }] });
+    if (back.length) this.view.deliver(this.id, back.join('\n\n'));
+    this.view.sendTabs();
+    if (first) this.view.codexLogin(`Codex's login on ${host} was refused: ChatGPT ended its session.`);
+  }
+
+  /** A queued message has started: its bubble is an ordinary one from now, in the page and in what is replayed. */
+  started(qid, tell = true) {
+    if (!qid) return;
+    const h = this.history.find((x) => x.kind === 'user' && x.qid === qid);
+    if (h) { h.queued = false; delete h.qid; }
+    if (tell) this.view.sendEvent(this.id, { kind: 'dequeued', qid });
+  }
+  /** A queued message is gone, taken back or dropped with a stopped turn: from the page, and from what is replayed. */
+  gone(qid, quiet) {
+    if (!qid) return;
+    const i = this.history.findIndex((x) => x.kind === 'user' && x.qid === qid);
+    if (i >= 0) this.history.splice(i, 1);
+    this.view.sendEvent(this.id, Object.assign({ kind: 'unqueued', qid, ok: true }, quiet ? { quiet: true } : {}));
+  }
+  /**
+   * Take a queued message back, at the user's word (the x on its bubble): a Codex one from perch's own queue, a Claude one
+   * from Claude Code's (src/claudeAgent.js, unqueue). One a turn has taken up already cannot be.
+   */
+  async unqueue(qid) {
+    if (!qid) return;
+    let r = { ok: false, why: 'taken' };
+    if (this.kind === 'codex') {
+      const i = this.queue.findIndex((q) => q.qid === qid);
+      if (i >= 0) {
+        // its echo, which would have been dropped when it started: the echoes wait in the queue's order, behind at most one
+        // of a message that has just started and not yet echoed, so its place there is known, whatever the words
+        const shown = this.shown || [], at = shown.length - this.queue.length + i;
+        const [q] = this.queue.splice(i, 1);
+        if (at >= 0 && shown[at] === q.shown.text) shown.splice(at, 1); else { const k = shown.indexOf(q.shown.text); if (k >= 0) shown.splice(k, 1); }
+        r = { ok: true };
+      }
+    } else if (this.agent && typeof this.agent.unqueue === 'function') {
+      try { r = await this.agent.unqueue(qid); } catch (_) { r = { ok: false, why: 'unsupported' }; }
+    }
+    if (r.ok) this.gone(qid);
+    else {
+      if (r.why === 'taken') this.started(qid, false);
+      this.view.sendEvent(this.id, { kind: 'unqueued', qid, ok: false, why: r.why || 'taken' });
+    }
+    this.view.sendTabs();          // the queue count is part of the tab
+  }
+
+  /**
+   * The running turn's sub-agents, for the foot of the transcript: how many work, have finished, were stopped, and each by
+   * name with its reports and, once its own file has said so, its model, effort, turns and tokens (collabInfo).
+   */
+  collabSummary() {
+    const list = [...this.collab.entries()].map(([name, a]) => Object.assign({ name, state: a.state, reports: a.reports }, a.model ? collabInfo(a) : {}));
+    const count = (st) => list.filter((x) => x.state === st).length;
+    return { working: count('working'), finished: count('finished'), interrupted: count('interrupted'), list };
+  }
 
   /**
    * Put this tab on the gateway, or take it off, for its next process. A running process cannot change how it authenticates,
@@ -476,7 +603,12 @@ class Session {
     const i = this.history.findIndex((h) => (h.kind === 'permission' || h.kind === 'question') && h.id === id);
     if (i >= 0) {
       const h = this.history[i];
-      if (h.kind === 'question') this.history[i] = { kind: 'answered', questions: h.questions, answers: clean || {} };
+      if (h.kind === 'question') {
+        this.history[i] = { kind: 'answered', questions: h.questions, answers: clean || {} };
+        // a question Codex asked without waiting: nothing is waiting for the answer, so it goes as the next message, queued
+        // behind the turn if one is running
+        if (h.async && decision === 'answer' && clean && Object.keys(clean).length) this.send(codexAnswer(h.questions, clean));
+      }
       else this.history[i] = { kind: 'note', text: `${h.tool}: ${decision}` };
     }
     if (!this.pending.size && this.attention) { this.attention = false; this.view.sendTabs(); }
@@ -509,7 +641,7 @@ class Session {
   }
 
   /** Stops the current turn and drops anything queued behind it. */
-  interrupt() { if (!this.agent) return; if (this.queue.length) { this.post({ kind: 'note', text: `${this.queue.length} queued message${this.queue.length > 1 ? 's' : ''} dropped` }); this.queue = []; this.shown = []; this.view.sendTabs(); } this.stopping = true; this.agent.interrupt(); }
+  interrupt() { if (!this.agent) return; if (this.queue.length) { this.post({ kind: 'note', text: `${this.queue.length} queued message${this.queue.length > 1 ? 's' : ''} dropped` }); for (const q of this.queue) this.gone(q.qid, true); this.queue = []; this.shown = []; this.view.sendTabs(); } this.stopping = true; this.agent.interrupt(); }
   lastAnswer() { return this.agent ? this.agent.lastAnswer : ''; }
 
   /** End the agent process and keep the session: the next message resumes it, as after a window reload. */
@@ -542,6 +674,7 @@ class Session {
       gatewayWarn: this.gateway && !this.view.gateway().ok,   // the file is missing or incomplete: the first message will say so
       via: this.gateway ? this.lastVia : '',                   // the model that last answered through the gateway
       queued: this.queue.length,
+      subagents: this.kind === 'codex' && this.busy && this.collab.size ? this.collabSummary() : null,
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
@@ -755,6 +888,18 @@ class PerchView {
    * reaches this machine. That works for any user with a browser. "Device Code" is the terminal way, a link and a code,
    * for a ChatGPT account that allows it. One offer at a time.
    */
+  /** Whether Codex on this machine is on a login Codex has refused: the one recorded is still the one auth.json holds. A new
+   * login, or a refresh by another Codex here, rewrites the file and ends it. Kept across window reloads. */
+  codexLoginRefused() {
+    const was = this.context.globalState.get(REFUSED_LOGIN_KEY);
+    if (!was) return false;
+    if (codexAuth.authStamp() === was) return true;
+    this.context.globalState.update(REFUSED_LOGIN_KEY, undefined);
+    return false;
+  }
+  /** Codex has refused the login auth.json holds now. */
+  codexRefused() { const st = codexAuth.authStamp(); if (st) this.context.globalState.update(REFUSED_LOGIN_KEY, st); }
+
   async codexLogin(why) {
     if (this.codexLoginOpen) return;
     this.codexLoginOpen = true;
@@ -769,28 +914,51 @@ class PerchView {
   /** Run the Codex login the user chose ("Log In" or "Device Code"), from the notification or from a note's button. One at
    * a time: the browser sign-in listens on a fixed port. */
   async codexLoginRun(pick) {
-    if (this.codexLoginRunning) return;
+    // one at a time, since the browser sign-in listens on a fixed port: pressed again while one waits (from a note, the
+    // notification, another tab), the waiting one is brought back, its sign-in page or its terminal, and said so
+    if (this.codexLoginRunning) {
+      if (this.codexLoginUrl) { vscode.env.openExternal(vscode.Uri.parse(this.codexLoginUrl)); vscode.window.showInformationMessage('Perch: a Codex login is already waiting for you: its sign-in page is open again in your browser.'); }
+      else if (this.codexLoginTerminal) { this.codexLoginTerminal.show(); vscode.window.showInformationMessage('Perch: a Codex login is already waiting for you, in the Codex login terminal.'); }
+      return;
+    }
     this.codexLoginRunning = true;
     try {
       const prog = program('codex');
       if (prog.from === 'none') { vscode.window.showErrorMessage('Perch: ' + MISSING.codex); return; }
-      const exe = prog.path || 'codex';
+      // the program itself: the SDK's own when it runs its own (resolveProgram leaves that path to the SDK), since a login is
+      // run here, and `codex` alone names nothing unless one is on PATH
+      const exe = prog.path || (prog.from === 'sdk' ? sdkCodex() : '') || 'codex';
+      const since = codexAuth.authStamp();   // the login there now, if any, refused or not: only a new one ends the wait
       let child = null;
       if (pick === 'Device Code') {
-        const term = vscode.window.createTerminal({ name: 'Codex login' }); term.show(); term.sendText(codexAuth.loginCommand(exe));
+        const term = vscode.window.createTerminal({ name: 'Codex login' }); term.show(); term.sendText(codexAuth.loginCommand(exe)); this.codexLoginTerminal = term;
       } else {
         let started;
         try { started = await codexAuth.startLogin(exe); } catch (e) { vscode.window.showErrorMessage('Perch: the Codex login could not start. ' + e.message); return; }
         child = started.child;
         // the browser returns to localhost on the user's machine; when remote, VS Code carries that port here
         try { await vscode.env.asExternalUri(vscode.Uri.parse(`http://localhost:${codexAuth.CALLBACK_PORT}`)); } catch (_) { /* no forwarding: the browser may still reach it directly */ }
+        this.codexLoginUrl = started.url;
         await vscode.env.openExternal(vscode.Uri.parse(started.url));
       }
-      const ok = await codexAuth.waitForLogin();
+      const ok = await codexAuth.waitForLogin({ since });
       if (child) { try { child.kill(); } catch (_) { /* ended on its own */ } }
+      if (ok) { this.context.globalState.update(REFUSED_LOGIN_KEY, undefined); this.codexLoginDone(); }
       if (ok) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
       else vscode.window.showWarningMessage('Perch: the Codex login did not complete.');
-    } finally { this.codexLoginRunning = false; }
+    } finally { this.codexLoginRunning = false; this.codexLoginUrl = null; this.codexLoginTerminal = null; }
+  }
+
+  /** Codex is logged in: every login note, in every Codex tab, says so in place of its buttons, and so in what is replayed. */
+  codexLoginDone() {
+    const at = new Date(), hhmm = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
+    const text = `Logged in on ${require('os').hostname()} at ${hhmm}: send the message again.`;
+    for (const s of this.sessions) {
+      if (s.kind !== 'codex') continue;
+      let had = false;
+      for (const h of s.history) if (h.kind === 'note' && h.nid === 'codexLogin' && h.actions) { delete h.actions; h.done = text; had = true; }
+      if (had) this.sendEvent(s.id, { kind: 'noteDone', nid: 'codexLogin', text });
+    }
   }
 
   deliver(sid, text) {
@@ -991,6 +1159,7 @@ class PerchView {
       case 'send': if (s) s.send(msg.text, msg.images); return;
       case 'stop': if (s) s.interrupt(); return;
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision, msg.answers); return;
+      case 'unqueue': if (s) s.unqueue(String(msg.qid || '')); return;
       case 'setMode': if (s) { s.setMode(msg.value); this.sendTabs(); } return;
       case 'setEffort': if (s) { s.setEffort(msg.value); this.sendTabs(); } return;
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
@@ -1020,7 +1189,7 @@ class PerchView {
         else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
         else if (msg.action === 'codexChatgpt') { if (this.meter.codexBackend() !== 'chatgpt') this.meter.chooseCodexBackend('chatgpt'); }
         else if (msg.action === 'codexLogin' || msg.action === 'codexDevice') {
-          if (codexAuth.loggedIn()) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
+          if (codexAuth.loggedIn() && !this.codexLoginRefused()) { this.codexLoginDone(); vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.'); }
           else this.codexLoginRun(msg.action === 'codexDevice' ? 'Device Code' : 'Log In');
         }
         return;

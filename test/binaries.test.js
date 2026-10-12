@@ -34,6 +34,22 @@ put(dev, '@anthropic-ai/claude-agent-sdk/sdk.mjs'); put(dev, '@anthropic-ai/clau
 assert.deepStrictEqual(B.resolveProgram('claude', { modules: dev, vendorRoot: claudeExt }), { path: '', from: 'sdk' });
 assert.deepStrictEqual(B.resolveProgram('codex', { modules: dev, vendorRoot: codexExt }), { path: '', from: 'sdk' });
 
+// a login runs the program itself: the SDK's own is found where its platform package keeps it, this machine's first
+{
+  const m = mk();
+  assert.strictEqual(B.sdkCodex(m), '', 'none installed');
+  put(m, '@openai/codex-sdk/dist/index.js'); put(m, '@openai/codex/bin/codex.js');
+  assert.strictEqual(B.sdkCodex(m), '', 'the SDK and the npm launcher are not the program');
+  const other = put(m, '@openai/codex-zz-other/vendor/zz-target/bin/codex' + exe);
+  const mine = put(m, `@openai/codex-${process.platform}-${process.arch}/vendor/some-target/bin/codex` + exe);
+  assert.deepStrictEqual([B.sdkCodex(m), B.sdkCodex(mk())], [mine, ''], 'this machine\'s package before another\'s');
+  fs.rmSync(mine);
+  assert.strictEqual(B.sdkCodex(m), other, 'another\'s, if it is all there is');
+  const older = mk(); const o = put(older, '@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex' + exe);
+  assert.strictEqual(B.sdkCodex(older), o, 'the layout of older packages too');
+  assert.strictEqual(B.sdkCodex(), require('path').resolve(__dirname, '..', 'node_modules', '@openai', `codex-${process.platform}-${process.arch}`, 'vendor', require('fs').readdirSync(require('path').resolve(__dirname, '..', 'node_modules', '@openai', `codex-${process.platform}-${process.arch}`, 'vendor'))[0], 'bin', 'codex' + exe), 'this checkout\'s own, as perch on the desktop runs it');
+}
+
 // the user's own choice comes first, and is not second-guessed
 assert.deepStrictEqual(B.resolveProgram('claude', { configured: '/opt/claude', modules: dev, vendorRoot: claudeExt }), { path: '/opt/claude', from: 'setting' });
 assert.deepStrictEqual(B.resolveProgram('codex', { configured: '/opt/codex', modules: packaged }), { path: '/opt/codex', from: 'setting' });
