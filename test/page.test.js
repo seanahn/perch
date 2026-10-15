@@ -791,7 +791,7 @@ window.close();
   tabs6();
   assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
   const kids = [...p6.$$('.pane')[0].children].map((n) => [n.className, n.hidden]);
-  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true]], 'under the transcript, above the message; nothing over it, and the sub-agents\' table hidden until a turn has some');
+  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage until the footer opens it');
 
   tabs6({ busy: true, busySince: Date.now() - 75000 });
   assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');
@@ -955,5 +955,93 @@ window.close();
   pic.click(); assert.deepStrictEqual([pic.classList.contains('big'), pic.title], [true, 'Click to shrink it']);
   pic.click(); assert.strictEqual(pic.classList.contains('big'), false);
   p4.w.close();
+
+  // ---- a Codex web search: its card filled in when it completes, and "Searching the web" at the foot only while it runs
+  // (seen on 2026-10-12: cards said {"query": ""}, and the foot "Running web_search" for minutes after the searches ended)
+  {
+    const p7 = page(ICONS);
+    p7.host({ type: 'tabs', tabs: [tab({ id: 'c', kind: 'codex', title: 'C', busy: true, busySince: Date.now(), started: true })], active: 'c' });
+    const e7 = (e) => p7.host({ type: 'event', sid: 'c', ev: e });
+    const what = () => p7.$('.pane .work .what').textContent, cards = () => p7.$$('.pane .msg.tool'), card = (i) => [cards()[i].querySelector('.name').textContent, cards()[i].querySelector('.in').textContent];
+    e7({ kind: 'tool_use', id: 'w1', name: 'web_search', input: { action: '' } });
+    assert.deepStrictEqual([cards().length, card(0), what()], [1, ['web search', '…'], 'Searching the web…'], 'nothing known yet, and no empty query shown');
+    e7({ kind: 'tool_use', id: 'w1', name: 'web_search', input: { action: 'search', query: 'perch vscode' }, update: true });
+    e7({ kind: 'tool_result', id: 'w1', text: 'Perch — https://x/perch', isError: false });
+    assert.deepStrictEqual([cards().length, card(0), cards()[0].nextSibling.textContent, what()], [1, ['web search', 'perch vscode'], 'Perch — https://x/perch', 'Working…'], 'the same card, filled in, its result under it; done searching');
+    e7({ kind: 'tool_use', id: 'w2', name: 'web_search', input: { action: 'find', pattern: 'web_search_call', url: 'https://x/doc' } });
+    e7({ kind: 'tool_use', id: 'w3', name: 'web_search', input: { action: 'open', url: 'https://x/doc', title: 'Doc' } });
+    e7({ kind: 'tool_use', id: 'w4', name: 'web_search', input: { action: 'search', queries: ['a', 'b'] } });
+    e7({ kind: 'tool_use', id: 'w5', name: 'web_search', input: { query: '' } });   // a card kept in a transcript from before
+    assert.deepStrictEqual([card(1), card(2), card(3), card(4)], [['web search · find in page', '"web_search_call" in https://x/doc'], ['web search · open page', 'https://x/doc'], ['web search', 'a\nb'], ['web search', '…']]);
+    e7({ kind: 'tool_use', id: 'w6', name: 'web_search', input: { action: 'search', query: 'late' }, update: true });   // its start never came
+    assert.deepStrictEqual([cards().length, card(5)], [6, ['web search', 'late']], 'a card said again with none to redraw is drawn');
+    p7.w.close();
+  }
+
+  // ---- a Codex session's usage, thread by thread, opened from the footer: the main thread first, its sub-agents (by cost
+  // until another column is chosen), then the totals; asked for again at the end of each turn while it is open
+  {
+    const p8 = page(ICONS), out8 = p8.out;
+    const C = tab({ id: 'c', kind: 'codex', title: 'C', started: true }), K = tab({ id: 'k', kind: 'claude', title: 'K' });
+    const tabs8 = (c, active) => p8.host({ type: 'tabs', tabs: [with_(C, c), K], active: active || 'c' });
+    tabs8({});
+    p8.host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: { vendor: 'Codex', plan: 'pro', backend: 'chatgpt', backendLabel: 'ChatGPT', level: 'ok', action: 'refresh', lines: [], segments: [] } });
+    const btn = p8.$('#m-subs'), box = () => p8.$$('.pane')[0].querySelector('.mx');
+    assert(!p8.shown(btn), 'no thread on record yet: nothing to read');
+    tabs8({ thread: true });
+    assert.deepStrictEqual([p8.shown(btn), btn.textContent, btn.getAttribute('aria-pressed')], [true, 'sub-agents', 'false']);
+    out8.length = 0; btn.click();
+    assert.deepStrictEqual([out8.pop(), p8.shown(box()), box().textContent, btn.getAttribute('aria-pressed')], [{ type: 'subagentUsage', sid: 'c' }, true, 'Reading this session\'s files…', 'true'], 'asked of the host, which reads the files');
+    const row = (name, model, turns, input, cached, output, cost, extra) => Object.assign({ name, model, effort: 'ultra', turns, tokens: { input, cached, output }, cost }, extra);
+    const U = { type: 'subagentUsage', sid: 'c', at: Date.parse('2026-10-12T22:40:00Z'), prices: true, backend: 'chatgpt',
+      main: row('', 'gpt-6.1-sol', 207, 260e6, 254e6, 1.1e6, 82.46, { thread: 'root-1', models: [{ model: 'gpt-5.6-sol', turns: 95 }, { model: 'gpt-6.1-sol', turns: 112 }] }),
+      subagents: [row('inference_adapters', 'gpt-6.1-sol', 10, 18e6, 17e6, 94e3, 4.17, { thread: 'k1', nickname: 'Zeno', state: 'finished', first: Date.parse('2026-10-08T19:49:00Z'), last: Date.parse('2026-10-09T17:02:00Z') }),
+        row('speaker_helper', 'gpt-5.6-sol', 2, 12e6, 12e6, 33e3, 6.8, { thread: 'k2', state: 'finished' }), row('mic_research', 'gpt-5.6-sol', 1, 1e5, 0, 1e3, 0.5, { thread: 'k3', state: 'interrupted' })] };
+    p8.host(U);
+    const cells = () => [...box().querySelectorAll('tr')].map((tr) => [...tr.children].map((td) => td.textContent));
+    assert.deepStrictEqual(cells().map((r) => r[0]), ['agent', 'main thread', 'speaker_helper', 'inference_adapters', 'mic_research', 'sub-agents (3)', 'session'], 'the main thread first, the sub-agents by cost, the totals last');
+    assert.deepStrictEqual(cells()[0], ['agent', 'model', 'turns', 'input', 'cached', 'output', '≈ cost ▾', 'share']);
+    assert.deepStrictEqual(cells()[1], ['main thread', 'gpt-5.6-sol ×95 → gpt-6.1-sol ×112', '207', '260M', '254M', '1.1M', '$82.46', '88%'], 'every model it used');
+    assert.deepStrictEqual(cells()[2], ['speaker_helper', 'gpt-5.6-sol · ultra', '2', '12M', '12M', '33k', '$6.80', '7%']);
+    assert.deepStrictEqual(cells()[5], ['sub-agents (3)', '', '13', '30.1M', '29M', '128k', '$11.47', '12%']);
+    assert.deepStrictEqual(cells()[6], ['session', '', '220', '290.1M', '283M', '1.2M', '$93.93', '100%']);
+    const what8 = box().querySelector('.mxh .what');
+    assert(what8.textContent.startsWith('Main thread and 3 sub-agents · ≈$93.93 at list prices, sub-agents ≈$11.47 (12%) · as of '), what8.textContent);
+    assert(/LiteLLM's public price table.*On a ChatGPT plan nothing is billed per token/.test(what8.title), 'what the figures are, on this backend');
+    const who = box().querySelectorAll('tr')[3].querySelector('.who').title;
+    assert(/^inference_adapters \(Zeno\)\nfinished\nfirst heard of .*, last .*\nthread k1$/.test(who), who);
+    // another column: the sub-agents by it, then the other way; the main thread stays first
+    box().querySelectorAll('th')[2].click();
+    assert.deepStrictEqual([cells().map((r) => r[0]).slice(1, 5), cells()[0][2]], [['main thread', 'inference_adapters', 'speaker_helper', 'mic_research'], 'turns ▾']);
+    box().querySelectorAll('th')[2].click();
+    assert.deepStrictEqual([cells().map((r) => r[0]).slice(2, 5), cells()[0][2]], [['mic_research', 'speaker_helper', 'inference_adapters'], 'turns ▴']);
+    box().querySelectorAll('th')[0].click();
+    assert.deepStrictEqual(cells().map((r) => r[0]).slice(2, 5), ['inference_adapters', 'mic_research', 'speaker_helper'], 'by name');
+    // read again on asking, and at the end of a turn while open
+    out8.length = 0; box().querySelector('.mxh .again').click();
+    assert.deepStrictEqual(out8.pop(), { type: 'subagentUsage', sid: 'c' });
+    p8.host({ type: 'event', sid: 'c', ev: { kind: 'result', ok: true, duration_ms: 5 } });
+    assert.deepStrictEqual(out8.pop(), { type: 'subagentUsage', sid: 'c' }, 'a turn ended: what it added');
+    // a thread on a model with no list price: no cost for it, and shares of tokens
+    p8.host(Object.assign({}, U, { subagents: [row('odd', 'gpt-unknown', 1, 10e6, 0, 1e6, null, { unpriced: ['gpt-unknown'] })] }));
+    assert.deepStrictEqual(cells()[2], ['odd', 'gpt-unknown · ultra', '1', '10M', '0', '1M', '—', '4%'], 'shares of input and output tokens');
+    assert.strictEqual(box().querySelectorAll('tr')[2].children[6].title, 'No list price for gpt-unknown');
+    assert(box().querySelector('.mxh .what').textContent.startsWith('Main thread and 1 sub-agent · 270M in, 2.1M out'), 'no cost to sum: the tokens');
+    assert.strictEqual(cells().length, 4, 'one sub-agent: no line of their total');
+    p8.host({ type: 'subagentUsage', sid: 'c', at: 1, error: 'This session\'s file was not found under /h/sessions.' });
+    assert.strictEqual(box().querySelector('.mxh .what').textContent, 'This session\'s file was not found under /h/sessions.');
+    // each tab its own; a Claude tab has none; closed, a turn's end asks nothing
+    tabs8({ thread: true }, 'k');
+    assert(!p8.shown(btn), 'not under a Claude tab');
+    tabs8({ thread: true }, 'c');
+    assert.deepStrictEqual([p8.shown(btn), btn.getAttribute('aria-pressed')], [true, 'true']);
+    box().querySelector('.mxh .x').click();
+    assert.deepStrictEqual([p8.shown(box()), btn.getAttribute('aria-pressed')], [false, 'false']);
+    out8.length = 0; p8.host({ type: 'event', sid: 'c', ev: { kind: 'result', ok: true, duration_ms: 5 } });
+    assert.deepStrictEqual(out8.filter((o) => o.type === 'subagentUsage'), []);
+    btn.click();
+    assert.deepStrictEqual([out8.pop(), box().querySelector('.mxh .what').textContent], [{ type: 'subagentUsage', sid: 'c' }, 'This session\'s file was not found under /h/sessions.'], 'opened again: the last answer while the new one is read');
+    p8.w.close();
+  }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });

@@ -442,6 +442,54 @@ A tab can be moved between surfaces. The session, its agent, and its
 transcript are untouched; only its `location` changes and the new
 surface is sent a replay.
 
+### Locking the editor group
+
+VS Code opens a file from the Explorer in the group last used, which
+after a message is the session's. So a group that holds only Perch tabs
+is locked, as VS Code locks a terminal's, and the file goes to the group
+beside it. Two things lock it. The package's `configurationDefaults` put
+the session webview (`mainThreadWebview-perch.session`) in
+`workbench.editor.autoLockGroups`, which VS Code applies when a session
+is the first tab of a group and there is more than one group. And the
+host locks the active group when a session's tab becomes active there
+and every tab in it is Perch's (`lockGroup`). The only group is locked
+too: VS Code honours a lock there as well, and opens the file in a new
+group beside it.
+
+VS Code never takes a lock off by itself. A group locked for sessions
+that later took files, and then lost its sessions, stayed locked with
+only files in it, and a file opened from the Explorer went past it into
+a new group (2026-10-14). So the host watches tabs close
+(`tabGroups.onDidChangeTabs`). A tab moved to another group is told as an
+open there and then a close in the group it left, the closed tab's
+`group` being that group. A short while after a Perch tab leaves a group
+(`UNLOCK_DELAY_MS`, 150 ms, since a tab that takes the place of another
+opens just after the old one closes), the host unlocks the group if it
+still has tabs, none of them Perch's, and none of an editor that
+`autoLockGroups` locks a group for (a terminal's, by default), whose lock
+it may be (`tabsChanged`, `unlockGroups`).
+
+The tab API does not tell whether a group is locked, and
+`workbench.action.unlockEditorGroup` is not given a group but a file.
+VS Code unlocks the first group, most recently used first and so the
+active one first, that has an editor of the file, and the active group if
+none has. Before 1.92 it looked only at each group's active editor, and
+named the group it found by its place in the window where an id was
+wanted, which can be another group (1.90 and 1.91: `editorGroup.index`
+passed to `getGroup`). So the host passes a file it has just seen in the
+group and open in no other group (either side of a diff counts as open),
+or any of its files if the group is the active one. It does nothing
+before 1.92, or when the group has no such file. Unlocking a group that
+is not locked does nothing.
+
+What is left alone: a group whose every file is open in another group as
+well keeps its lock, and so does a locked group left empty
+(`workbench.editor.closeEmptyGroups` off), which no file can name. A lock
+the user put on such a group by hand is taken off with Perch's, since the
+API cannot tell the two apart. `perch.lockGroup` off stops both the
+locking and the unlocking; the `autoLockGroups` default stays, as VS
+Code's to apply.
+
 ### A tab's title
 
 A tab is titled from the start of its first message, until its agent's
@@ -550,6 +598,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
+| `subagentUsage` | `sid` | Read a Codex session's usage, thread by thread (the footer's **sub-agents**); asked again at a turn's end while the table is open |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
 
@@ -560,6 +609,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
 | `event` | `sid`, `ev` | One event for one session |
 | `meter` | `meter`, `codex` | Claude usage, and ChatGPT plan usage |
+| `subagentUsage` | `sid`, `at`, and `main`, `subagents`, `prices`, `backend`, or `error` | The answer: each thread's model, effort, turns, tokens, and `cost` at list prices (null, with `unpriced` naming the model, when the table has no price for one it ran on); a sub-agent's `name`, `thread`, `state`, `first`, `last`, and `missing` when its file is not found |
 | `commands` | `kind`, `list` | Slash commands |
 
 ### Event kinds
@@ -571,7 +621,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `unqueued` | no, the `user` it names is removed instead | The answer to `unqueue`: `ok` and the bubble goes (`quiet` when Stop dropped it, the note saying how many); or not, `why` `taken` (its turn had started: an ordinary bubble, and a line saying so) or `unsupported` (a Claude Code that cannot be asked: still queued, without the ×) |
 | `text`, `thinking` | yes | The agent's answer, its reasoning |
 | `delta` | no | Streaming text in a live bubble |
-| `tool_use`, `tool_result` | yes | A tool call with its result beneath |
+| `tool_use`, `tool_result` | yes | A tool call with its result beneath. A `tool_use` with `update: true` is the same call said again in full (a Codex web search, on completing): its card is drawn again in place |
 | `permission` | yes, becomes a `note` once answered | Allow, Always, Deny |
 | `question` | yes, becomes `answered` | Claude's `AskUserQuestion`: choices as buttons, a line of your own, one answer for all. With `async: true`, a question Codex asked without waiting (`request_user_input_async`): the card says so, the tab does not wait on it, and the answers go as the next message (queued behind the turn); read back from an earlier session, it is an `answered` with `answers: null`, what was asked and no answer either way |
 | `subagent` | yes, but `waiting` and `usage` are not | Codex: a sub-agent's `started`, `tasked` (a follow-up task), `reported`, `finished`, `interrupted`, a line each (`⤷ name started`); each read from an activity record carries the sub-agent's own `thread`; an end line carries `info`, what its own thread file said of it in the turn it ended in (model, effort, turns, tokens, nickname, every model when more than one), and says it after the words. `waiting`, the root waiting on its sub-agents, is said at the foot; `usage`, read from a sub-agent's own file, goes into the tab's `subagents` and is no line. The tab's `subagents` (working, finished, stopped, and each by name with its reports and its `info` fields once known) is at the foot while the turn runs: a count that opens to a table of them. The turn's `result` carries the same `subagents`, a count under the line that opens to the table |
@@ -625,6 +675,7 @@ perch. A `Write` prompts every time in default mode.
 | Queueing | One turn at a time, so **perch holds the queue** and drains it as each turn ends, without the tab flickering to idle. Each entry has an id; one taken back leaves the queue and its echo is no longer awaited (by place, not by words, since two queued messages may say the same) |
 | IDE context | Attached by perch (below) |
 | Stop | An `AbortSignal` on the turn |
+| Web searches | The SDK's `web_search` item says nothing when it starts (an empty `query`, the action `other`) and everything when it completes: the action (`search` with its query or `queries`; `find_in_page` with the pattern and page; a page opened stays `other`, the page being the result) and the `results`, each with its title and address. The card is drawn at the start (`web search …`) and drawn again in place from the completion (`webInput`), with the pages found under it, eight at most (`webFound`); the foot says *Searching the web* in between. Reading only the start left `{"query": ""}` cards and a foot that said *Running web_search* for minutes after the searches ended (seen on 2026-10-12, in a turn whose last search had finished four minutes before) |
 | Apps and plugins | Codex's own: `codex exec` loads the plugins installed in the ChatGPT account of its login (the `openai-curated-remote` marketplace, cached under `~/.codex/plugins/cache/`) and reaches their apps through ChatGPT's hosted `codex_apps` MCP server; installing is `codex plugin add <name>@<marketplace>` (or `/plugins` in the interactive CLI, or the ChatGPT apps), and the model's own plugin tools can search, suggest, and uninstall but not install. An app's connection (its OAuth, Microsoft's for SharePoint) is made on chatgpt.com and kept by ChatGPT. A call to an app that is not connected returns `connector_auth_failure` in the result's `_meta` with an `install_url`; neither the result's text nor the model sees it, so perch says it in a note with a **Connect on ChatGPT** button (`connectLink` in `src/codexAgent.js`, chatgpt.com links only, once a turn). Read-only use is Codex's config: `apps.<connector_id>.destructive_enabled = false` |
 | Sub-agents and questions | Not in the SDK's stream, which carries agent messages, commands, file changes, MCP calls, reasoning, todo lists, web searches, and errors. The rest is in the thread's rollout file, so while a turn runs perch reads the lines it gains (`src/codexWatch.js`, from where the file ended when the turn began, or from its start for a new thread, about once a second, and once more before the turn is said to end) and translates them (`collabEvent` in `src/sessionStore.js`): `SubAgentActivity` items (started, interacted, completed, interrupted), a sub-agent's reports to `/root` (`agent_message`, MESSAGE as it goes and FINAL_ANSWER at the end of a task, their words encrypted, so only that a report came is shown), the root's `followup_task` and `wait_agent`, and `request_user_input_async`. The same translation reads them back into an earlier session's transcript, where the collaboration calls and their outputs (encrypted messages, `{"accepted":true}`) are no longer shown as tool calls. A turn's sub-agents end with its `codex exec` process. Each sub-agent is a thread of its own, with a rollout file of its own that every one of its activity records names (`agent_thread_id`), so one started in an earlier turn is found by this turn's follow-up (`interacted`). Seen on 2026-10-12, when only a start was read: a follow-up to a sub-agent started three days before left its row saying `…`. The watch reads that file too, from its start, for three records only (`turn_context`, the model and effort of each of its turns; `token_usage_record`, what each cost; `session_meta`, the nickname Codex gives it), tallied in `UsageTally` (`src/sessionStore.js`) and said as the sub-agent's `usage`: the model and effort of its latest turn whenever that was, and the turns and tokens of this turn only, those stamped from the watch's start on. The sub-agents' files are read before the root's on each poll, so a sub-agent's end finds its usage known. Read back later, `addSubagentUsage` gives each end line the same: the turn it ended in, from that turn's `task_started` to the end, so a sub-agent that ended in several turns shows each turn's model and cost and not its whole life. Each thread's file is read and parsed once, and the sessions tree walked once, for all of them. Seen on 2026-10-09: a thread's turn spawned three sub-agents that worked for 14 minutes while the tab showed only the root's last command, and an async question was never seen |
 | Backends | Three, perch's own choice (`perch.codex.backend` in global state), given per process so a tab moves on its next turn: the ChatGPT login (nothing given); an OpenAI API key (`CODEX_API_KEY`, from VS Code's secret storage); Amazon Bedrock (`--config` overrides through the SDK's `config`: `model_provider` and `model_providers.<provider>.aws.{region,profile}`, `src/codexBedrock.js`). Codex 0.159 has the Bedrock provider built in, in two forms: `amazon-bedrock`, the Bedrock Mantle endpoint (`bedrock-mantle.<region>.api.aws/openai/v1`), and `amazon-bedrock-runtime`, the runtime's OpenAI-compatible endpoint; both sign with the AWS credential chain (profile, `AWS_*`, `AWS_BEARER_TOKEN_BEDROCK`). On Bedrock a model goes by its Bedrock id: `openai.<slug>` on Mantle, `us.openai.<slug>` on the runtime endpoint (on-demand throughput there wants a cross-region inference profile; `openai.gpt-6-luna` alone is refused), and a tab with no model of its own sends the catalog's default slug in that form, since Codex's own default (`config.toml`) is not a Bedrock name. The ChatGPT connector apps (`features.apps`: Gmail, Calendar, ChatGPT spaces and the rest) are turned off for a Bedrock process: they are features of a ChatGPT account and cannot work there, and for a model Codex's catalog does not know by its cross-region id Codex sends every one of their schemas in full with each request (captured 2026-10-06 against a stand-in endpoint: 236 KB a request with 25 tools on the runtime endpoint, 44 KB with 11 once the apps are off; Mantle with its recognised id and the apps on, 51 KB with `tool_search` deferring them). Measured with GPT-6 Luna and a one-line prompt, apps off: the runtime endpoint 7.9 K input tokens a request, Mantle 9.2 K (with the apps on they had been 37.5 K and 12.4 K). So the runtime endpoint is the default: every Bedrock region, the `bedrock:*` actions a machine on Claude-on-Bedrock already has, and the leaner request; Mantle is the setting, wants its own IAM action (`bedrock-mantle:CreateInference` on a project resource, which the seclab key lacks) and is not in every region (us-west-2 answered 404 for every model), so its region defaults to us-east-1 while the runtime endpoint follows the machine's. A thread cannot cross between OpenAI and Bedrock: its reasoning items are `encrypted_content`, encrypted for the provider that made them, and the other refuses them (`invalid_encrypted_content`, seen on seclab 2026-10-06 when a ChatGPT thread was resumed on Bedrock). So a switch across providers starts a new thread with the next message, said in a note, and a thread resumed from the sessions list on the other provider is started over once and the message sent again; the old thread stays on record. ChatGPT and the API key are the same provider, and a thread goes on between them |
@@ -666,20 +717,45 @@ accepts, and lacked `max` and `ultra`.
 | --- | --- | --- |
 | Models | `supportedModels()` | `~/.codex/models_cache.json`, entries with `visibility: list` |
 | Efforts | per model, `supportedEffortLevels` | per model, `supported_reasoning_levels` |
-| Default model | the SDK's `default` entry, named by what it resolves to | `model` in `~/.codex/config.toml` |
+| Default model | the model the idle CLI says it is on, `getContextUsage({ detail: 'summary' }).model`, named by the entry that is it or resolves to it; the SDK's `default` entry if the CLI cannot say | `model` in `~/.codex/config.toml` |
 | Default effort | not reported | `model_reasoning_effort` in the config, if the model accepts it |
-| Cost to read | about 0.5 s, no request | a file read |
+| Cost to read | about 0.7 s, no request | a file read |
 
 **Reading Claude's list without a request.** The CLI is started with an
 input stream that never yields. It initializes, answers
-`supportedModels()` and `supportedCommands()`, and is stopped. No message
-is sent, so nothing is billed.
+`supportedModels()`, `getContextUsage({ detail: 'summary' })` and
+`supportedCommands()`, and is stopped. No message is sent, so nothing is
+billed; the summary is worked out from local figures.
 
 **Effort follows the model.** Changing the model rebuilds the effort
 list. An effort the new model does not accept resets to default. A model
-with no effort control, Haiku for one, says so.
+with no effort control, Haiku for one, says so. On Claude's default the
+model is the one the session reports (below), so there the check is made
+when it reports.
 
-**Defaults are labelled.** `default · Opus 5.5`, `default · ultra`.
+**Defaults are labelled.** `default · Sonnet 4.6`, `default · ultra`.
+
+On Claude, default is two models. A new session starts on
+`ANTHROPIC_MODEL`, else the settings' `model`, else Claude Code's
+built-in default; `setModel(undefined)` in a running session goes to the
+built-in default, whatever the session started on. The SDK's `default`
+entry names the built-in one in both cases, and the label used to come
+from it, so seclab, which sets `ANTHROPIC_MODEL` to Sonnet 4.6, showed a
+tab running Sonnet as default Opus and offered it Opus's `xhigh`. So:
+
+- Before a tab's process starts, the label is the model the idle CLI
+  says it is on, read with the catalog.
+- Once it runs, the label is the model the process reports: the `model`
+  of its `init` message and of each context reading. After a model
+  change Claude is asked at once; until it answers, the label is the
+  start model's.
+- A reported id is named by the catalog entry that is it or resolves to
+  it, and shown as it is when the list lacks it.
+- The effort list follows the same model. An effort the reported model
+  lacks resets to default when the report arrives, and again when the
+  process is restarted, since the next one starts on the start model.
+- The option's tooltip says when the running model is not the one new
+  sessions start on. A gateway tab's default is the file's (section 11).
 
 **Fallback.** Until a catalog loads, or if it cannot, tabs use a static
 effort list and offer only the default model. A catalog that arrives
@@ -990,6 +1066,51 @@ files.
   since reset.
 - perch re-reads after each Codex turn it runs.
 
+### A Codex session's usage, thread by thread
+
+The plan's limits say how much is left, not where it went. A session that
+starts sub-agents spends in many threads at once: the user's own thread on
+2026-10-12 had 76 sub-agents, which together took 42 % of the session's
+cost. Under a Codex tab, the footer's **sub-agents** button opens a table
+of the whole session, one row per thread: the main thread first, then each
+sub-agent it started (and any those started, by path, `alpha/deep`), then
+the sub-agents' total and the session's. Each row has the model and effort
+(every model, with its turns, when the thread moved), turns, input with
+the cached part of it, output, the cost at list prices, and its share of
+the session. The sub-agents sort by any column; by cost until another is
+chosen.
+
+- **Read from the files, on demand.** The host reads the session's rollout
+  file and each sub-agent's own (`sessionStore.sessionUsage`): the threads
+  from the `SubAgentActivity` records, each thread's tally from its own
+  `turn_context` and `token_usage_record` records, whole. Nothing is kept
+  in perch's state. The table is read when opened, and again when a turn
+  ends while it is open. The user's thread (95 MB, 76 sub-agent files) reads
+  in under a second.
+- **A turn is counted once, by its id.** A turn records its context again
+  after a compaction: 21 of that thread's 205 turns did. Counting records
+  showed 226.
+- **A fork's copy of its parent's history is not its own.** A sub-agent
+  forked from the conversation has the parent's history copied into the top
+  of its file, contexts included: 390 copied against 161 of their own, in
+  those 74 files. The sub-agent's own `session_meta`, the file's first
+  line, names where its own records begin
+  (`subagent_history_start_ordinal`), and `UsageTally` skips the records
+  before it. Before this, every forked sub-agent showed a turn more than it
+  had, on its parent's model, in the foot's table and on its end line too.
+  Token records are never copied (none of the 2,121 in those files names
+  another thread), so the token figures were right.
+- **Priced per model, at list rates.** Each request's tokens go under the
+  model of the turn they are in, so a thread moved to another model is
+  priced at each one's rates: uncached input, input written to the cache,
+  cached input, and output, from LiteLLM's public price table, the same one
+  a gateway's turns are priced with. A thread with a model the table does
+  not price shows no cost, and says which model; shares are then of tokens.
+- **What the cost means.** On a ChatGPT plan nothing is billed per token:
+  turns count against the plan's limits, and the cost says where the work
+  went. On an API key it is what OpenAI's list prices charge; Bedrock bills
+  at its own rates. The tooltip says which.
+
 ## 12. Dictation
 
 ### The constraint that shapes it
@@ -1263,6 +1384,12 @@ track vendor updates. Without an extension, a tab shows a letter.
    found a gateway on offer that the test had not made. The stub now
    names a path that does not exist, and the gateway tests write their
    own file in a throwaway directory.
+10. **Probe the CLI from a clean environment.** A probe run from inside a
+    Claude Code session inherits its variables (`CLAUDECODE`,
+    `CLAUDE_CODE_CHILD_SESSION`, its effort), and the CLI it started
+    answered `supportedModels()` without the `default` entry, which
+    looked like a finding about the SDK. Probes now run under `env -i`
+    with only `HOME`, `PATH`, `USER` and `LANG`.
 
 ## 15. Verified and not verified
 
@@ -1277,6 +1404,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Claude queueing | Two messages sent together answered in order, idle once |
 | Claude's idle word | `session_state_changed` running/idle arrives when `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` is in the CLI's environment; without it the SDK has the CLI mark it host-only and swallows it (probed 2026-09-30; 6 state words over the harness run) |
 | Claude catalog without a request | 11 models in about 0.5 s |
+| The model a Claude session starts on, read without a request | SDK 0.3.284's CLI on Bedrock, idle, in a clean environment (2026-10-15): `getContextUsage({ detail: 'summary' })` gave the start model's id. With `ANTHROPIC_MODEL` set to Sonnet 4.6, as on seclab, the catalog named the default Sonnet 4.6, efforts low to max with no `xhigh`, in 712 ms; with the settings' `model` set to Fable, as on the desktop, Fable, in 694 ms. With either, and with neither, the SDK's `default` entry was the built-in Opus 5.5 |
+| Default in a running Claude session is the built-in default | The same CLI (2026-10-15): started on `ANTHROPIC_MODEL`, on the settings' `model`, and on neither, `setModel(undefined)` then reported Opus 5.5 each time. One request after it, from a start on Haiku 4.5: `init` and the answer both Opus 5.5, $0.07 |
 | Codex usage, fresh after a turn | A reading zero to one second old |
 | Claude usage response shape | Parsed three limits from a live response |
 | The usage endpoint rate-limits | Observed HTTP 429 |
@@ -1316,6 +1445,8 @@ track vendor updates. Without an extension, a tab shows a letter.
 | A queued Claude message taken back by Claude Code | The vendor extension's Claude Code (2.1.295) on Haiku (2026-10-09): a message queued 2.5 s into a long first turn and handed over, then `cancelAsyncMessage` 0.6 s later: `{cancelled: true}`, and the session had one turn and one result. Left queued instead, it ran, and the turn that took it up was stamped with its uuid. Cancelled after a short first turn had ended: `{cancelled: false}`, and it ran: too late, as the tab says |
 | Sub-agents and async questions read from a running Codex turn's file | The user's own thread (2026-10-09, 49.5 MB, two days): read back in 195 ms as 2,587 events with 365 sub-agent lines and 6 past questions, no collaboration call left as a tool call; a watch on the running turn said `desktop_local_conversation answered` and `desktop_audio_transport reported` as they were written. The record shapes were read from 127 session files: `SubAgentActivity` kinds started 42, interacted 366, completed 77, interrupted 2; reports to `/root` MESSAGE 224, FINAL_ANSWER 76; seven async questions, all answered `{"accepted":true}` by Codex itself |
 | Each sub-agent's model and tokens from its own thread file | The same thread on 2026-10-12 (77 MB, five days, 74 sub-agent threads of 0.2–8.7 MB): read back in 822 ms as 3,892 events with 759 sub-agent lines; every one of its 146 end lines was given `info` for the turn it ended in (133 on `gpt-6.1-sol`, 13 on `gpt-5.6-sol`: the parent was moved from one to the other on 2026-10-08, and each sub-agent kept the model it started on), the last, `capture_failure_diagnosis` (Lagrange), at 2 turns, 2.1 M input nearly all cached, 5.6 k output; read over its whole life, as the first version did, the same line said 17 turns and 14.4 M. The turn of 16:30 that day, whose foot said `…` for that sub-agent (started 2026-10-09, given a follow-up), was replayed through the watch from its root file: found by the follow-up's `interacted`, said as `gpt-6.1-sol` · ultra, 1 turn, 485 k input, 1.3 k output. The three record shapes (`turn_context` model/effort, `token_usage_record` usage, `session_meta` agent_nickname/parent_thread_id/agent_path) were read from those 74 files and the root's; one sub-agent spawned 29 s after the parent's model change held 30 token-less `turn_context` records on the old model before its real turns on the new, which the table shows as both. Not yet seen in a running perch turn after that fix |
+| A Codex session's usage, thread by thread | The user's thread on 2026-10-12 (95 MB, its 76 sub-agents' files all found): read in 0.9 s. The main thread 207 turns (226 context records: 21 turns recorded theirs twice), on `gpt-5.6-sol` for 95 and `gpt-6.1-sol` for 112; at LiteLLM's list prices fetched that day (`gpt-6.1-sol` $2, $0.10 cached, $10 out per million; `gpt-5.6-sol` $4, $0.40, $20), ≈$82.46, and the sub-agents ≈$58.79, 42 % of ≈$141.26. 65 of its first 74 sub-agents were forked: 390 copied contexts against 161 of their own, and none of their 2,121 token records named another thread. `inference_adapters` showed 17 turns before the fix and 10 after; `mic_research` 2 and 1 |
+| A web search as `codex exec` reports it | `codex-cli 0.159.0`, the binary the SDK carries, on `gpt-6.1-sol` in code mode (2026-10-12), asked to search, open the page found, and look for a phrase in it: three `web_search` items, each `item.started` with `query: ""` and `action: {type: "other"}`, and `item.completed` with `{type: "search", query}` and 12 results; `other` with an empty query and the page as its one result; `{type: "find_in_page", url, pattern}` and the page. Each result: `type`, `domain`, `ref_id`, `snippet`, `title`, `url` (and `thumbnail_url` for a page). The rollout file spells the last `findInPage` and gives a search's `queries` |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through the C3 gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
 ### Not verified
@@ -1374,6 +1505,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | Own Markdown renderer, DOM-built | `marked` and a sanitiser | No dependency, and no path by which text becomes markup |
 | Programs from the vendors' extensions when packaged | Bundle per platform | Hundreds of megabytes per platform, against 8 MB |
 | Lock an editor group of sessions | Leave it | Files opened from the Explorer landed among the sessions |
+| Unlock that group when its last session leaves and other tabs stay | Leave the lock on | VS Code never takes it off: a group of files stayed locked, and files from the Explorer went past it into a new group |
 | Codex settings changed by resuming the thread | Fixed for the thread's life | Each turn is a process anyway; the cost is one compaction |
 | perch-audio through `extensionPack`, not a dependency | `extensionDependencies` | A missing companion must not stop perch from starting |
 | The vendors' extensions in the `extensionPack` too | Leave them to the user; bundle the programs | Perch runs their programs, so a remote with one vendor's extension missing showed only a message; the pack installs both, and either can be removed |
@@ -1403,6 +1535,9 @@ track vendor updates. Without an extension, a tab shows a letter.
 | The Cursor cost claim withdrawn: "several times a terminal session" and the cache-miss diagram replaced by the measurement | Keep the claim with the public 5.5× as its source | The 5.5× is one run on mixed models with no cache analysis, by its own authors' account; the controlled bench (006) finds the same cache efficiency as Claude Code and a 10 % gap from tool calls. A design document that argues from caching cannot keep a caching claim it has measured to be wrong |
 | A Codex turn's sub-agents and async questions read from the thread's rollout file while the turn runs | Wait for the SDK to stream them; the app-server protocol, which Codex's own extension uses | The SDK's item types do not include them in this version, and a turn of 14 minutes with three sub-agents showed nothing but the root's last command; the app-server would replace `codex exec` and the SDK altogether. The file is Codex's own record, read only, and perch already reads it for usage and transcripts |
 | Each sub-agent's model, effort and tokens read from its own thread file, shown in a table the foot's count opens, on its end line, and under the turn's result | Guess the model from the parent's (true only until the parent is moved to another model, or a custom agent pins its own); Codex's own agents overview, which `codex exec` has no TUI for; a panel of all threads like `codex agents` | A sub-agent starts on the parent's model but a custom agent file or `[agents] default_subagent_model` can give it another, and the user's own five-day thread had 15 sub-agents on one model and 62 on the next: only the sub-agent's file says which. The three records read are a few lines of a file that is read anyway for its lifecycle; the table is the smallest surface that answers "which model, at what cost" without a second view, and a past turn's end lines answer the same from the files when the transcript is read back |
+| A Codex session's usage read from its files when its table is opened, each thread priced by model at list rates | A running tally in perch's state as turns run; one rate for a whole thread; ChatGPT's own usage page | perch sees only the turns it runs, so a session resumed after a reload or worked on in another client would be short; the files are Codex's own record of every thread, and the largest read in under a second. A thread moved between models (the main thread here: 95 turns on one, 112 on the other, at rates 2× apart) is wrong at one rate. ChatGPT's usage page has no view by thread |
+| A turn counted once, by its id; a fork's copied history skipped from its own start ordinal | Count the turn records | The records over-count: a compaction records a turn's context again, and a forked sub-agent's file opens with its parent's history (390 copied contexts in one thread's sub-agents), so each forked sub-agent showed a turn more, on its parent's model |
+| A Codex web search's card drawn at its start and again, in place, from its completion | Draw it only on completion; leave it as the start says | Codex fills the item in only on completing, but the start is the only sign one is running. Drawn twice in place, the card shows both, and the foot says *Searching the web* only between the two |
 | A queued Claude message is taken back from Claude Code's own queue, by a uuid perch gives it | Hold Claude's queued messages in perch, as Codex's are | Claude Code's queue is where they belong: it merges messages sent close together into one turn, and Stop's handling of what is queued is its own. Its cancel request does exactly this job and says whether it was in time |
 | A Codex login Codex refuses is a state, held until auth.json holds another login, recognised by Codex's own codes | Treat "auth.json has tokens" as logged in, and offer the login on any 401; validate the login with a request before each turn | The file says nothing of whether ChatGPT still honours it (`codex login status` says "Logged in" for a revoked one), and a bare 401 can be any server's. Codex's codes are the authority, and a fingerprint of the file (time, size, `last_refresh`; no token) tells when a new login, or a refresh by another Codex, has replaced the refused one, with no request of perch's. The wait for a login had to change with it: it returned at once because the old file was there, and the sign-in was stopped before the browser came back. `codex login` removes the old `auth.json` as it starts, so the wait asks for a login that exists and is not the refused one. And the login is run with the program's real path: where perch runs the SDK's own `codex` (from a checkout), `resolveProgram` leaves the path to the SDK, and the bare name `codex` was run instead, which failed with ENOENT on a machine with none on PATH (`sdkCodex` in `src/binaries.js`) |
 | A login button always answers: pressed while a login waits, the same sign-in page again; a login made marks every login note done, in place | One login at a time, a second press ignored; the notes left as they were | The browser sign-in listens on a fixed port, so one at a time stays; but a press that does nothing reads as broken (seen on 2026-10-12: the notification's Log In started the login and the note's, pressed while it waited, was dropped without a word), and notes still offering a login after one is made invite a second. Notes carry `nid: 'codexLogin'`; `noteDone` replaces their buttons with the word, and the history keeps it for replays |
@@ -1412,6 +1547,7 @@ track vendor updates. Without an extension, a tab shows a letter.
 | A gateway tab's process is given the gateway's variables as its own settings, over the user's | Hold the tab's first message and tell the user to switch the window to the subscription (as it did until 0.6.41) | On a machine whose only Claude login is Bedrock (seclab) the instruction had no good outcome: switching the window would strand the Bedrock tabs. Settings given on the command line outrank the user's file, so the tab can be made right by itself; the token is kept out of them, since a process's arguments are readable by others on the machine |
 | The gateway template turns the hour-long prompt cache on | Leave Claude Code's default (five minutes on a token) | Per-token billing makes the hour the cheaper choice at the first pause over five minutes; the line says what it costs and when to remove it |
 | The backend chosen for a tab becomes the default for new Claude tabs | Every new tab on the window's backend; a setting | The user opening a gateway tab wants the next one there too; subscription and API already stick through Claude Code's setting, so the gateway is made to stick the same way, in global state |
+| Claude's default is named by the model the CLI says it is on: the idle CLI's start model before the process starts, then the model the process reports; the effort list follows the same model | The SDK's `default` entry, as until 0.6.53 | That entry is Claude Code's built-in default whatever `ANTHROPIC_MODEL` or the settings say, so on seclab a tab running Sonnet 4.6 read Opus and was offered `xhigh`, which Sonnet lacks. Asking the idle CLI costs no request |
 
 ## 18. References
 
@@ -1487,3 +1623,7 @@ than from published documentation. Each may change without notice.
 | Codex's model cache format | File on disk |
 | Settings win over environment for `CLAUDE_CODE_USE_BEDROCK` | Verified empirically by AI Meter |
 | ChatGPT dictation uploads to `/transcribe` | The ChatGPT extension's code |
+| `workbench.action.unlockEditorGroup` given a file unlocks the first group, most recently used first, that has an editor of it, and otherwise the active group; before 1.92 it matched only a group's active editor, and passed the group's position where its id was wanted | VS Code's source (`resolveCommandsContext`, 1.92 to 1.129; `getCommandsContext`, 1.90 and 1.91) |
+| A tab moved to another group is told as an open there, then a close whose tab's `group` is the group it left | VS Code's source (`extHostEditorTabs.ts`, 1.129) |
+| The SDK's `default` model entry is Claude Code's built-in default, whatever `ANTHROPIC_MODEL` or the settings' `model` say | Probed, SDK 0.3.284 (2026-10-15) |
+| On an idle CLI, `getContextUsage({ detail: 'summary' }).model` is the model a new session starts on, and makes no request; after `setModel(undefined)` it is the built-in default, which then answers | Probed, SDK 0.3.284 (2026-10-15) |

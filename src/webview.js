@@ -77,6 +77,16 @@ ${glyphCss}
   .subs td.n { font-variant-numeric: tabular-nums; }
   .subs .who { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
   .result .subs { text-align: left; margin-top: 2px; }
+  .mx { flex: none; max-height: 45%; overflow: auto; padding: 4px 12px 8px; border-top: 1px solid var(--vscode-panel-border); }
+  .mx .mxh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .mx .mxh .what { flex: 1; min-width: 0; }
+  .mx .mxh button { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; cursor: pointer; }
+  .mx .mxh button:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  .mx th { cursor: pointer; user-select: none; }
+  .mx th:hover { color: var(--vscode-foreground); }
+  .subs.mx th.n, .subs.mx td.n { text-align: right; }
+  .mx tr.main td, .mx tr.total td { font-weight: 600; }
+  .mx tr.total td { border-top: 1px solid var(--vscode-panel-border); }
   @keyframes spin { to { transform: rotate(360deg); } }
   .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
   /* a message of the user's stands apart from the answers: to the right, a filled tint of the foreground so it shows in any theme, and space above it that marks where a turn begins */
@@ -263,6 +273,7 @@ ${glyphCss}
   #meter .plan:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
   #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  #meter .mb[aria-pressed="true"] { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
   #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
   #meter .mu:hover { color: var(--vscode-foreground); }
@@ -293,7 +304,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -356,6 +367,14 @@ ${glyphCss}
   function toolView(name, input) {
     const i = input && typeof input === 'object' ? input : {};
     const str = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(' ') : '');
+    // Codex's web search (src/codexAgent.js, webInput): what it searched for, or the page it opened or looked in; nothing yet
+    // while it starts, as Codex says what it was only when it completes
+    if (name === 'web_search') {
+      const what = i.action === 'search' ? (Array.isArray(i.queries) && i.queries.length ? i.queries.join('\\n') : str(i.query))
+        : i.action === 'find' ? '"' + str(i.pattern) + '"' + (str(i.url) ? ' in ' + str(i.url) : '')
+        : i.action === 'open' ? str(i.url) || str(i.title) : str(i.query);
+      return { title: { open: 'web search · open page', find: 'web search · find in page' }[i.action] || 'web search', body: what || '…', mono: false, copy: what };
+    }
     if (str(i.command)) return { title: str(i.description) ? name + ' · ' + str(i.description) : name, body: str(i.command), mono: true };
     if (str(i.file_path) || str(i.path) || str(i.notebook_path)) {
       const where = str(i.file_path) || str(i.path) || str(i.notebook_path);
@@ -416,9 +435,10 @@ ${glyphCss}
     const work = el('div', 'work'), what = el('span', 'what'), took = el('span', 'for'); work.hidden = true; work.setAttribute('role', 'status');
     work.append(el('span', 'sp'), what, took);
     const subs = el('div', 'subs'); subs.hidden = true;   // the running turn's sub-agents as a table, opened from the count at the foot
-    root.append(log, work, subs); $panes.append(root);
+    const mx = el('div', 'subs mx'); mx.hidden = true;    // the whole session's usage, thread by thread, opened from the footer
+    root.append(log, work, subs, mx); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sent, hist: null, root, log, work, what, took, subs, subsOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -471,6 +491,74 @@ ${glyphCss}
       tr.append(who, el('td', null, subState(x.state)), el('td', null, x.model ? subModel(x) : '…'), el('td', 'n', x.model ? String(x.turns || 0) : ''), el('td', 'n', x.model ? subTokens(x) : ''), el('td', 'n', x.reports ? String(x.reports) : ''));
       table.append(tr);
     }
+    box.append(table);
+  }
+
+  // ---- a Codex session's usage, thread by thread: the main thread and every sub-agent it started, each read from its own
+  // file by the host (sessionStore.sessionUsage) and priced at list rates there. Opened from the footer; asked for again
+  // at the end of each turn while it is open. Sub-agents sort by any column; the main thread stays first, the totals last.
+  const USAGE_COLS = [['name', 'agent'], ['model', 'model'], ['turns', 'turns'], ['input', 'input'], ['cached', 'cached'], ['output', 'output'], ['cost', '≈ cost'], ['share', 'share']];
+  function askUsage(sid) { vscode.postMessage({ type: 'subagentUsage', sid }); }
+  function toggleUsage(sid, open) {
+    const p = panes.get(sid); if (!p) return;
+    p.mxOpen = open === undefined ? !p.mxOpen : open;
+    p.mx.hidden = !p.mxOpen;
+    if (p.mxOpen) { askUsage(sid); if (!p.mxData) { p.mx.textContent = ''; p.mx.append(el('div', 'mxh', 'Reading this session\\'s files…')); } else drawUsage(p); }
+    syncUsageButton(); pin(p);
+  }
+  function syncUsageButton() { const t = cur(), p = t ? panes.get(t.id) : null; $msubs.setAttribute('aria-pressed', p && p.mxOpen ? 'true' : 'false'); }
+  const usageWhen = (ms) => (typeof ms === 'number' ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+  function usageWho(r) {
+    if (r.total) return r.name;
+    const said = { started: 'started', active: 'working on a follow-up', tasked: 'given a follow-up task', finished: 'finished', interrupted: 'interrupted' }[r.state] || '';
+    return [r.name + (r.nickname ? ' (' + r.nickname + ')' : ''), r.main ? 'the session\\'s own thread' : said, r.first ? 'first heard of ' + usageWhen(r.first) + (r.last && r.last !== r.first ? ', last ' + usageWhen(r.last) : '') : '', r.missing ? 'its file was not found' : '', r.thread ? 'thread ' + r.thread : ''].filter(Boolean).join('\\n');
+  }
+  function drawUsage(p) {
+    const box = p.mx, u = p.mxData; box.textContent = '';
+    const head = el('div', 'mxh'), what = el('span', 'what'), again = el('button', 'again', 'refresh'), close = el('button', 'x', '×');
+    again.title = 'Read the files again'; close.title = 'Close';
+    again.addEventListener('click', () => askUsage(p.sid)); close.addEventListener('click', () => toggleUsage(p.sid, false));
+    head.append(what, again, close); box.append(head);
+    if (!u || u.error) { what.textContent = u ? u.error : 'Reading this session\\'s files…'; return; }
+    const subs = u.subagents || [], all = [Object.assign({ main: true }, u.main, { name: 'main thread' }), ...subs];
+    const priced = all.every((r) => typeof r.cost === 'number');
+    const tok = (r, k) => (r.tokens && r.tokens[k]) || 0;
+    const weight = (r) => (priced ? r.cost : tok(r, 'input') + tok(r, 'output'));
+    const sum = (list) => ({ total: true, turns: list.reduce((n, r) => n + (r.turns || 0), 0), tokens: { input: list.reduce((n, r) => n + tok(r, 'input'), 0), cached: list.reduce((n, r) => n + tok(r, 'cached'), 0), output: list.reduce((n, r) => n + tok(r, 'output'), 0) }, cost: priced ? list.reduce((n, r) => n + r.cost, 0) : null });
+    const whole = sum(all), mine = sum(subs), total = weight(whole);
+    const share = (r) => (total > 0 ? Math.round((100 * weight(r)) / total) + '%' : '');
+    what.textContent = (subs.length ? 'Main thread and ' + subs.length + (subs.length > 1 ? ' sub-agents' : ' sub-agent') : 'Main thread; no sub-agents') +
+      (priced ? ' · ≈$' + usd(whole.cost) + ' at list prices' + (subs.length ? ', sub-agents ≈$' + usd(mine.cost) + ' (' + share(mine) + ')' : '') : ' · ' + fmtTok(whole.tokens.input) + ' in, ' + fmtTok(whole.tokens.output) + ' out') +
+      (u.at ? ' · as of ' + new Date(u.at).toLocaleTimeString() : '');
+    what.title = (!u.prices ? 'LiteLLM\\'s price table could not be read, so the figures are tokens only. '
+      : !priced ? 'Some threads ran on a model LiteLLM\\'s table has no price for (the cost column says which), so shares are of tokens. '
+      : 'Each thread\\'s tokens at its models\\' list prices, from LiteLLM\\'s public price table: uncached input, input written to the cache, cached input, and output, each at its rate. ') +
+      (u.backend === 'chatgpt' ? 'On a ChatGPT plan nothing is billed per token: turns count against the plan\\'s limits, shown in the footer. The figures say where the work went.'
+        : u.backend === 'bedrock' ? 'Amazon Bedrock bills at its own rates.' : 'An API key is billed at OpenAI\\'s own rates, which these follow.') +
+      ' Input counts every token sent, cached ones among them. Each thread is read whole from its own file, a fork\\'s copy of its parent\\'s history left out.';
+    const table = el('table'), hr = el('tr'), s = p.mxSort;
+    for (const [k, label] of USAGE_COLS) {
+      const th = el('th', k === 'name' || k === 'model' ? '' : 'n', label + (s.key === k ? (s.dir < 0 ? ' ▾' : ' ▴') : ''));
+      th.title = 'Sort the sub-agents by ' + (k === 'name' ? 'name' : k === 'share' ? 'share' : label.replace('≈ ', '')) + '; again to reverse';
+      th.addEventListener('click', () => { p.mxSort = { key: k, dir: s.key === k ? -s.dir : k === 'name' || k === 'model' ? 1 : -1 }; drawUsage(p); });
+      hr.append(th);
+    }
+    table.append(hr);
+    const val = (r, k) => (k === 'name' ? r.name : k === 'model' ? r.model || '' : k === 'turns' ? r.turns || 0 : k === 'cost' ? (typeof r.cost === 'number' ? r.cost : -1) : k === 'share' ? weight(r) || 0 : tok(r, k));
+    const order = subs.slice().sort((a, b) => { const x = val(a, s.key), y = val(b, s.key); return (typeof x === 'string' ? String(x).localeCompare(String(y)) : x - y) * s.dir; });
+    const row = (r, cls) => {
+      const tr = el('tr', cls || ''), who = el('td'), name = el('span', r.total ? '' : 'who', r.name);
+      name.title = usageWho(r); who.append(name);
+      const cost = el('td', 'n', typeof r.cost === 'number' ? '$' + usd(r.cost) : '—');
+      if (r.unpriced) cost.title = 'No list price for ' + r.unpriced.join(', ');
+      tr.append(who, el('td', null, r.total ? '' : r.model ? subModel(r) : r.missing ? 'file not found' : '—'), el('td', 'n', String(r.turns || 0)),
+        el('td', 'n', fmtTok(tok(r, 'input'))), el('td', 'n', fmtTok(tok(r, 'cached'))), el('td', 'n', fmtTok(tok(r, 'output'))), cost, el('td', 'n', share(r)));
+      return tr;
+    };
+    table.append(row(all[0], 'main'));
+    for (const r of order) table.append(row(r));
+    if (subs.length > 1) table.append(row(Object.assign(mine, { name: 'sub-agents (' + subs.length + ')' }), 'total'));
+    table.append(row(Object.assign(whole, { name: 'session' }), 'total'));
     box.append(table);
   }
   setInterval(() => { if (active) syncWork(active); }, 1000);
@@ -811,7 +899,7 @@ ${glyphCss}
     const p = panes.get(sid); if (!p) return;
     // what it is doing now, for the line at the foot of the transcript
     const doing = { delta: 'Writing', text: 'Working', thinking: 'Thinking', tool_result: 'Working', user: 'Working' }[m.kind];
-    if (doing) p.doing = doing; else if (m.kind === 'tool_start' || m.kind === 'tool_use') p.doing = 'Running ' + m.name;
+    if (doing) p.doing = doing; else if ((m.kind === 'tool_start' || m.kind === 'tool_use') && !m.update) p.doing = m.name === 'web_search' ? 'Searching the web' : 'Running ' + m.name;
     else if (m.kind === 'subagent' && m.state === 'waiting') p.doing = 'Waiting for sub-agents';
     if (m.kind === 'permission' || (m.kind === 'question' && !m.async)) p.asking++; else if (m.kind === 'clear') { p.asking = 0; p.doing = ''; }
     if (m.kind === 'voice') { if (m.phase === 'idle') voice.delete(sid); else voice.set(sid, m); if (sid === active) syncComposer(); return; }
@@ -834,7 +922,10 @@ ${glyphCss}
       case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
       case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
-        const tv = toolView(m.name, m.input); const d = add(p, 'tool', ''); d.append(el('span', 'name', tv.title + (m.status ? ' · ' + m.status : '')), el('div', 'in' + (tv.mono ? ' mono' : ''), tv.body), copyButton(() => commandOf(m.input))); if (m.id) p.tools[m.id] = d; break; }
+        // a call said again once it is known in full (a Codex web search, on completing) is drawn again in its own place
+        const tv = toolView(m.name, m.input), was = m.update && m.id ? p.tools[m.id] : null, d = was || add(p, 'tool', '');
+        if (was) d.textContent = '';
+        d.append(el('span', 'name', tv.title + (m.status ? ' · ' + m.status : '')), el('div', 'in' + (tv.mono ? ' mono' : ''), tv.body), copyButton(() => (tv.copy !== undefined ? tv.copy : commandOf(m.input)))); if (m.id) p.tools[m.id] = d; break; }
       case 'tool_result': {
         const d = add(p, 'toolres' + (m.isError ? ' err' : ''), (m.text || '(no output)') + (m.truncated ? '\\n…' : ''));
         const a = p.tools[m.id]; if (a && a.nextSibling !== d) a.after(d);
@@ -882,6 +973,7 @@ ${glyphCss}
           count.addEventListener('click', () => { box.hidden = !box.hidden; if (!box.hidden) subsTable(box, sa.list); });
           d.append(' · ', count, box);
         }
+        if (p.mxOpen) askUsage(sid);                     // the session's usage table, open: what the turn added
         break; }
       case 'note': { endLive(p); const d = addLinked(p, 'status', m.text);
         if (m.nid) d.dataset.nid = m.nid;                 // a note the host can mark done later (a login made)
@@ -974,7 +1066,9 @@ ${glyphCss}
   }
 
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
-  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan');
+  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan'), $msubs = $('m-subs');
+  $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
+  $msubs.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleUsage(t.id); });
   const meters = { claude: null, codex: null };
   let meter = null, meterKind = null, onGateway = false;
   // the gateway, as the host last said: whether there is a file to offer a tab on, and whether it is in order
@@ -988,6 +1082,7 @@ ${glyphCss}
     const claude = meterKind === 'claude';
     $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
+    $msubs.hidden = claude || !t.thread; syncUsageButton();   // a Codex tab whose thread is on record: its usage, thread by thread
     // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
     onGateway = claude && !!t.gateway;
     if (onGateway) {
@@ -1049,6 +1144,7 @@ ${glyphCss}
     if (m.type === 'tabs') { if (m.gateway) gatewayInfo = m.gateway; applyTabs(m.tabs, m.active, m.single); }
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
+    else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
   });
   $send.innerHTML = SVG.up;

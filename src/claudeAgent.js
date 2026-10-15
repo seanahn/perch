@@ -275,8 +275,16 @@ class ClaudeAgent {
   async setPermissionMode(mode) { if (this.query) { try { await this.query.setPermissionMode(mode); } catch (err) { this.emit({ kind: 'error', text: 'could not set mode: ' + String(err.message || err) }); } } }
   /** Live, session-scoped: the same layer /effort uses. An empty value returns to the model's default. */
   async setEffort(level) { if (this.query) { try { await this.query.applyFlagSettings({ effortLevel: level || null }); } catch (err) { this.emit({ kind: 'error', text: 'could not set effort: ' + String(err.message || err) }); } } }
-  /** Live: applies from the next request. An empty value returns to Claude Code's default model. */
-  async setModel(model) { if (this.query) { try { await this.query.setModel(model || undefined); } catch (err) { this.emit({ kind: 'error', text: 'could not set model: ' + String(err.message || err) }); } } }
+  /**
+   * Live: applies from the next request, and the context figure is asked for again, which names the model now running
+   * and its window. An empty value returns the session to Claude Code's own default model: its built-in one, not
+   * ANTHROPIC_MODEL or the settings' model, which only decide what a session starts on.
+   */
+  async setModel(model) {
+    if (!this.query) return;
+    try { await this.query.setModel(model || undefined); } catch (err) { this.emit({ kind: 'error', text: 'could not set model: ' + String(err.message || err) }); return; }
+    this._context();
+  }
 
   dispose() { this.queue.close(); this.abort.abort(); if (this.relay) { this.relay.stop(); this.relay = null; } }
 }

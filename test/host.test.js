@@ -1,9 +1,10 @@
 'use strict';
 process.env.PERCH_RESTORE_GRACE_MS = '60';   // the wait for VS Code to bring back editor tabs, shortened
+process.env.PERCH_UNLOCK_DELAY_MS = '10';    // and the wait before a group that Perch tabs have left is unlocked
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
-const { install, fakeView, created, engines, flush, CODEX_LIMITS, knobs } = require('./stubs');
+const { install, fakeView, created, engines, flush, CATALOGS, CODEX_LIMITS, knobs } = require('./stubs');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const vals = (list) => list.map((o) => o.value);
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
@@ -1696,6 +1697,98 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the lock comes off a group once its last Perch tab has gone and other tabs are left
+  {
+    const settle = () => wait(25);     // past the 10 ms the tests give the wait, which, set first, fires first
+    const uri = (p) => ({ scheme: 'file', path: p, fsPath: p, toString: () => 'file://' + p });
+    const add = (g, label, input) => { const t = { label, input, group: g }; g.tabs.push(t); return t; };
+    const perchIn = (g, label) => add(g, label, { viewType: 'mainThreadWebview-perch.session' });
+    const fileIn = (g, p) => add(g, p, { uri: uri(p) });
+    // what VS Code tells when a tab closes, or leaves for another group: a close, with the group it left
+    const leave = (m, t) => { t.group.tabs.splice(t.group.tabs.indexOf(t), 1); m.tabsChanged({ closed: [t] }); };
+    const unlocked = (m) => m.ui.executedWith.filter(([id]) => id === 'workbench.action.unlockEditorGroup').map(([, u]) => String(u));
+    const m = install(undefined, { config: { newTabs: 'editor' } }); await flush();
+    // A, where sessions opened first and files came later, and B, the user's files; B is the group in use unless said
+    const fresh = (active) => {
+      const A = { viewColumn: 1, tabs: [] }, B = { viewColumn: 2, tabs: [] };
+      m.ui.groups = [A, B]; m.ui.group = () => (active === 'A' ? A : B); m.ui.executedWith.length = 0;
+      return { A, B };
+    };
+
+    let { A, B } = fresh(), p1 = perchIn(A, 'Claude 1');
+    const p2 = perchIn(A, 'Codex 1'); fileIn(A, '/w/a.js'); fileIn(B, '/w/b.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'a session is left in the group: it stays locked');
+    leave(m, p2); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/a.js'], 'the last one gone: unlocked, by a file open there');
+
+    // VS Code takes the group, most recently used first, that has the file: so a file open in no other group
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1');
+    fileIn(A, '/w/a.js'); fileIn(A, '/w/c.js'); fileIn(A, '/w/d.js');
+    fileIn(B, '/w/a.js'); add(B, 'c.js (Working Tree)', { original: uri('/w/c.js.orig'), modified: uri('/w/c.js') });
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/d.js'], 'not one open in the other group, nor one side of a diff there');
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js'); fileIn(B, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'every file is open in the other group as well: the lock stays');
+    ({ A, B } = fresh('A')); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js'); fileIn(B, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/a.js'], 'unless the group is the active one, which VS Code looks in first');
+
+    // a session moved to another group: VS Code opens it there, then closes it here
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    perchIn(B, 'Claude 1'); leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/a.js'], 'moved away: the group it left is unlocked');
+    // a tab that takes the place of another, as a session given a page again does, opens a moment after the old one closes
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    leave(m, p1); perchIn(A, 'Claude 1'); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'replaced in the same group: it stays locked');
+
+    // nothing to unlock: the group went with its last tab, or nothing is left in it to find it by
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    m.ui.groups = [B]; leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'the group is gone');
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); add(A, 'Settings', undefined);
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'no file in it to point VS Code at');
+    ({ A, B } = fresh()); fileIn(A, '/w/a.js'); const f = fileIn(A, '/w/e.js');
+    leave(m, f); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'only a Perch tab leaving is looked at');
+
+    // a group holding an editor that locks a group by itself may be locked for that editor: it keeps the lock
+    m.ui.editorSettings = { autoLockGroups: { terminalEditor: true, 'mainThreadWebview-simpleBrowser.view': true, 'mainThreadWebview-perch.session': true } };
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); add(A, 'bash', new m.vscode.TabInputTerminal()); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'a terminal');
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); add(A, 'Simple Browser', { viewType: 'mainThreadWebview-simpleBrowser.view' }); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'a webview set to lock its group');
+    m.ui.editorSettings = { autoLockGroups: { terminalEditor: false, 'mainThreadWebview-perch.session': true } };
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); add(A, 'bash', new m.vscode.TabInputTerminal()); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/a.js'], 'not if the user has turned that off for terminals');
+
+    // before 1.92 VS Code could take the file to name another group than its own; and the user may want none of it
+    m.ui.version = '1.91.1';
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'an older VS Code: nothing is done');
+    m.ui.version = '1.92.0';
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), ['file:///w/a.js'], '1.92 finds the group by the file');
+    m.changeConfig({ lockGroup: false });
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    leave(m, p1); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'perch.lockGroup off: Perch neither locks nor unlocks');
+    m.changeConfig({ lockGroup: true });
+
+    // the window closing takes the tabs with it: nothing is unlocked on the way out
+    ({ A, B } = fresh()); p1 = perchIn(A, 'Claude 1'); fileIn(A, '/w/a.js');
+    leave(m, p1); m.perch.dispose(); await settle();
+    assert.deepStrictEqual(unlocked(m), [], 'shut down before the group was looked at');
+  }
+
   // ---- the program an agent runs: the user's choice, else the SDK's own, which this checkout has
   {
     const m = install(undefined, { config: { 'codex.executable': '/opt/codex' } }); await flush();
@@ -1782,6 +1875,57 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- "default" names the model a Claude session is really on: before it starts, the one Claude Code says new sessions
+  // start on (ANTHROPIC_MODEL or its settings' model; here Sonnet 4.6, as on seclab), and while it runs, the one its process
+  // reports. Chosen in a running session, default is Claude Code's built-in one (Opus 5.5 here). The efforts follow the label.
+  {
+    const ALL5 = ['low', 'medium', 'high', 'xhigh', 'max'], SONNET = ['low', 'medium', 'high', 'max'];
+    const startsOn = 'New sessions start on Sonnet 4.6, which ANTHROPIC_MODEL or Claude Code\'s settings name.';
+    const claude = Object.assign({}, CATALOGS.claude, {
+      defaultModel: { label: 'Sonnet 4.6', model: 'claude-sonnet-resolved', description: startsOn, efforts: SONNET, defaultEffort: '' },
+      models: [...CATALOGS.claude.models, { value: 'sonnet', label: 'Sonnet 4.6', resolved: 'claude-sonnet-resolved', description: 'Everyday', efforts: SONNET, defaultEffort: '' }],
+    });
+    knobs.startsOn = 'claude-sonnet-resolved';
+    try {
+      const m = install(undefined, { catalogs: { claude } }); await flush();
+      const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+      v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+      const tab = () => v.tab(c), def = () => tab().models[0];
+      assert.deepStrictEqual([def().label, def().title, vals(tab().efforts)], ['default · Sonnet 4.6', startsOn, ['', ...SONNET]], 'before it starts: the model new sessions start on, with its efforts (no xhigh)');
+      v.fire({ type: 'send', sid: c, text: 'hi' }); const a = created[created.length - 1];
+      assert.deepStrictEqual([a.o.model, tab().actualModel, def().label, def().title], [undefined, 'claude-sonnet-resolved', 'default · Sonnet 4.6', startsOn], 'and so it runs: the same, said the same way');
+      // a model chosen, then default again: the session goes to Claude Code's built-in default, and Claude says so
+      v.fire({ type: 'setModel', sid: c, value: 'opus' }); v.fire({ type: 'setEffort', sid: c, value: 'xhigh' });
+      assert.deepStrictEqual([tab().model, tab().effort, def().label], ['opus', 'xhigh', 'default · Sonnet 4.6'], 'on a chosen model, default still says what it gave');
+      v.fire({ type: 'setModel', sid: c, value: '' });
+      assert.deepStrictEqual([a.models, tab().actualModel, def().label, def().title], [['opus', ''], 'claude-opus-resolved', 'default · Opus 5.5', 'Claude Code says this session is running claude-opus-resolved; new sessions start on Sonnet 4.6.'], 'default now names what the session runs');
+      assert.deepStrictEqual([vals(tab().efforts), tab().effort, a.efforts], [['', ...ALL5], 'xhigh', ['xhigh']], 'with that model\'s efforts, which keep xhigh: it is not checked against the model the session started on');
+      // the process says it runs another model (a fallback, say): the efforts follow, and one that model lacks goes back to default
+      s.post({ kind: 'model', id: 'claude-sonnet-resolved' });
+      assert.deepStrictEqual([def().label, tab().effort, a.efforts, m.memento._dump()['perch.sessions.v1'].sessions[0].effort], ['default · Sonnet 4.6', '', ['xhigh', ''], ''], 'xhigh dropped, the session told, and saved');
+      s.post({ kind: 'context', percent: 3, used: 30000, max: 1000000, model: 'claude-mystery-9' });
+      assert.deepStrictEqual([def().label, vals(tab().efforts)], ['default · claude-mystery-9', ['', ...SONNET]], 'a model the list lacks goes by its id, with the efforts new sessions start with');
+      // a restart: the next process starts where new sessions do, and an effort that model lacks goes back to default
+      v.fire({ type: 'setModel', sid: c, value: '' }); v.fire({ type: 'setEffort', sid: c, value: 'xhigh' });
+      assert.deepStrictEqual([def().label, tab().effort], ['default · Opus 5.5', 'xhigh']);
+      s.restart();
+      assert.deepStrictEqual([tab().started, tab().actualModel, def().label, tab().effort, m.memento._dump()['perch.sessions.v1'].sessions[0].effort], [false, '', 'default · Sonnet 4.6', '', ''], 'back to the model new sessions start on, with an effort it has');
+      v.fire({ type: 'send', sid: c, text: 'again' });
+      assert.deepStrictEqual([created[created.length - 1].o.effort, def().label], [undefined, 'default · Sonnet 4.6']);
+      // a model chosen before start is not touched by any of this
+      v.fire({ type: 'new', kind: 'claude' }); const c2 = v.lastTabs().active;
+      v.fire({ type: 'setModel', sid: c2, value: 'haiku' }); v.fire({ type: 'send', sid: c2, text: 'hi' });
+      assert.deepStrictEqual([v.tab(c2).actualModel, v.tab(c2).models[0].label, vals(v.tab(c2).efforts)], ['claude-haiku-resolved', 'default · Sonnet 4.6', ['']], 'its default option says what new sessions start on; its efforts are Haiku\'s');
+      // until Claude says what a switch to default gave, the model the tab ran before is not named
+      knobs.slowModel = true;
+      v.fire({ type: 'setModel', sid: c2, value: '' });
+      assert.deepStrictEqual([v.tab(c2).actualModel, v.tab(c2).models[0].label], ['', 'default · Sonnet 4.6'], 'not Haiku: what new sessions start on, until Claude says');
+      m.perch.get(c2).post({ kind: 'context', percent: 3, used: 30000, max: 1000000, model: 'claude-opus-resolved' });
+      assert.strictEqual(v.tab(c2).models[0].label, 'default · Opus 5.5', 'and then what it said');
+      m.perch.dispose();
+    } finally { knobs.startsOn = undefined; knobs.slowModel = undefined; }
+  }
+
   // ---- the prompt cache is warm from each response of a turn, not only from the turn's end: a long turn must not read "cold" throughout
   {
     const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
@@ -1827,6 +1971,71 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([connectLink(null), connectLink({}), connectLink({ _meta: { _codex_apps: { connector_auth_failure: { is_auth_failure: false, install_url: URL } } } })], [null, null, null]);
     out.length = 0; P._onEvent.call(a, { type: 'item.completed', item: { id: 'm2', type: 'mcp_tool_call', server: 'codex_apps', tool: 'gmail.search', result: { content: [], structured_content: { ok: 1 } } } }, Date.now());
     assert.deepStrictEqual(out.map((e) => e.kind), ['tool_result'], 'a call that worked: nothing more');
+  }
+
+  // ---- the real Codex agent: a web search said in full once it completes, as `codex exec` 0.159 reports one (captured on
+  // 2026-10-12). Before, its card said {"query": ""} and the foot of the transcript "Running web_search" for minutes after
+  // the searches had ended: Codex fills the item in only on completing, and the completion was not read
+  {
+    const { CodexAgent, webInput, webFound } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const P = CodexAgent.prototype, out = [];
+    const a = { emit: (e) => out.push(e), _said: P._said, _connect: P._connect, connectSaid: new Set() };
+    const page = (title, url) => ({ type: 'text_result', domain: 'developers.openai.com', ref_id: 'r', snippet: 'Total lines: 3585', title, url });
+    const DOC = 'https://developers.openai.com/api/docs/guides/tools-web-search';
+    P._onEvent.call(a, { type: 'item.started', item: { id: 'w1', type: 'web_search', query: '', action: { type: 'other' } } }, Date.now());
+    P._onEvent.call(a, { type: 'item.completed', item: { id: 'w1', type: 'web_search', query: 'OpenAI Responses API web search tool docs', action: { type: 'search', query: 'OpenAI Responses API web search tool docs' }, results: [page('Web search | OpenAI API', DOC), page('Web search', 'https://developers.openai.com/api/docs/guides/agents-api/tools/web-search')] } }, Date.now());
+    assert.deepStrictEqual(out, [
+      { kind: 'tool_use', id: 'w1', name: 'web_search', input: { action: '' } },
+      { kind: 'tool_use', id: 'w1', name: 'web_search', input: { action: 'search', query: 'OpenAI Responses API web search tool docs' }, update: true },
+      { kind: 'tool_result', id: 'w1', text: 'Web search | OpenAI API — ' + DOC + '\nWeb search — https://developers.openai.com/api/docs/guides/agents-api/tools/web-search', isError: false },
+    ], 'nothing known at the start; the card again in full at the end, then its result');
+    // a page opened (the action stays `other`; the page is the result), and a phrase looked for in one
+    assert.deepStrictEqual(webInput({ query: '', action: { type: 'other' }, results: [page('Web search | OpenAI API', DOC)] }), { action: 'open', url: DOC, title: 'Web search | OpenAI API' });
+    assert.deepStrictEqual(webInput({ query: "'web_search_call' in " + DOC, action: { type: 'find_in_page', url: DOC, pattern: 'web_search_call' }, results: [page('Web search | OpenAI API', DOC)] }), { action: 'find', pattern: 'web_search_call', url: DOC });
+    // as a rollout file spells them: `findInPage` with no address (the page's own is taken), a search of several queries
+    assert.deepStrictEqual(webInput({ query: "'### response.web_search_call'", action: { type: 'findInPage', url: null, pattern: '### response.web_search_call' }, results: [page('Web search', DOC)] }), { action: 'find', pattern: '### response.web_search_call', url: DOC });
+    assert.deepStrictEqual(webInput({ query: 'a ...', action: { type: 'search', query: null, queries: ['a', 'b'] } }), { action: 'search', queries: ['a', 'b'] });
+    assert.deepStrictEqual([webInput({}), webInput(null), webFound({ results: [] }), webFound(null)], [{ action: '' }, { action: '' }, '', ''], 'nothing known: nothing said');
+    const many = webFound({ results: Array.from({ length: 11 }, (_, i) => page('P' + i, 'https://x/' + i)) }).split('\n');
+    assert.deepStrictEqual([many.length, many[7], many[8]], [9, 'P7 — https://x/7', '… and 3 more'], 'eight pages, and how many more');
+  }
+
+  // ---- a Codex session's usage, thread by thread, for the table the footer opens: read from the session's files, each
+  // thread priced at its models' list rates; a thread with a model the table has no price for is not priced
+  {
+    const fs = require('fs'), path = require('path');
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    const answers = () => v.got.filter((g) => g.type === 'subagentUsage');
+    const ask = async () => { const n = answers().length; v.fire({ type: 'subagentUsage', sid: x }); for (let i = 0; i < 400 && answers().length === n; i++) await new Promise((r) => setTimeout(r, 5)); return answers().pop(); };
+    assert.strictEqual(v.tab(x).thread, false, 'no thread yet: no table to offer');
+    assert(/no Codex session yet/.test((await ask()).error), 'asked before its first turn: said why there is nothing');
+    v.fire({ type: 'send', sid: x, text: 'hello' }); await flush();
+    const id = v.events(x).find((e) => e.kind === 'session').id;
+    assert.strictEqual(v.tab(x).thread, true, 'its thread on record as soon as it is: the footer offers the table');
+    const home = fs.mkdtempSync(path.join(require('os').tmpdir(), 'perch-usage-host-')), day = path.join(home, 'sessions', '2026', '10', '12');
+    m.box.codexHome = home;
+    assert(String((await ask()).error).includes(path.join(home, 'sessions')), 'its file not found: said where it was looked for');
+    fs.mkdirSync(day, { recursive: true });
+    const put = (tid, recs) => fs.writeFileSync(path.join(day, 'rollout-2026-10-12T10-00-00-' + tid + '.jsonl'), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const ctx = (turn_id, model) => ({ type: 'turn_context', payload: { turn_id, model, effort: 'ultra' } });
+    const use = (i, c, w, o) => ({ type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, cache_write_input_tokens: w, output_tokens: o } } });
+    const act = (agent_path, agent_thread_id) => ({ timestamp: '2026-10-12T10:01:00Z', type: 'event_msg', payload: { type: 'item_completed', item: { type: 'SubAgentActivity', id: 's', kind: 'started', agent_path, agent_thread_id } } });
+    put(id, [ctx('r1', 'gpt-6.1-sol'), use(1000000, 900000, 50000, 10000), act('/root/alpha', 'kid-a'), act('/root/odd', 'kid-o')]);
+    put('kid-a', [ctx('a1', 'gpt-6.1-sol'), use(100000, 0, 0, 1000)]);
+    put('kid-o', [ctx('o1', 'gpt-unknown'), use(10, 0, 0, 1)]);
+    const u = await ask();
+    const near = (a, b, what) => assert(typeof a === 'number' && Math.abs(a - b) < 1e-9, what + ': ' + a + ' is not ' + b);
+    // gpt-6.1-sol in the test table: $2/M input, $2.50/M written to the cache, $0.20/M read from it, $10/M output
+    near(u.main.cost, 50000 * 2e-6 + 50000 * 2.5e-6 + 900000 * 2e-7 + 10000 * 1e-5, 'the main thread: its uncached, written, cached and output tokens, each at its rate');
+    near(u.subagents[0].cost, 100000 * 2e-6 + 1000 * 1e-5, 'a sub-agent at its model\'s rates');
+    assert.deepStrictEqual([u.sid, typeof u.at, u.prices, u.backend, u.main.thread, u.main.turns, u.main.tokens, 'spent' in u.main], [x, 'number', true, 'chatgpt', id, 1, { input: 1000000, cached: 900000, output: 10000 }, false]);
+    assert.deepStrictEqual(u.subagents.map((s) => [s.name, s.model, s.cost === null ? null : 'priced', s.unpriced || null]), [['alpha', 'gpt-6.1-sol', 'priced', null], ['odd', 'gpt-unknown', null, ['gpt-unknown']]],
+      'a thread on a model the table does not price: no cost, and which model');
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'subagentUsage', sid: c }); for (let i = 0; i < 100 && answers().pop().sid !== c; i++) await new Promise((r) => setTimeout(r, 5));
+    assert(/no Codex session/.test(answers().pop().error) && v.tab(c).thread === false, 'a Claude tab has no such table');
   }
 
   // ---- the real Codex agent watches its thread's file while a turn runs, for what the SDK does not stream
@@ -1919,6 +2128,23 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(out.length, 1, 'said once');
     ClaudeAgent.prototype._onMessage.call(a, { type: 'system', subtype: 'session_state_changed', state: 'running' });
     assert.deepStrictEqual([a.running, a.pending, out[1]], [true, 1, { kind: 'busy', busy: true }], 'a turn Claude Code starts on its own is shown too');
+  }
+
+  // ---- the real Claude agent asks which model it runs as soon as the model is changed, so "default" can name it at once
+  {
+    const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
+    const out = [], set = [];
+    let fail = null, now = 'us.anthropic.claude-sonnet-4-6';
+    const query = { setModel: async (m) => { if (fail) throw new Error(fail); set.push(m); now = m ? 'us.anthropic.claude-' + m : 'us.anthropic.claude-opus-5-5'; }, getContextUsage: async () => ({ percentage: 2, totalTokens: 20000, maxTokens: 1000000, model: now }) };
+    const a = { query, emit: (e) => out.push(e), _context: ClaudeAgent.prototype._context };
+    await ClaudeAgent.prototype.setModel.call(a, 'haiku'); await flush();
+    await ClaudeAgent.prototype.setModel.call(a, ''); await flush();
+    assert.deepStrictEqual([set, out.map((e) => e.kind + ' ' + e.model)], [['haiku', undefined], ['context us.anthropic.claude-haiku', 'context us.anthropic.claude-opus-5-5']], 'default is no model, and each change is followed by Claude\'s word on what runs now');
+    fail = 'not now'; out.length = 0;
+    await ClaudeAgent.prototype.setModel.call(a, 'opus'); await flush();
+    assert.deepStrictEqual(out, [{ kind: 'error', text: 'could not set model: not now' }], 'a change that fails is said, and nothing is asked');
+    await ClaudeAgent.prototype.setModel.call({ query: null, emit: (e) => out.push(e) }, 'opus');
+    assert.strictEqual(out.length, 1, 'with no process there is nothing to change');
   }
 
   // ---- pasted images go with the message, to either agent

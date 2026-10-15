@@ -4,7 +4,7 @@ const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
-const { loadClaudeModels, loadCodexModels, normalizeCommands } = require('./models');
+const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelLabel } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
 const { resolveProgram, sdkCodex } = require('./binaries');
@@ -12,7 +12,7 @@ const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
-const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf } = require('./sessionStore');
+const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage } = require('./sessionStore');
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -31,6 +31,9 @@ const UNSANDBOXED_KEY = 'perch.codex.unsandboxed';   // { hostname: true } for m
 const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
 // how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
 const RESTORE_GRACE_MS = Number(process.env.PERCH_RESTORE_GRACE_MS) > 0 ? Number(process.env.PERCH_RESTORE_GRACE_MS) : 4000;
+// how long after a Perch tab leaves a group its lock is looked at: a tab that takes the place of another opens a moment
+// after the old one closes (shortened by the tests)
+const UNLOCK_DELAY_MS = Number(process.env.PERCH_UNLOCK_DELAY_MS) > 0 ? Number(process.env.PERCH_UNLOCK_DELAY_MS) : 150;
 // Icons are read at runtime from the vendors' own installed extensions. perch ships no logos.
 const VENDOR_EXTENSIONS = { claude: 'anthropic.claude-code', codex: 'openai.chatgpt' };
 
@@ -110,6 +113,34 @@ function tabIcon(kind) {
 function tabName(label) { return String(label || '').replace(/^\u25cf /, '').replace(/ \u2026$/, ''); }
 
 function isPerchTab(t) { return !!(t && t.input && typeof t.input.viewType === 'string' && t.input.viewType.endsWith(PANEL_TYPE)); }
+
+function isUri(v) { return !!(v && typeof v === 'object' && typeof v.scheme === 'string'); }
+
+/** Every resource a tab shows: its file, both sides of a diff, each pair of a multi-file diff, the files of a merge. */
+function tabUris(t) {
+  const out = [], add = (v) => { if (isUri(v)) out.push(String(v)); };
+  for (const v of Object.values((t && t.input) || {})) if (Array.isArray(v)) { for (const d of v) Object.values(d || {}).forEach(add); } else add(v);
+  return out;
+}
+
+/** The ids `workbench.editor.autoLockGroups` knows a tab's editor by, as far as the tab API tells. */
+function editorIds(t) {
+  const i = t && t.input;
+  if (!i) return [];
+  if (typeof vscode.TabInputTerminal === 'function' && i instanceof vscode.TabInputTerminal) return ['terminalEditor'];
+  const ids = [];
+  if (typeof i.viewType === 'string') ids.push(i.viewType);           // a webview's (mainThreadWebview-…) or a custom editor's
+  if (typeof i.notebookType === 'string') ids.push(i.notebookType);
+  if (i.inputBoxUri) ids.push('workbench.input.interactive');
+  else if (!ids.length && (i.uri || i.modified)) ids.push('default');   // text, and a text diff
+  return ids;
+}
+
+/** Whether a version such as VS Code's '1.92.0' is at least major.minor. */
+function atLeast(version, major, minor) {
+  const m = /^(\d+)\.(\d+)/.exec(String(version || ''));
+  return !!m && (Number(m[1]) > major || (Number(m[1]) === major && Number(m[2]) >= minor));
+}
 
 function cwd() {
   const f = vscode.workspace.workspaceFolders;
@@ -261,7 +292,8 @@ class Session {
   catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[this.kind] || null; }
   selectedModel() {
     const cat = this.catalog(); if (!cat) return null;
-    return this.model ? (cat.models.find((m) => m.value === this.model) || null) : cat.defaultModel;
+    if (this.model) return cat.models.find((m) => m.value === this.model) || null;
+    return modelEntry(cat, this.runningDefault()) || cat.defaultModel;   // on default, a running session's choices are its model's
   }
   allowedEfforts() {
     const m = this.selectedModel();
@@ -278,9 +310,25 @@ class Session {
     if (this.allowedEfforts().includes(this.effort)) return false;
     this.effort = ''; return true;
   }
+  /**
+   * Claude on default, off the gateway, while its process runs: the model the process says it is running. The catalog
+   * names the default by what a new session starts on, and a session can leave that: chosen in a running session,
+   * default is Claude Code's built-in one.
+   */
+  runningDefault() { return this.kind === 'claude' && !this.gateway && !this.model && this.agent ? this.actualModel : ''; }
+  /** The agent says which model it runs. On default the effort choices follow it, so one that model lacks goes back to default. */
+  ran(id) {
+    if (!id || id === this.actualModel) return;
+    this.actualModel = id;
+    if (this.runningDefault() && this.reconcile()) { this.view.persist(); this.agent.setEffort(''); }
+  }
   modelOptions() {
     const cat = this.catalog(); const d = cat && cat.defaultModel;
-    const opts = [{ value: '', label: 'default' + (d && d.label ? ' · ' + d.label : ''), title: d && d.description ? d.description : 'The model the agent picks by default' }];
+    const live = this.runningDefault();
+    const name = live ? modelLabel(cat, live) : d && d.label;
+    const title = live && live !== (d && d.model) ? 'Claude Code says this session is running ' + live + (d && d.label ? '; new sessions start on ' + d.label : '') + '.'
+      : d && d.description ? d.description : 'The model the agent picks by default';
+    const opts = [{ value: '', label: 'default' + (name ? ' · ' + name : ''), title }];
     for (const v of this.allowedModels().slice(1)) { const m = cat && cat.models.find((x) => x.value === v); opts.push({ value: v, label: m ? m.label : v, title: m ? m.description : 'not in the agent\'s model list' }); }
     return opts;
   }
@@ -311,7 +359,7 @@ class Session {
         if (!this.busy) this.view.syncTitle(this);         // and a tab the user has not named takes the title its agent's record has by now
         if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
         return;
-      case 'model': this.actualModel = ev.id; this.view.sendTabs(); return;
+      case 'model': this.ran(ev.id); this.view.sendTabs(); return;
       case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn
         if (typeof ev.cost === 'number' && Number.isFinite(ev.cost)) this.viaCost = (this.viaCost || 0) + ev.cost;
         if (typeof ev.keySpend === 'number') this.keySpend = ev.keySpend;
@@ -327,7 +375,7 @@ class Session {
         if (rate) this.viaEstimate = (this.viaEstimate || 0) + Prices.costOf(rate, ev.usage);
         return;
       }
-      case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; if (ev.model) this.actualModel = ev.model; this.view.sendTabs(); return;
+      case 'context': this.context = { percent: Math.max(0, Math.min(100, Math.round(ev.percent))), used: ev.used, max: ev.max }; this.ran(ev.model); this.view.sendTabs(); return;
       case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
       case 'result': {
         if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); }
@@ -375,7 +423,7 @@ class Session {
       }
       case 'dequeued': this.started(ev.qid); return;   // Claude: a turn has taken up a queued message
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
-      case 'session': this.agentSessionId = ev.id; this.view.persist(); break;
+      case 'session': { const fresh = this.agentSessionId !== ev.id; this.agentSessionId = ev.id; this.view.persist(); if (fresh && this.kind === 'codex') this.view.sendTabs(); break; }   // a thread to read the usage of: the footer offers its table
       case 'clear': this.history = []; this.resumed = null; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
       case 'user':
@@ -634,7 +682,10 @@ class Session {
   setModel(value) {
     if (!this.allowedModels().includes(value)) return;
     this.model = value;
-    const effortReset = this.reconcile();                              // the new model may not accept the current effort
+    if (this.agent) this.actualModel = '';   // until the agent says what it runs now, which Claude is asked at once
+    // the new model may not accept the current effort. Default in a running Claude session is whatever Claude says it now
+    // runs, so the effort is checked when it says (ran)
+    const effortReset = !(value === '' && this.agent && this.kind === 'claude' && !this.gateway) && this.reconcile();
     this.view.persist();
     if (!this.agent) return;
     this.agent.setModel(value); if (effortReset) this.agent.setEffort('');
@@ -648,7 +699,8 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = ''; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.via = {}; this.viaCost = null;
+    if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
     this.busy = false; this.busySince = 0; this.attention = false;
@@ -665,6 +717,7 @@ class Session {
   toTab() {
     return {
       id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
+      thread: this.kind === 'codex' && !!this.agentSessionId,   // a Codex thread on record: its usage, sub-agents included, can be read
       mode: this.mode, modes: MODES[this.kind],
       model: this.model, models: this.modelOptions(), actualModel: this.actualModel,
       effort: this.effort, efforts: this.effortOptions(),
@@ -711,6 +764,8 @@ class PerchView {
     this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
     this.closing = false;
     this.graceTimer = null;
+    this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
+    this.unlockTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
     // list prices for a gateway's models, in the extension's own storage: read when a tab goes through the gateway
     this.prices = Prices.createPrices({ file: require('path').join((context.globalStorageUri && context.globalStorageUri.fsPath) || require('path').join(require('os').tmpdir(), 'perch'), 'litellm-prices.json') });
@@ -1047,6 +1102,43 @@ class PerchView {
     Promise.resolve(vscode.commands.executeCommand('workbench.action.lockEditorGroup')).catch(() => { /* an older VS Code */ });
   }
 
+  /** A Perch tab closed, or went to another group, which VS Code tells as a close in the group it left: that group is looked at. */
+  tabsChanged(e) {
+    for (const t of (e && e.closed) || []) if (isPerchTab(t) && t.group) this.leftGroups.add(t.group);
+    if (!this.leftGroups.size || this.closing) return;
+    clearTimeout(this.unlockTimer);
+    this.unlockTimer = setTimeout(() => { this.unlockTimer = null; this.unlockGroups(); }, UNLOCK_DELAY_MS);
+    if (this.unlockTimer.unref) this.unlockTimer.unref();
+  }
+
+  /**
+   * A group whose last Perch tab has gone, and which still holds other tabs, is unlocked. Perch locked it while it held
+   * only sessions; files that came in later left it locked, and a file opened from the Explorer then went past it into a
+   * new group. A group holding an editor that locks a group by itself (workbench.editor.autoLockGroups: a terminal's, say)
+   * keeps its lock, which may be that editor's.
+   *
+   * The unlock command is pointed at the group by a file open in it: VS Code takes the first group, most recently used
+   * first, that has the file. So the file is one open in no other group, unless this group is the active one, which comes
+   * first. Given a file it cannot find VS Code unlocks the active group. Before 1.92 it looked only at each group's active
+   * editor, and named the group it found by its place in the window where an id was wanted, which can be another group
+   * (1.90, 1.91). So Perch passes only a file it has just seen in the group, and before 1.92 does nothing.
+   */
+  unlockGroups() {
+    const left = [...this.leftGroups];
+    this.leftGroups.clear();
+    if (this.closing || cfg('lockGroup') === false || !atLeast(vscode.version, 1, 92)) return;
+    const tg = vscode.window.tabGroups, all = (tg && tg.all) || [], active = tg && tg.activeTabGroup;
+    const auto = vscode.workspace.getConfiguration('workbench.editor').get('autoLockGroups');
+    const locksItself = (t) => !!auto && typeof auto === 'object' && editorIds(t).some((id) => auto[id] === true);
+    for (const g of left) {
+      const tabs = (all.includes(g) && g.tabs) || [];
+      if (!tabs.length || tabs.some(isPerchTab) || tabs.some(locksItself)) continue;
+      const elsewhere = new Set(all.filter((o) => o !== g).flatMap((o) => (o.tabs || []).flatMap(tabUris)));
+      const t = tabs.find((x) => x.input && isUri(x.input.uri) && (g === active || !elsewhere.has(String(x.input.uri))));
+      if (t) Promise.resolve(vscode.commands.executeCommand('workbench.action.unlockEditorGroup', t.input.uri)).catch(() => { /* the lock stays */ });
+    }
+  }
+
   /** Perch's editor tabs that have no page yet: VS Code has kept them, and will ask for each when it is shown. */
   waitingTabs() {
     const groups = (vscode.window.tabGroups && vscode.window.tabGroups.all) || [], out = [];
@@ -1195,8 +1287,43 @@ class PerchView {
         return;
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
+      case 'subagentUsage': this.subagentUsage(s); return;
       default: return;
     }
+  }
+
+  /**
+   * A Codex tab's session, thread by thread, for the table the footer's "sub-agents" opens: the main thread and every
+   * sub-agent it started, each with its model, turns and tokens from its own file (sessionStore.sessionUsage), and what
+   * those would cost at list prices, from the table the gateway's turns are priced with. Nothing is billed per token on a
+   * ChatGPT plan; the figures still say where the work went.
+   */
+  async subagentUsage(s) {
+    if (!s) return;
+    const say = (o) => { const f = this.surface(s); if (f && f.ready) f.webview.postMessage(Object.assign({ type: 'subagentUsage', sid: s.id, at: Date.now() }, o)); };
+    if (s.kind !== 'codex' || !s.agentSessionId) { say({ error: 'This tab has no Codex session yet. Its table can be read once its first turn has started.' }); return; }
+    const home = codexAuth.codexHome();
+    // the list prices: a table read before serves at once (an old one is fetched again behind it); with none yet, the fetch
+    // is waited for a few seconds at most, and the table is unpriced until it lands
+    const loading = this.prices.load();
+    if (!this.prices.loaded) await Promise.race([loading, new Promise((r) => { const t = setTimeout(r, 5000); if (t.unref) t.unref(); })]);
+    let u;
+    try { u = await sessionUsage(s.agentSessionId, { home }); } catch (err) { say({ error: 'Could not read this session\'s files: ' + String((err && err.message) || err) }); return; }
+    if (!u) { say({ error: 'This session\'s file was not found under ' + require('path').join(home, 'sessions') + '.' }); return; }
+    // each model's share of a thread at that model's rates; a thread with a model the table does not price is not priced
+    const priced = (row) => {
+      let cost = 0; const unpriced = [];
+      for (const x of row.spent || []) {
+        if (!(x.input || x.output)) continue;
+        const rate = x.model ? this.prices.rateFor(x.model) : null;
+        if (!rate) { const m = x.model || 'no model named'; if (!unpriced.includes(m)) unpriced.push(m); continue; }
+        cost += Prices.costOf(rate, { input: Math.max(0, x.input - x.cached - x.write), cache_write: x.write, cache_read: x.cached, output: x.output });
+      }
+      const out = Object.assign({}, row, unpriced.length ? { cost: null, unpriced } : { cost });
+      delete out.spent;
+      return out;
+    };
+    say({ main: priced(u.main), subagents: u.subagents.map(priced), prices: this.prices.loaded, backend: this.meter.codexBackend() });
   }
 
   // ---- session management
@@ -1447,6 +1574,7 @@ class PerchView {
   dispose() {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
+    clearTimeout(this.unlockTimer);
     for (const s of this.sessions) s.dispose();
     this.meter.dispose();
     this.voice.dispose();
@@ -1457,6 +1585,8 @@ function activate(context) {
   watchEditors(context);
   const perch = new PerchView(context);
   perch.meter.start();
+  const tg = vscode.window.tabGroups;
+  if (tg && tg.onDidChangeTabs) context.subscriptions.push(tg.onDidChangeTabs((e) => perch.tabsChanged(e)));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('perch.main', perch, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.window.registerWebviewPanelSerializer(PANEL_TYPE, perch),

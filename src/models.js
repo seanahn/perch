@@ -1,6 +1,7 @@
 'use strict';
 // Model catalogs, read from the agents themselves. No VS Code dependency.
 // A catalog is { defaultModel: { label, efforts, defaultEffort }, models: [{ value, label, description, efforts, defaultEffort }] }.
+// Claude's defaultModel also has the model id and a description, and its entries the id each resolves to (resolved).
 // efforts is the list of effort levels that model accepts; empty means the model has no effort control.
 
 const fs = require('fs');
@@ -39,18 +40,49 @@ function loadCodexModels(home = path.join(os.homedir(), '.codex')) {
   return { defaultModel, models: listed };
 }
 
-/** Pure: turn the SDK's ModelInfo[] into a catalog. The SDK's own "default" entry becomes defaultModel. */
-function normalizeClaudeModels(list) {
+/**
+ * Pure: turn the SDK's ModelInfo[] into a catalog. Each entry keeps the id it resolves to, by which a model the CLI
+ * reports is named. `current` is the model the CLI says it is on before anything is chosen: what a new session starts on,
+ * which ANTHROPIC_MODEL or the model in Claude Code's settings decide. The SDK's own "default" entry is Claude Code's
+ * built-in default whatever those say, so it names defaultModel only when the CLI could not say.
+ */
+function normalizeClaudeModels(list, current) {
   const infos = (Array.isArray(list) ? list : []).filter((m) => m && typeof m.value === 'string');
   if (!infos.length) return null;
   const efforts = (m) => (m.supportsEffort && Array.isArray(m.supportedEffortLevels) ? m.supportedEffortLevels.slice() : []);
   const def = infos.find((m) => m.value === 'default');
   const rest = infos.filter((m) => m.value !== 'default');
-  const twin = def && rest.find((m) => m.resolvedModel && m.resolvedModel === def.resolvedModel);
+  const entry = (id) => (id ? rest.find((m) => m.value === id || m.resolvedModel === id) : null);
+  const builtIn = (def && def.resolvedModel) || '';
+  const model = (typeof current === 'string' && current) || builtIn;
+  const m = entry(model), own = entry(builtIn);
+  const label = m ? m.displayName || m.value : model;
+  const description = model === builtIn ? (def && def.description) || ''
+    : 'New sessions start on ' + label + ', which ANTHROPIC_MODEL or Claude Code\'s settings name. In a running session, choosing default gives Claude Code\'s own default' + (builtIn ? ', ' + ((own && own.displayName) || builtIn) : '') + '.';
   return {
-    defaultModel: def ? { label: (twin && twin.displayName) || def.resolvedModel || '', efforts: efforts(def), defaultEffort: '' } : { label: '', efforts: [], defaultEffort: '' },
-    models: rest.map((m) => ({ value: m.value, label: m.displayName || m.value, description: m.description || '', efforts: efforts(m), defaultEffort: '' })),
+    defaultModel: { label, model, description, efforts: m ? efforts(m) : def ? efforts(def) : [], defaultEffort: '' },
+    models: rest.map((x) => ({ value: x.value, label: x.displayName || x.value, resolved: x.resolvedModel || '', description: x.description || '', efforts: efforts(x), defaultEffort: '' })),
   };
+}
+
+/** The catalog entry that is a model the CLI reported by its id: by value, or by the id it resolves to; else null. */
+function modelEntry(cat, id) {
+  return id && cat && Array.isArray(cat.models) ? cat.models.find((x) => x.value === id || (x.resolved && x.resolved === id)) || null : null;
+}
+/** What a catalog calls a model the CLI reported: its entry's name, else the id. */
+function modelLabel(cat, id) { const m = modelEntry(cat, id); return m ? m.label : id || ''; }
+
+/**
+ * The model a CLI is on before anything is chosen, which a new session starts on; '' if it cannot say. The summary
+ * answers from local figures, without the token-count requests of a full breakdown.
+ */
+async function startModel(q, timeoutMs = 5000) {
+  if (!q || typeof q.getContextUsage !== 'function') return '';
+  let timer;
+  try {
+    const u = await Promise.race([q.getContextUsage({ detail: 'summary' }), new Promise((r) => { timer = setTimeout(() => r(null), timeoutMs); })]);
+    return u && typeof u.model === 'string' ? u.model : '';
+  } catch (_) { return ''; } finally { clearTimeout(timer); }   // older CLI: the SDK's default entry names the default
 }
 
 /** Pure: the SDK's SlashCommand[] as [{ name, description, hint }], sorted, without internal (double-underscore) commands. */
@@ -63,8 +95,8 @@ function normalizeCommands(list) {
 }
 
 /**
- * Ask Claude Code for its model list and slash commands. Starts the CLI with an input stream that never yields,
- * so the CLI initializes but no model request is made and nothing is billed.
+ * Ask Claude Code for its model list, the model it starts on, and its slash commands. Starts the CLI with an input
+ * stream that never yields, so the CLI initializes but no model request is made and nothing is billed.
  */
 async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
   const sdk = await import('@anthropic-ai/claude-agent-sdk');
@@ -80,7 +112,7 @@ async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
       q.supportedModels(),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timed out asking Claude Code for its models')), timeoutMs); }),
     ]);
-    const catalog = normalizeClaudeModels(list);
+    const catalog = normalizeClaudeModels(list, await startModel(q));
     if (catalog) { try { catalog.commands = normalizeCommands(await q.supportedCommands()); } catch (_) { catalog.commands = []; } }
     return catalog;
   } finally {
@@ -88,4 +120,4 @@ async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
   }
 }
 
-module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, normalizeCommands, parseTopLevelToml };
+module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, normalizeCommands, modelEntry, modelLabel, startModel, parseTopLevelToml };

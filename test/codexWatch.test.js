@@ -65,7 +65,7 @@ try {
     const actT = (kind, thread, agent_path) => JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', thread_id: 'r', item: { type: 'SubAgentActivity', id: 'c', kind, agent_thread_id: thread, agent_path } } });
     const start = (thread, agent_path) => actT('started', thread, agent_path);
     const meta = (nick) => JSON.stringify({ type: 'session_meta', payload: { id: 'c1', parent_thread_id: 'r', agent_path: '/root/mic_research', agent_nickname: nick } });
-    const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't', model, effort } });
+    let turnNo = 0; const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't' + (++turnNo), model, effort } });   // each its own turn, as in a thread
     const cost = (i, c, o) => JSON.stringify({ type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, output_tokens: o } } });
     fs.writeFileSync(root, '');
     fs.writeFileSync(child, [meta('Linnaeus'), turn('gpt-6.1-sol', 'ultra'), cost(1000, 900, 50)].join('\n') + '\n');
@@ -109,7 +109,7 @@ try {
     const root = path.join(dir, 'rollout-r2.jsonl'), child = path.join(dir, 'rollout-old.jsonl');
     const at = (iso, rec) => JSON.stringify(Object.assign({ timestamp: iso }, JSON.parse(rec)));
     const actT = (kind, thread, agent_path) => JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'c', kind, agent_thread_id: thread, agent_path } } });
-    const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't', model, effort } });
+    let turnNo = 0; const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't' + (++turnNo), model, effort } });   // each its own turn, as in a thread
     const cost = (i, c, o) => JSON.stringify({ type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, output_tokens: o } } });
     fs.writeFileSync(root, actT('started', 'old', '/root/capture') + '\n');           // an earlier turn's start: before the watch
     fs.writeFileSync(child, [at('2026-10-09T20:53:31Z', JSON.stringify({ type: 'session_meta', payload: { agent_nickname: 'Lagrange' } })),
@@ -129,6 +129,25 @@ try {
     w.stop();
     assert.deepStrictEqual(got.slice(3), [{ kind: 'subagent', name: 'capture', state: 'usage', model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 241131, cached: 240000, output: 300 }, nickname: 'Lagrange' }],
       'this turn\'s turn and tokens; the earlier model is no turn of this one');
+  }
+
+  // ---- a sub-agent forked from the root's conversation: its file begins with the root's history, copied, stamped inside
+  // this turn. Only its own turn counts (seen on 2026-10-12: each forked one showed a turn more, on the root's model)
+  {
+    const root = path.join(dir, 'rollout-r3.jsonl'), child = path.join(dir, 'rollout-fk.jsonl');
+    const rec = (ordinal, type, payload) => JSON.stringify({ timestamp: new Date().toISOString(), ordinal, type, payload });
+    fs.writeFileSync(root, '');
+    fs.writeFileSync(child, [rec(0, 'session_meta', { id: 'fk', forked_from_id: 'r3', subagent_history_start_ordinal: 3, agent_nickname: 'Noether' }), rec(1, 'session_meta', { id: 'r3' }),
+      rec(2, 'turn_context', { turn_id: 'root-turn', model: 'gpt-5.6-sol', effort: 'max' }),
+      rec(3, 'turn_context', { turn_id: 'own', model: 'gpt-6.1-sol', effort: 'ultra' }), rec(4, 'token_usage_record', { usage: { input_tokens: 10, cached_input_tokens: 5, output_tokens: 1 } })].join('\n') + '\n');
+    const got = [], files = { r3: root, fk: child };
+    const w = new RolloutWatch({ id: 'r3', home: dir, emit: (e) => got.push(e), find: (id) => files[id] || null, pollMs: 60000 });
+    w.start(); w.since = Date.now() - 60000;
+    fs.appendFileSync(root, JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'c', kind: 'started', agent_thread_id: 'fk', agent_path: '/root/fork' } } }) + '\n');
+    w.stop();
+    assert.deepStrictEqual(got, [{ kind: 'subagent', name: 'fork', state: 'started', thread: 'fk' },
+      { kind: 'subagent', name: 'fork', state: 'usage', model: 'gpt-6.1-sol', effort: 'ultra', turns: 1, tokens: { input: 10, cached: 5, output: 1 }, nickname: 'Noether' }],
+      'its own turn on its own model; the root\'s copied turn is none of its');
   }
 
   // ---- a listener that throws, or a file that cannot be read, stops nothing

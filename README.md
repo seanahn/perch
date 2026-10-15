@@ -148,7 +148,9 @@ both. Tabs saved before this setting existed follow it on the next reload.
 
 An editor group that holds only Perch tabs is locked, the way a terminal's
 is, so a file opened from the Explorer goes to the group beside it and not
-in among the sessions. `perch.lockGroup` turns that off.
+in among the sessions. When the last Perch tab leaves a group that still
+has other tabs, Perch takes the lock off again, so files open there as
+anywhere else (VS Code 1.92 or later). `perch.lockGroup` turns both off.
 
 After a window reload VS Code brings the editor tabs back where they were,
 and each resumes its session.
@@ -426,6 +428,21 @@ message, queued behind the turn if it is still working. The SDK streams
 neither, so perch reads them from the thread's own record in
 `~/.codex/sessions/` as the turn runs.
 
+For the **whole session's usage**, click **sub-agents** in the footer of a
+Codex tab. It opens a table with one row per thread: the main thread, each
+sub-agent it started, and the totals. Each row has the model and effort,
+turns, input (the cached part shown too), output, and what those tokens
+would cost at OpenAI's list prices (LiteLLM's public price table), with
+each one's share of the session. Click a column to sort the sub-agents by
+it. The table is read from the session's files when you open it, and again
+at the end of each turn while it is open. On a ChatGPT plan nothing is
+billed per token, so the cost says where the work went, not what you pay.
+
+A **web search** shows what it searched for, or the page it opened or
+looked in, once it completes, with the pages it found under it. Codex says
+what a search was only when it ends, so until then the card reads
+`web search …` and the foot of the transcript *Searching the web*.
+
 **IDE context**, on both kinds of tab, is on by default for new tabs
 (`perch.ideContext`) and remembered per tab. The toggle is green when on
 and grey when off. When on, each message carries
@@ -464,7 +481,7 @@ The lists come from the agents themselves, so they match your account:
 
 | | Models from | Efforts from | Default labels |
 | --- | --- | --- | --- |
-| Claude | the Claude Code CLI, asked at startup without sending a message | each model's supported levels | `default · Opus 5.5` names the model the default resolves to |
+| Claude | the Claude Code CLI, asked at startup without sending a message | each model's supported levels | `default · Sonnet 4.6` names the model Claude Code starts on, then the one the session reports |
 | Codex | `~/.codex/models_cache.json` | each model's supported levels | `default · GPT-5.6-Sol` and `default · ultra` come from `~/.codex/config.toml` |
 
 The effort list follows the selected model. A model with no effort
@@ -473,6 +490,13 @@ resets to default. `Perch: Refresh Model Lists` re-reads both.
 
 Claude: model, effort, and mode all change live, from the next message.
 Hover the model selector to see the model actually running.
+
+On default, Claude Code starts on `ANTHROPIC_MODEL` if it is set, else
+the `model` in its settings, else its own default (Opus 5.5 today), and
+the pill names that model. Once the session runs, the pill and the
+effort list follow the model the session reports. Choosing default in a
+running session gives Claude Code's own default, not the model the
+session started on; the option's tooltip says which is which.
 
 Codex: model, effort, and sandbox change from the next message too. Codex
 runs each turn as a process of its own, so perch takes the thread up again

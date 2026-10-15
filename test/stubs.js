@@ -8,11 +8,11 @@ function makeMemento(initial) { const m = new Map(Object.entries(initial || {}))
 const ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
 // shaped like what the real agents report
 const CATALOGS = {
-  claude: { defaultModel: { label: 'Opus 5.5', efforts: ALL, defaultEffort: '' }, models: [
-    { value: 'opus', label: 'Opus 5.5', description: 'For complex work', efforts: ALL, defaultEffort: '' },
-    { value: 'fable', label: 'Fable 5.1', description: 'For your toughest challenges', efforts: ALL, defaultEffort: '' },
-    { value: 'haiku', label: 'Haiku 4.5', description: 'Fastest', efforts: [], defaultEffort: '' },
-    { value: 'claude-opus-4-6', label: 'Opus 4.6', description: '', efforts: ['low', 'medium', 'high', 'max'], defaultEffort: '' },
+  claude: { defaultModel: { label: 'Opus 5.5', model: 'claude-opus-resolved', efforts: ALL, defaultEffort: '' }, models: [
+    { value: 'opus', label: 'Opus 5.5', resolved: 'claude-opus-resolved', description: 'For complex work', efforts: ALL, defaultEffort: '' },
+    { value: 'fable', label: 'Fable 5.1', resolved: 'claude-fable-resolved', description: 'For your toughest challenges', efforts: ALL, defaultEffort: '' },
+    { value: 'haiku', label: 'Haiku 4.5', resolved: 'claude-haiku-resolved', description: 'Fastest', efforts: [], defaultEffort: '' },
+    { value: 'claude-opus-4-6', label: 'Opus 4.6', resolved: 'claude-opus-4-6', description: '', efforts: ['low', 'medium', 'high', 'max'], defaultEffort: '' },
   ], commands: [{ name: 'compact', description: 'Summarise the conversation so far', hint: '[instructions]' }, { name: 'clear', description: 'Start over', hint: '' }] },
   codex: { defaultModel: { label: 'GPT-5.6-Sol', slug: 'gpt-5.6-sol', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' }, models: [
     { value: 'gpt-6-sol', label: 'GPT-6-Sol', description: '', efforts: [...ALL, 'ultra'], defaultEffort: 'ultra' },
@@ -33,7 +33,9 @@ const engines = [];   // every FakeEngine constructed, in order
 // Answers at once, unless the message starts with "hold": then it stays busy until finish() is called, which is how
 // the tests get a turn that is still running. As Claude it queues further messages itself, as the real agent does.
 const knobs = { relayCost: 0.0001 };   // what the fake gateway puts on each response; null for a streamed response, which carries none
-const PRICES = { 'openai.gpt-6-luna': { input_cost_per_token: 1e-7, output_cost_per_token: 5e-7, cache_creation_input_token_cost: 1.25e-7, cache_read_input_token_cost: 1e-8 }, 'xai/grok-4.6': { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6, cache_read_input_token_cost: 5e-7 } };
+// knobs.startsOn: what a fake Claude on default starts on, as ANTHROPIC_MODEL or the settings' model make the real one; unset, the
+// built-in default, claude-opus-resolved, which is also where setModel('') takes it, as it takes the real one
+const PRICES = { 'openai.gpt-6-luna': { input_cost_per_token: 1e-7, output_cost_per_token: 5e-7, cache_creation_input_token_cost: 1.25e-7, cache_read_input_token_cost: 1e-8 }, 'xai/grok-4.6': { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6, cache_read_input_token_cost: 5e-7 }, 'gpt-6.1-sol': { input_cost_per_token: 2e-6, output_cost_per_token: 1e-5, cache_creation_input_token_cost: 2.5e-6, cache_read_input_token_cost: 2e-7 } };
 let storage = null;
 /** The extension's storage directory for a test run, holding a fresh price table so a gateway turn is priced without a fetch. */
 function storageDir() {
@@ -46,7 +48,7 @@ function storageDir() {
 }
 let fakeQueued = 0;
 class FakeAgent {
-  constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; created.push(this); }
+  constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; this.now = o.model ? 'claude-' + o.model + '-resolved' : knobs.startsOn || 'claude-opus-resolved'; created.push(this); }
   send(t, a, b) {
     const shown = this.claude ? b : a, images = (this.claude ? a : b) || [];   // the two agents take their arguments as the real ones do
     this.sent.push(t); (this.images = this.images || []).push(images);
@@ -61,7 +63,7 @@ class FakeAgent {
     this.emit({ kind: 'busy', busy: true });
     this.emit({ kind: 'session', id: (this.o.resume || 'sess-' + created.indexOf(this)) });
     this.emit({ kind: 'status', text: 'ready · fake' });
-    if (this.claude) this.emit({ kind: 'model', id: 'claude-' + (this.o.model || 'opus') + '-resolved' });
+    if (this.claude) this.emit({ kind: 'model', id: this.now });
     // through a gateway, the relay reports each response's model: a turn here is three requests, two to one model and one to another
     if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) { this.emit(Object.assign({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'nexus-auto', fallbacks: 0, callId: 'c', keySpend: 0.5 }, knobs.relayCost === null ? {} : { cost: knobs.relayCost })); this.emit({ kind: 'usage', model: 'nexus-auto', usage: { input: 1000, cache_write: 0, cache_read: 0, output: 100 } }); }
     if (/^hold/.test(t)) { this.held = t; return; }
@@ -70,7 +72,7 @@ class FakeAgent {
   answer(t) {
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
-    if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: 'claude-' + (this.o.model || 'opus') + '-resolved' }); }
+    if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: this.now }); }
     if (this.claude && this.o.gateway) this.emit({ kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache_read: 0, output: 3 } });   // the turn's result, which carries what answered; only agents on a gateway send one here, so no other test's event sequence changes
     this.held = null;
     if (this.waiting.length) { this.emit({ kind: 'dequeued', qid: this.waitingIds.shift() }); this.begin(this.waiting.shift()); return; }
@@ -88,7 +90,12 @@ class FakeAgent {
   setPermissionMode(m) { this.modes.push(m); }
   setSandboxMode(m) { this.modes.push(m); }
   setEffort(e) { this.efforts.push(e); }
-  setModel(m) { this.models.push(m); }
+  setModel(m) {   // Claude says at once what it runs now, as the real agent asks after a change; knobs.slowModel holds that back, as a slow CLI would
+    this.models.push(m);
+    if (!this.claude) return;
+    this.now = 'claude-' + (m || 'opus') + '-resolved';
+    if (!knobs.slowModel) this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: this.now });
+  }
   dispose() { this.disposed = true; }
   setApiKey(k) { this.setBackend({ apiKey: k }); }
   setBackend(b) { (this.apiKeys = this.apiKeys || []).push(b.apiKey || null); (this.backends = this.backends || []).push(b); this.o.apiKey = b.apiKey || undefined; this.o.bedrock = b.bedrock || undefined; }
@@ -146,7 +153,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, forwarded: [], external: [], copied: [] };
+  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, executedWith: [], forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -188,14 +195,15 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: () => ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: (section) => section === 'workbench.editor' ? { get: (k) => ui.editorSettings[k] } : ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
       createQuickPick: () => makeList(),
       // every editor tab of Perch's: those with a page, and those VS Code has kept without one until they are shown
-      tabGroups: { get activeTabGroup() { return ui.group ? ui.group() : this.all[0]; }, get all() { return [{ viewColumn: 2, tabs: [...ui.waiting, ...ui.panels.filter((p) => !p.disposed).map((p) => ({ label: p.title, input: { viewType: 'mainThreadWebview-' + p.viewType } })), { label: 'a.js', input: { uri: {} } }, { label: 'Other', input: { viewType: 'mainThreadWebview-other.view' } }] }]; },
+      tabGroups: { get activeTabGroup() { return ui.group ? ui.group() : this.all[0]; }, get all() { return ui.groups || [{ viewColumn: 2, tabs: [...ui.waiting, ...ui.panels.filter((p) => !p.disposed).map((p) => ({ label: p.title, input: { viewType: 'mainThreadWebview-' + p.viewType } })), { label: 'a.js', input: { uri: {} } }, { label: 'Other', input: { viewType: 'mainThreadWebview-other.view' } }] }]; },
+        onDidChangeTabs: (f) => { ui.listeners.tabs.push(f); return { dispose() {} }; },
         close: async (t) => { ui.closedTabs.push(t.label); const i = ui.waiting.indexOf(t); if (i >= 0) ui.waiting.splice(i, 1); return true; } },
       showTextDocument: async (doc, o) => { ui.columns.push(o && o.viewColumn); ui.opened.push([doc.uri.fsPath, o && o.selection ? [o.selection.a, o.selection.c] : null]); },
       showInputBox: (o, token) => new Promise((resolve) => { ui.asked.push(o); if (ui.inputs.length) { resolve(ui.inputs.shift()); return; } ui.pendingInputs.push(resolve); if (token) token.onCancellationRequested(() => { const i = ui.pendingInputs.indexOf(resolve); if (i >= 0) ui.pendingInputs.splice(i, 1); resolve(undefined); }); }),
@@ -210,7 +218,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
     },
     // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for
-    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); } },
+    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
     env: { clipboard: { writeText: async (t) => { ui.copied.push(t); } }, remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
     extensions: {
@@ -218,6 +226,8 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       onDidChange: (f) => { ui.listeners.extensions.push(f); return { dispose() {} }; },
     },
     StatusBarAlignment: { Left: 1, Right: 2 },
+    get version() { return ui.version || '1.129.1'; },
+    TabInputTerminal: class {},
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
     ThemeColor: class { constructor(id) { this.id = id; } },
     CancellationTokenSource: class { constructor() { const subs = []; this.token = { isCancellationRequested: false, onCancellationRequested: (f) => { subs.push(f); return { dispose() {} }; } }; this._subs = subs; } cancel() { if (this.token.isCancellationRequested) return; this.token.isCancellationRequested = true; for (const f of this._subs) f(); } dispose() {} },
@@ -235,10 +245,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, and is counted
-    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; if (box.codexLoginHold) await box.codexLoginHold; box.codexLoggedIn = true; box.codexStamp = 'stamp-new-' + box.codexWaits; return true; },
+    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => box.codexHome || '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; if (box.codexLoginHold) await box.codexLoginHold; box.codexLoggedIn = true; box.codexStamp = 'stamp-new-' + box.codexWaits; return true; },
       // the browser sign-in: what program was run, and the page it printed; box.codexLoginFails makes it fail to start
       startLogin: async (program) => { (box.codexLogins = box.codexLogins || []).push(program); if (box.codexLoginFails) throw new Error(box.codexLoginFails); return { url: 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', child: { kill() { box.codexKilled = (box.codexKilled || 0) + 1; } } }; } });
-    if (req === './models') return { normalizeCommands: realModels.normalizeCommands, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
+    if (req === './models') return { normalizeCommands: realModels.normalizeCommands, modelEntry: realModels.modelEntry, modelLabel: realModels.modelLabel, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];
@@ -254,7 +264,8 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const waitingTab = (label) => { const t = { label, input: { viewType: 'mainThreadWebview-perch.session' } }; ui.waiting.push(t); return t; };
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
-  return { perch, registered, commands, memento, globalState, secrets, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, vbox, abox, store };
+  const tabsChanged = (e) => { for (const f of ui.listeners.tabs) f(Object.assign({ opened: [], closed: [], changed: [] }, e)); };
+  return { perch, registered, commands, memento, globalState, secrets, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, tabsChanged, vbox, abox, store, vscode: vscodeStub };
 }
 
 function fakeView() {

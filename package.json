@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.52",
+  "version": "0.6.54",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -302,7 +302,7 @@
         "perch.lockGroup": {
           "type": "boolean",
           "default": true,
-          "description": "Lock an editor group that holds only Perch tabs, so files opened from the Explorer go to your other editor group and not in among the sessions."
+          "description": "Lock an editor group that holds only Perch tabs, so files opened from the Explorer go to your other editor group and not in among the sessions. The lock comes off once the group's last Perch tab has gone and other tabs are left in it (VS Code 1.92 or later)."
         },
         "perch.newTabs": {
           "type": "string",

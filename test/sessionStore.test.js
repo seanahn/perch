@@ -208,7 +208,7 @@ function rollout(home, day, id, lines, mtime) {
 
   // ---- what a sub-agent's own file says of it: the model and effort of each turn, and what the turns cost
   {
-    const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't', model, effort } });
+    let turnNo = 0; const turn = (model, effort) => JSON.stringify({ type: 'turn_context', payload: { turn_id: 't' + (++turnNo), model, effort } });   // each its own turn, as in a thread
     const cost = (i, c, o) => JSON.stringify({ type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, output_tokens: o } } });
     const nick = (n) => JSON.stringify({ type: 'session_meta', payload: { id: 'c1', parent_thread_id: 'r', agent_nickname: n } });
     const t = new S.UsageTally();
@@ -271,6 +271,68 @@ function rollout(home, day, id, lines, mtime) {
     // an end the root's file does not have where the events do is given nothing, rather than another end's figures
     const odd = [{ kind: 'subagent', name: 'other', state: 'finished', thread: 'old' }];
     assert.deepStrictEqual(S.addSubagentUsage(odd, '/h', { text: rootLines, find: () => 'fo', read: () => life })[0].info, undefined);
+  }
+
+  // ---- a turn is counted once, a fork's copy of its parent's history is not its own, and the tokens are kept by model.
+  // Seen on 2026-10-12: one thread's 74 sub-agents held 390 copied contexts against 161 of their own (every forked one
+  // showed a turn more than it had, on its parent's model), and 21 of the thread's 205 turns recorded their context twice.
+  {
+    const rec = (ordinal, type, payload) => JSON.stringify({ ordinal, type, payload });
+    const ctx = (ordinal, turn_id, model, effort) => rec(ordinal, 'turn_context', { turn_id, model, effort });
+    const use = (ordinal, i, c, w, o) => rec(ordinal, 'token_usage_record', { usage: { input_tokens: i, cached_input_tokens: c, cache_write_input_tokens: w, output_tokens: o } });
+    const fork = [
+      rec(0, 'session_meta', { id: 'kid', forked_from_id: 'root', subagent_history_start_ordinal: 5, agent_path: '/root/kid', agent_nickname: 'Zeno' }),
+      rec(1, 'session_meta', { id: 'root', agent_nickname: 'not this one' }),   // the parent's, copied
+      ctx(3, 'parent-turn', 'gpt-5.6-sol', 'max'),                               // the parent's turn, copied
+      ctx(6, 'k1', 'gpt-6.1-sol', 'ultra'), use(7, 1000, 800, 100, 50),
+      ctx(8, 'k1', 'gpt-6.1-sol', 'ultra'), use(9, 500, 400, 0, 20),            // the same turn's context again, after a compaction
+      ctx(10, 'k2', 'gpt-6.1-sol', 'ultra'), use(11, 100, 0, 0, 5),
+    ];
+    const t = new S.UsageTally(); for (const l of fork) t.feed(l);
+    assert.deepStrictEqual(t.summary(), { model: 'gpt-6.1-sol', effort: 'ultra', turns: 2, tokens: { input: 1600, cached: 1200, output: 75 }, nickname: 'Zeno' },
+      'its own two turns on its own model: not its parent\'s copied turn, not a turn twice, not its parent\'s name');
+    assert.deepStrictEqual(t.spent(), [{ model: 'gpt-6.1-sol', input: 1600, cached: 1200, write: 100, output: 75 }], 'the cache writes too, for pricing');
+    // a main thread: nothing copied; a request before any turn named a model; a move to another model
+    const main = new S.UsageTally();
+    for (const l of [rec(0, 'session_meta', { id: 'root' }), use(1, 10, 0, 0, 1), ctx(2, 'r1', 'gpt-5.6-sol', 'max'), use(3, 100, 50, 0, 10), ctx(4, 'r2', 'gpt-6.1-sol', 'max'), use(5, 200, 100, 20, 20)]) main.feed(l);
+    assert.deepStrictEqual(main.spent(), [{ model: '', input: 10, cached: 0, write: 0, output: 1 }, { model: 'gpt-5.6-sol', input: 100, cached: 50, write: 0, output: 10 }, { model: 'gpt-6.1-sol', input: 200, cached: 100, write: 20, output: 20 }],
+      'each request under the model of the turn it is in');
+    assert.deepStrictEqual([main.summary().turns, main.summary().models], [2, [{ model: 'gpt-5.6-sol', turns: 1 }, { model: 'gpt-6.1-sol', turns: 1 }]]);
+  }
+
+  // ---- a session's usage, thread by thread, read from a sessions tree: what the footer's table shows
+  {
+    const home = mk(), T = Date.parse('2026-10-12T10:00:00Z');
+    const at = (iso, o) => JSON.stringify(Object.assign({ timestamp: iso }, o));
+    const act = (iso, kind, agent_path, agent_thread_id, ordinal) => at(iso, Object.assign(ordinal === undefined ? {} : { ordinal }, { type: 'event_msg', payload: { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'x', kind, agent_path, agent_thread_id } } }));
+    const ctx = (turn_id, model, effort, ordinal) => JSON.stringify(Object.assign(ordinal === undefined ? {} : { ordinal }, { type: 'turn_context', payload: { turn_id, model, effort } }));
+    const use = (i, c, o, ordinal) => JSON.stringify(Object.assign(ordinal === undefined ? {} : { ordinal }, { type: 'token_usage_record', payload: { usage: { input_tokens: i, cached_input_tokens: c, output_tokens: o } } }));
+    rollout(home, '2026-10-12', 'root-1', [meta('root-1', '/w'), ctx('r1', 'gpt-6.1-sol', 'max'), use(1000, 900, 10),
+      act('2026-10-12T10:01:00Z', 'started', '/root/alpha', 'kid-a'), act('2026-10-12T10:02:00Z', 'started', '/root/beta', 'kid-b'), act('2026-10-12T10:03:00Z', 'started', '/root/gone', 'kid-gone'),
+      act('2026-10-12T10:05:00Z', 'completed', '/root/alpha', 'kid-a'), act('2026-10-12T11:00:00Z', 'interacted', '/root/alpha', 'kid-a')], T);
+    rollout(home, '2026-10-12', 'kid-a', [JSON.stringify({ ordinal: 0, type: 'session_meta', payload: { id: 'kid-a', subagent_history_start_ordinal: 3, agent_nickname: 'Euler' } }),
+      act('2026-10-12T09:00:00Z', 'started', '/root/old', 'kid-old', 1),          // the parent's history, copied: not a sub-agent of this one
+      ctx('r0', 'gpt-5.6-sol', 'max', 2),
+      ctx('a1', 'gpt-6.1-sol', 'ultra', 3), use(300, 200, 30, 4),
+      act('2026-10-12T10:04:00Z', 'started', '/root/alpha/deep', 'kid-deep', 5)], T);
+    rollout(home, '2026-10-12', 'kid-b', [ctx('b1', 'gpt-6-luna', 'medium'), use(50, 0, 5)], T);
+    rollout(home, '2026-10-11', 'kid-deep', [ctx('d1', 'gpt-6-luna', 'low'), use(7, 0, 1)], T - 86400000);   // another day's folder
+    rollout(home, '2026-10-12', 'kid-old', [ctx('o1', 'gpt-6-luna', 'low'), use(999, 0, 99)], T);
+    const u = await S.sessionUsage('root-1', { home });
+    assert.deepStrictEqual(u.main, { thread: 'root-1', model: 'gpt-6.1-sol', effort: 'max', turns: 1, tokens: { input: 1000, cached: 900, output: 10 }, spent: [{ model: 'gpt-6.1-sol', input: 1000, cached: 900, write: 0, output: 10 }] });
+    const hm = (iso) => Date.parse(iso);
+    assert.deepStrictEqual(u.subagents.map((s) => [s.name, s.thread, s.state, s.first, s.last, s.model, s.turns, s.tokens.input, s.nickname || '', !!s.missing]), [
+      ['alpha', 'kid-a', 'active', hm('2026-10-12T10:01:00Z'), hm('2026-10-12T11:00:00Z'), 'gpt-6.1-sol', 1, 300, 'Euler', false],
+      ['beta', 'kid-b', 'started', hm('2026-10-12T10:02:00Z'), hm('2026-10-12T10:02:00Z'), 'gpt-6-luna', 1, 50, '', false],
+      ['gone', 'kid-gone', 'started', hm('2026-10-12T10:03:00Z'), hm('2026-10-12T10:03:00Z'), '', 0, 0, '', true],
+      ['alpha/deep', 'kid-deep', 'started', hm('2026-10-12T10:04:00Z'), hm('2026-10-12T10:04:00Z'), 'gpt-6-luna', 1, 7, '', false],
+    ], 'in the order first heard of, each as it last was; one a sub-agent started, after; a file not found said so; a fork\'s copied history names no sub-agent of its own');
+    assert.deepStrictEqual(u.subagents[0].spent, [{ model: 'gpt-6.1-sol', input: 300, cached: 200, write: 0, output: 30 }]);
+    assert.strictEqual(await S.sessionUsage('nobody', { home }), null, 'a session whose file is not found');
+    const reads = [];
+    const v = await S.sessionUsage('root-1', { home, read: async (f) => { reads.push(path.basename(f)); if (/kid-b/.test(f)) throw new Error('gone'); return fs.readFileSync(f, 'utf8'); } });
+    assert.deepStrictEqual([v.subagents.find((s) => s.name === 'beta').missing, reads], [true, ['rollout-2026-10-12T12-00-00-root-1.jsonl', 'rollout-2026-10-12T12-00-00-kid-a.jsonl', 'rollout-2026-10-12T12-00-00-kid-b.jsonl', 'rollout-2026-10-11T12-00-00-kid-deep.jsonl']],
+      'a file that cannot be read is as one not found; each file read once, and only the files of the session\'s threads');
   }
 console.log('SESSIONS OK');
 })().catch((e) => { console.error('SESSIONS FAILED:', e.stack || e.message); process.exit(1); });

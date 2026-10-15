@@ -268,6 +268,12 @@ function collabEvent(o) {
  * grows; `rolloutUsage` a whole one). Three records are read: `turn_context` (the model and effort of each turn, so a
  * thread moved to another model mid-way shows both), `token_usage_record` (what each turn cost) and `session_meta` (the
  * nickname Codex gives the agent). A line is parsed only if it names one of them; most lines name none.
+ *
+ * A turn is counted once, by its id: a turn records its context again after a compaction (21 of 205 turns did in one
+ * thread). A sub-agent forked from its parent's conversation has the parent's history copied into the top of its file,
+ * contexts included (390 copied, 161 of their own, in that thread's 74 sub-agents): its own `session_meta`, the first,
+ * names the ordinal its own records begin at (`subagent_history_start_ordinal`), and the copied records before it are
+ * the parent's, not counted. Token records are never copied.
  */
 class UsageTally {
   /**
@@ -279,7 +285,12 @@ class UsageTally {
   constructor({ since = -Infinity, until = Infinity } = {}) {
     this.since = since; this.until = until;
     this.nickname = ''; this.model = ''; this.effort = ''; this.turns = 0; this.byModel = new Map(); this.input = 0; this.cached = 0; this.output = 0;
+    this.counted = new Set();          // the turns counted, by id, and by id under each model
+    this.metas = 0; this.ownFrom = null;   // a forked sub-agent's own records begin at this ordinal; before it, its parent's, copied
+    this.spentBy = new Map();          // by model: what its turns' requests took, so each model can be priced at its own rates
   }
+  /** Whether a record is the parent's history, copied into a forked sub-agent's file. */
+  copied(o) { return this.ownFrom !== null && typeof o.ordinal === 'number' && o.ordinal < this.ownFrom; }
   /** @returns {boolean} whether the line changed the tally */
   feed(line) {
     if (!isUsageLine(line)) return false;
@@ -290,6 +301,8 @@ class UsageTally {
   feedRecord(o) {
     const p = o && o.payload;
     if (!p || typeof p !== 'object') return false;
+    if (o.type === 'session_meta' && this.metas++ === 0 && typeof p.subagent_history_start_ordinal === 'number') this.ownFrom = p.subagent_history_start_ordinal;
+    else if (this.copied(o)) return false;
     const at = Date.parse(o.timestamp);              // NaN when unstamped, which neither comparison holds for
     if (at > this.until) return false;
     const inside = !(at < this.since);
@@ -304,18 +317,34 @@ class UsageTally {
       const effort = typeof p.effort === 'string' ? p.effort.trim() : '';
       const changed = inside || model !== this.model || effort !== this.effort;
       this.model = model; this.effort = effort;
-      if (inside) { this.turns++; this.byModel.set(model, (this.byModel.get(model) || 0) + 1); }
+      if (inside) {
+        const id = typeof p.turn_id === 'string' && p.turn_id ? p.turn_id : null, under = id && model + '\u0001' + id;   // no id: each counts
+        if (!id || !this.counted.has(id)) { this.turns++; if (id) this.counted.add(id); }
+        if (!under || !this.counted.has(under)) { this.byModel.set(model, (this.byModel.get(model) || 0) + 1); if (under) this.counted.add(under); }
+      }
       return changed;
     }
     if (o.type === 'token_usage_record') {
       const u = p.usage;
       if (!inside || !u || typeof u !== 'object') return false;
       const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-      this.input += n(u.input_tokens); this.cached += n(u.cached_input_tokens); this.output += n(u.output_tokens);
+      const input = n(u.input_tokens), cached = n(u.cached_input_tokens), write = n(u.cache_write_input_tokens), output = n(u.output_tokens);
+      this.input += input; this.cached += cached; this.output += output;
+      // a request belongs to the turn whose context came before it, so to that turn's model
+      const s = this.spentBy.get(this.model) || { input: 0, cached: 0, write: 0, output: 0 };
+      s.input += input; s.cached += cached; s.write += write; s.output += output;
+      this.spentBy.set(this.model, s);
       return true;
     }
     return false;
   }
+  /**
+   * What the requests took, by model, in the order the models were first used: `input` counts every input token, the
+   * cached ones (`cached`, read from the prompt cache) and the ones written to it (`write`) among them, as OpenAI counts.
+   * The model is '' for requests before any turn named one.
+   * @returns {{model: string, input: number, cached: number, write: number, output: number}[]}
+   */
+  spent() { return [...this.spentBy.entries()].map(([model, s]) => Object.assign({ model }, s)); }
   /**
    * What the tally says: the model of the latest turn and its effort, the turns, the tokens; `nickname` when the file
    * gave one; `models`, each with its turns in the order first used, only when there was more than one.
@@ -400,6 +429,59 @@ function addSubagentUsage(events, home, { text = null, read = (f) => fs.readFile
     if (u.model) e.info = u;
   }
   return events;
+}
+
+/**
+ * A Codex session's usage, thread by thread, for the table of it the footer opens: the main thread's, and each sub-agent's
+ * it started (and any those started), each from the whole of its own rollout file. Each is a `UsageTally` summary with
+ * `spent` (its tokens by model, to be priced at each model's rates); a sub-agent has its name, its thread, when it was
+ * first and last heard of and how it last was (started, active, finished, interrupted), and `missing` when its file is
+ * not found. Sub-agents come in the order they were first heard of.
+ * @param {string} id  the session's thread
+ * @returns {Promise<{ main: object, subagents: object[] }|null>}  null when the session's own file is not found
+ */
+async function sessionUsage(id, { home = path.join(os.homedir(), '.codex'), read = (f) => fs.promises.readFile(f, 'utf8'), find = null } = {}) {
+  let index = null;                  // the sessions tree, walked once for all the threads
+  const locate = find || ((thread) => {
+    if (!index) { try { index = newestRollouts(path.join(home, 'sessions'), Infinity); } catch (_) { index = []; } }
+    const end = '-' + thread + '.jsonl', hit = index.find((f) => f.file.endsWith(end));
+    return hit ? hit.file : null;
+  });
+  const subs = new Map();            // by thread
+  // one thread's file: its tally, and the sub-agents it speaks of (a fork's copy of its parent's history aside)
+  const readThread = async (thread) => {
+    const file = locate(thread);
+    if (!file) return null;
+    let text; try { text = await read(file); } catch (_) { return null; }
+    const t = new UsageTally();
+    for (const line of String(text).split('\n')) {
+      const usage = isUsageLine(line), collab = !usage && line.indexOf('SubAgentActivity') >= 0;
+      if (!usage && !collab) continue;
+      let o; try { o = JSON.parse(line); } catch (_) { continue; }
+      if (usage) { t.feedRecord(o); continue; }
+      if (t.copied(o)) continue;
+      const c = collabEvent(o);
+      if (!c || c.kind !== 'subagent' || !c.thread || c.thread === id) continue;
+      const at = Date.parse(o.timestamp), s = subs.get(c.thread) || { name: c.name, thread: c.thread, first: at, last: at, state: c.state, read: false };
+      if (at >= s.last || Number.isNaN(s.last)) { s.last = at; s.state = c.state; }
+      subs.set(c.thread, s);
+    }
+    return Object.assign(t.summary(), { spent: t.spent() });
+  };
+  const main = await readThread(id);
+  if (!main) return null;
+  const out = [];
+  for (let more = true; more;) {      // a sub-agent's own file may name sub-agents of its own: read until none is new
+    more = false;
+    for (const s of [...subs.values()]) {
+      if (s.read) continue;
+      s.read = true; more = true;
+      const u = await readThread(s.thread);
+      const when = (v) => (Number.isNaN(v) ? null : v);
+      out.push(Object.assign({ name: s.name, thread: s.thread, first: when(s.first), last: when(s.last), state: s.state }, u || { model: '', effort: '', turns: 0, tokens: { input: 0, cached: 0, output: 0 }, spent: [], missing: true }));
+    }
+  }
+  return { main: Object.assign({ thread: id }, main), subagents: out };
 }
 
 /** @param {string} text  a whole rollout file */
@@ -510,4 +592,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

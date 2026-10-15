@@ -23,6 +23,37 @@ function connectLink(result) {
   return { url: f.install_url, connector: String(f.connector_id || ''), message: String(f.message || '') };
 }
 
+const str = (v) => (typeof v === 'string' ? v.trim() : '');
+const pages = (it) => (Array.isArray(it && it.results) ? it.results : []).filter((r) => r && (str(r.url) || str(r.title)));
+
+/**
+ * What a web search item did, for its card. Codex says nothing of it when it starts (an empty query, the action `other`)
+ * and all of it when it completes: a search's query, or its queries; a page opened (the action stays `other`, and the
+ * page is the result); a phrase looked for in a page. Codex has spelled the actions both ways (`find_in_page` from
+ * `codex exec`, `findInPage` in a rollout file), and a search's `queries` may stand in for its `query`.
+ * @returns {{action: string, query?: string, queries?: string[], url?: string, title?: string, pattern?: string}}  action '' while nothing is known
+ */
+function webInput(it) {
+  const a = it && it.action && typeof it.action === 'object' ? it.action : {};
+  const type = str(a.type).replace(/[_-]/g, '').toLowerCase(), page = pages(it)[0];
+  if (type === 'search') {
+    const queries = (Array.isArray(a.queries) ? a.queries : []).map(str).filter(Boolean);
+    return queries.length > 1 ? { action: 'search', queries } : { action: 'search', query: str(a.query) || queries[0] || str(it.query) };
+  }
+  if (type === 'findinpage') return { action: 'find', pattern: str(a.pattern), url: str(a.url) || (page ? str(page.url) : '') };
+  if (type === 'openpage') return { action: 'open', url: str(a.url) || (page ? str(page.url) : ''), title: page ? str(page.title) : '' };
+  if (str(it && it.query)) return { action: 'search', query: str(it.query) };
+  return page ? { action: 'open', url: str(page.url), title: str(page.title) } : { action: '' };
+}
+
+/** A web search's results as lines, each page's title and address; '' when there were none. */
+function webFound(it) {
+  const all = pages(it), MAX = 8;
+  const lines = all.slice(0, MAX).map((r) => [str(r.title), str(r.url)].filter(Boolean).join(' — '));
+  if (all.length > MAX) lines.push('… and ' + (all.length - MAX) + ' more');
+  return lines.join('\n');
+}
+
 class CodexAgent {
   /**
    * @param {object} opts
@@ -206,7 +237,13 @@ class CodexAgent {
             if (final) this._connect(it);
             return;
           case 'web_search':
-            if (e.type === 'item.started') this.emit({ kind: 'tool_use', id: it.id, name: 'web_search', input: { query: it.query } });
+            // what it was is known only once it completes: its card is said again then, in full, and its result ends the
+            // search at the foot of the transcript, which otherwise said "Searching the web" until something else happened
+            if (e.type === 'item.started') this.emit({ kind: 'tool_use', id: it.id, name: 'web_search', input: webInput(it) });
+            if (final) {
+              this.emit({ kind: 'tool_use', id: it.id, name: 'web_search', input: webInput(it), update: true });
+              this.emit({ kind: 'tool_result', id: it.id, text: webFound(it) || 'nothing found', isError: false });
+            }
             return;
           case 'todo_list':
             if (final) this.emit({ kind: 'status', text: 'plan: ' + (it.items || []).map((t) => (t.completed ? '[x] ' : '[ ] ') + t.text).join(' · ') });
@@ -272,4 +309,4 @@ class CodexAgent {
   }
 }
 
-module.exports = { CodexAgent, connectLink };
+module.exports = { CodexAgent, connectLink, webInput, webFound };
