@@ -65,12 +65,42 @@ function normalizeClaudeModels(list, current) {
   };
 }
 
-/** The catalog entry that is a model the CLI reported by its id: by value, or by the id it resolves to; else null. */
+/**
+ * A model id cut down to the model it names, whoever serves it. Claude Code names a model by its provider's id, and a
+ * response names it by the model's own: `us.anthropic.claude-opus-5-5-v1:0`, `claude-opus-5-5[1m]` and `claude-opus-5-5`
+ * are one model, and a dated id is its model without the date.
+ */
+function modelKey(id) {
+  return String(id || '').trim().toLowerCase()
+    .replace(/\[[^\]]*\]$/, '')            // [1m]: the same model, with a longer context window
+    .replace(/^.*?(?=claude-)/, '')        // a provider's prefix: us.anthropic., global.anthropic.
+    .replace(/-v\d+(?::\d+)?$/, '')        // Bedrock's version
+    .replace(/[-@]\d{8}$/, '');            // a date, as the API and Vertex give one
+}
+/** Whether two ids name the same model (modelKey). An empty id names none. */
+function sameModel(a, b) { return !!a && !!b && modelKey(a) === modelKey(b); }
+
+/** The catalog entry that is a model the CLI reported by its id: by value, or by the id it resolves to, else by the model the id names (modelKey); else null. */
 function modelEntry(cat, id) {
-  return id && cat && Array.isArray(cat.models) ? cat.models.find((x) => x.value === id || (x.resolved && x.resolved === id)) || null : null;
+  if (!id || !cat || !Array.isArray(cat.models)) return null;
+  return cat.models.find((x) => x.value === id || (x.resolved && x.resolved === id))
+    || cat.models.find((x) => sameModel(x.resolved || x.value, id)) || null;
 }
 /** What a catalog calls a model the CLI reported: its entry's name, else the id. */
 function modelLabel(cat, id) { const m = modelEntry(cat, id); return m ? m.label : id || ''; }
+
+/**
+ * What the transcript says when a model's safeguards refused a response and Claude Code retried it on another model:
+ * Claude Code's own words, else perch's. `scope` 'local' is one response of a sub-agent or side question; otherwise the
+ * session runs on the other model from then on.
+ * @param {{ content?: string, from?: string, to?: string, scope?: string }} f
+ */
+function fallbackNote({ content, from, to, scope } = {}) {
+  const said = String(content || '').trim();
+  if (said) return said;
+  const was = from || 'The model', now = to || 'another model';
+  return `${was}'s safeguards stopped a response, and ${now} answered it instead` + (scope === 'local' ? '.' : `. This session runs on ${now} from now on.`);
+}
 
 /**
  * The model a CLI is on before anything is chosen, which a new session starts on; '' if it cannot say. The summary
@@ -98,13 +128,14 @@ function normalizeCommands(list) {
  * Ask Claude Code for its model list, the model it starts on, and its slash commands. Starts the CLI with an input
  * stream that never yields, so the CLI initializes but no model request is made and nothing is billed.
  */
-async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
+async function loadClaudeModels({ cwd, executable, settings, timeoutMs = 15000 } = {}) {
   const sdk = await import('@anthropic-ai/claude-agent-sdk');
   const abort = new AbortController();
   let release = () => {};
   const idle = { [Symbol.asyncIterator]() { return { next: () => new Promise((r) => { release = () => r({ done: true, value: undefined }); }), return: async () => ({ done: true, value: undefined }) }; } };
   const options = { cwd: cwd || process.cwd(), permissionMode: 'default', abortController: abort, stderr: () => {} };
   if (executable) options.pathToClaudeCodeExecutable = executable;
+  if (settings) options.settings = settings;   // load the catalog under a backend's override (e.g. off a pod-pinned gateway)
   let timer;
   try {
     const q = sdk.query({ prompt: idle, options });
@@ -120,4 +151,4 @@ async function loadClaudeModels({ cwd, executable, timeoutMs = 15000 } = {}) {
   }
 }
 
-module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, normalizeCommands, modelEntry, modelLabel, startModel, parseTopLevelToml };
+module.exports = { loadCodexModels, loadClaudeModels, normalizeClaudeModels, normalizeCommands, modelEntry, modelLabel, modelKey, sameModel, fallbackNote, startModel, parseTopLevelToml };

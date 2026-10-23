@@ -97,5 +97,17 @@ try {
     { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'http://127.0.0.1:5000', ANTHROPIC_MODEL: 'nexus-auto[1m]' } }, 'Bedrock off and the file\'s names over the user\'s settings; the token stays in the environment; requests go to the relay');
   assert.deepStrictEqual(G.gatewaySettings(undefined), { env: {} });
 
+  // ---- settings that take a non-gateway tab OFF a pod-pinned gateway: clear the base URL + apiKeyHelper + model, set the
+  // Bedrock flag, and put the model slots back to what the tab inherits when that suits the backend (a Bedrock id only on Bedrock)
+  const noSlots = { ANTHROPIC_MODEL: '', ANTHROPIC_SMALL_FAST_MODEL: '', ANTHROPIC_DEFAULT_OPUS_MODEL: '', ANTHROPIC_DEFAULT_SONNET_MODEL: '',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '' };
+  assert.deepStrictEqual(G.offGatewaySettings(false, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'subscription: Bedrock off, the pinned gateway and its model slots cleared');
+  assert.deepStrictEqual(G.offGatewaySettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'API/Bedrock: Bedrock on, the pinned gateway and its model slots cleared');
+  const pod = { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: 'us.anthropic.claude-sonnet-4-6', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' };   // a seclab pod's export, and a first-party pin
+  assert.strictEqual(G.offGatewaySettings(true, pod).env.ANTHROPIC_MODEL, 'us.anthropic.claude-sonnet-4-6', 'API/Bedrock: the pod\'s Bedrock model comes back');
+  assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_MODEL, '', 'subscription: a Bedrock id is not carried over');
+  assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5', 'subscription: a first-party pin comes back');
+  assert.strictEqual(G.offGatewaySettings(false).env.CLAUDE_CODE_USE_BEDROCK, '0', 'the inherited environment defaults to this process\'s');
+
   console.log('gateway tests passed');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

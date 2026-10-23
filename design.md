@@ -625,16 +625,18 @@ The page and the host exchange plain JSON with `postMessage`.
 | `permission` | yes, becomes a `note` once answered | Allow, Always, Deny |
 | `question` | yes, becomes `answered` | Claude's `AskUserQuestion`: choices as buttons, a line of your own, one answer for all. With `async: true`, a question Codex asked without waiting (`request_user_input_async`): the card says so, the tab does not wait on it, and the answers go as the next message (queued behind the turn); read back from an earlier session, it is an `answered` with `answers: null`, what was asked and no answer either way |
 | `subagent` | yes, but `waiting` and `usage` are not | Codex: a sub-agent's `started`, `tasked` (a follow-up task), `reported`, `finished`, `interrupted`, a line each (`⤷ name started`); each read from an activity record carries the sub-agent's own `thread`; an end line carries `info`, what its own thread file said of it in the turn it ended in (model, effort, turns, tokens, nickname, every model when more than one), and says it after the words. `waiting`, the root waiting on its sub-agents, is said at the foot; `usage`, read from a sub-agent's own file, goes into the tab's `subagents` and is no line. The tab's `subagents` (working, finished, stopped, and each by name with its reports and its `info` fields once known) is at the foot while the turn runs: a count that opens to a table of them. The turn's `result` carries the same `subagents`, a count under the line that opens to the table |
-| `result` | yes | Duration, tokens in, cached, out; through a gateway, `via`: the models that answered the turn's requests, each with a count, and `gatewayCost`, `gatewayCostSoFar`: the gateway's own figures, for the turn and the session |
-| `note`, `error` | yes | A line in the transcript |
+| `result` | yes | Duration, tokens in, cached, out; through a gateway, `via`: the models that answered the turn's requests, each with a count, and `gatewayCost`, `gatewayCostSoFar`: the gateway's own figures, for the turn and the session; off the gateway, `answered` and `wanted`: the models that answered the turn, as each response named its own, when one is not the model meant (section 9) |
+| `note`, `error` | yes | A line in the transcript; a note with `level: 'warn'` in the warning colour (Claude Code's notice of a refusal fallback) |
 | `status`, `busy` | latest value only | A working line at the foot of the transcript: what the agent is doing, for how long. A status that is not idle, working, or ready becomes a `note` |
 | `fill`, `insert` | no, held as a draft if no page | Text into the message box |
 | `voice` | no, re-sent on `ready` | The microphone's state |
 
 Agents emit a few more that the host consumes and does not forward:
-`session`, `model`, `context`, `responded`, `commands`, and `relay` (one
+`session`, `model`, `context`, `responded`, `commands`, `relay` (one
 response through the gateway: which model it came from, folded into the
-next `result` as `via` and onto the tab as its last model).
+next `result` as `via` and onto the tab as its last model), and
+`fallback` (Claude Code retried a refused response on another model: a
+`note`, and the tab's running model, section 9).
 
 ## 8. The agents
 
@@ -756,6 +758,30 @@ tab running Sonnet as default Opus and offered it Opus's `xhigh`. So:
   process is restarted, since the next one starts on the start model.
 - The option's tooltip says when the running model is not the one new
   sessions start on. A gateway tab's default is the file's (section 11).
+
+**Refusal fallback.** Claude Code moves a session itself when a model's
+safeguards refuse a response: it retries the response on a fallback
+model, takes the refused one back, and keeps the session on the fallback
+(`model_refusal_fallback` with scope `session`; scope `local` is one
+response of a sub-agent or a side question). Seen on 2026-10-20: Opus 5.5
+to Opus 4.8, category `cyber`, while the pill still said Opus 5.5. So:
+
+- The fallback model is the one the session runs from then on, until a
+  model is chosen or the process restarts. A context reading that names
+  the model asked for does not undo it.
+- When the model running is not the one meant (the one chosen, by the id
+  it resolves to; on default, the one Claude Code moved the session
+  off), the pill names the running one, in the warning colour, and its
+  tooltip says why. Ids are compared by the model they name, so a
+  provider's id (`us.anthropic.claude-opus-5-5-v1:0`) is that model.
+- Claude Code's notice is a `note` with `level: 'warn'`. The Agent SDK's
+  reader gives a past session's system records without their words, so
+  a past transcript reads those from the session's own file.
+- Each main-thread response names its model (`message.model`). The
+  turn's `result` lists them, less any a fallback took back
+  (`supersedes`, `retracted_message_uuids`), and its line says
+  `answered by` when one is not the model meant. The gateway's own
+  `via` does this for a gateway tab.
 
 **Fallback.** Until a catalog loads, or if it cannot, tabs use a static
 effort list and offer only the default model. A catalog that arrives
@@ -1479,6 +1505,50 @@ track vendor updates. Without an extension, a tab shows a letter.
 | No syntax colouring in code blocks | The Markdown renderer draws code as text |
 | One gateway at a time | The file names one. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` could also let Claude Code list the gateway's own models for the menu; off in the user's file, and not used |
 | A gateway tab is told apart in the footer, not the tab bar | By choice (section 11): the tab is Claude's. A small `gw` mark on the title would be the cheap remedy if wanted |
+| Backend switch under a pod-pinned gateway | Fixed in 0.6.55: see *Backend-correct tabs* below |
+
+### Backend-correct tabs (0.6.55): subscription / gateway / API first-class
+
+**Problem.** When `~/.claude/settings.json` pins a gateway for *all* Claude Code (the seclab
+"everywhere" mode: `ANTHROPIC_BASE_URL` + an `apiKeyHelper`), a tab set to **subscription** or
+**API/Bedrock** still runs on the gateway, yet the footer prints "sub" and the model menu lists the
+gateway's `anthropic/…` names. The label lies and the list is wrong. Perch should present every
+backend truthfully, independent of what the pod pins.
+
+**Root cause (code spots).**
+- `claudeAgent.js:78` passes Claude Code's `--settings` **only for gateway tabs** (`gatewaySettings`).
+  Non-gateway tabs pass nothing, so the pod's `settings.json` pin wins and the tab runs on the gateway.
+- `extension.js:300` `catalog()` returns `Gateway.gatewayModels(...)` for gateway tabs, else the single
+  `view.catalog.claude` — which `extension.js:1122` loads **once**, via `loadClaudeModels()` under the
+  pinned env, so it *is* the gateway catalog. Sub/API tabs therefore show gateway models.
+
+**Verified gate (2026-10-22).** `--settings` with `{"env":{"CLAUDE_CODE_USE_BEDROCK":"0","ANTHROPIC_BASE_URL":""},"apiKeyHelper":""}`
+**does** take the pod CLI off the gateway: it then rejected `anthropic/opus-high` as an *unrecognized
+model* (that name exists only on the gateway) instead of answering. So a per-backend `--settings`
+override works. It also proved a second requirement: switching off the gateway must **also drop the
+gateway's `model`** (`anthropic/opus-high`), or the subscription 400s on an unknown id.
+
+**Plan (coupled — they move together).**
+1. **Per-backend `--settings`.** Add `offGatewaySettings(bedrock)` → `{env:{CLAUDE_CODE_USE_BEDROCK:
+   bedrock?'1':'0', ANTHROPIC_BASE_URL:''}, apiKeyHelper:'', model:''}`. In `claudeAgent.js:78`, pass it
+   for non-gateway tabs (gateway tabs keep `gatewaySettings`). This routes sub/API tabs off the pinned
+   gateway.
+2. **Per-backend catalog.** `loadClaudeModels` gains a `settings` arg (passed to the SDK `query`
+   options); load `view.catalog.claude` under the subscription override so a sub tab lists native
+   `Opus/Sonnet/Haiku`. Gateway tabs keep `gatewayModels`. (A machine with no subscription login simply
+   gets no sub catalog and falls back to the static list — honest.)
+3. **Model reset on switch + honest label.** On a non-gateway tab, don't carry a model that isn't in
+   its catalog (drop to default); the footer label then reflects the real backend (the `gw`/label code
+   at `webview.js:1095/1103` already distinguishes — it just needs the routing to be real).
+4. **The model slots too (found 2026-10-23, before the release).** Clearing `model` was not enough: the
+   pinned file also sets the model slots (`ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/opus-high`, Sonnet
+   `nexus-auto-unlimited`, Haiku `nexus-auto-bargain`), so the sub catalog still resolved Opus to
+   `anthropic/opus-high[1m]`, and Haiku, which Claude Code's background calls use, to `nexus-auto-bargain`;
+   both are refused off the gateway. `offGatewaySettings(bedrock, inherited)` also sets each of
+   `OFF_GATEWAY_VARS` (the three slots, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, the subagent model
+   and the gateway's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`) to what the tab inherits, the pod's own
+   export, when that suits the backend (a Bedrock id such as `us.anthropic.claude-sonnet-4-6` only on
+   Bedrock), else to `''`, Claude Code's default.
 
 ## 17. Decision log
 

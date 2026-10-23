@@ -42,9 +42,6 @@ function authStamp({ env = process.env, home = codexHome(env) } = {}) {
   return `${Math.floor(st.mtimeMs)}:${st.size}:${last}`;
 }
 
-/** Device-code sign-in, for a terminal: it prints a link and a one-time code. ChatGPT must allow it (a setting, off by default). */
-function loginCommand(program) { return (program === 'codex' ? 'codex' : JSON.stringify(program)) + ' login --device-auth'; }
-
 const CALLBACK_PORT = 1455;      // codex login listens here for the browser's return; VS Code forwards it from the user's machine when remote
 
 /**
@@ -76,9 +73,10 @@ function startLogin(program, o = {}) {
  * Resolves true once a login is there, false when the wait runs out. Polled: the directory may not exist yet. With `since`
  * (an authStamp), only a login written after it counts: a file that is there already, holding a login Codex refused, does
  * not end the wait, or the sign-in would be stopped before the browser came back to it. `codex login` removes the old file
- * as it starts; no file is no login, so the wait goes on until the new one is written.
+ * as it starts; no file is no login, so the wait goes on until the new one is written. With `until` (a promise), the wait
+ * is over when it settles, as when the sign-in ends without a login (its terminal closed): one last look, then the answer.
  */
-function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15 * 60000, intervalMs = 2000, since } = {}) {
+function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15 * 60000, intervalMs = 2000, since, until } = {}) {
   return new Promise((resolve) => {
     const check = () => loggedIn({ env, home }) && (since === undefined || authStamp({ env, home }) !== since);
     if (check()) { resolve(true); return; }
@@ -88,7 +86,8 @@ function waitForLogin({ env = process.env, home = codexHome(env), timeoutMs = 15
       else if (Date.now() - t0 >= timeoutMs) { clearInterval(timer); resolve(false); }
     }, intervalMs);
     if (timer.unref) timer.unref();
+    if (until) Promise.resolve(until).then(() => true, () => true).then(() => { clearInterval(timer); resolve(check()); });
   });
 }
 
-module.exports = { codexHome, loggedIn, refused, authStamp, loginCommand, startLogin, waitForLogin, CALLBACK_PORT };
+module.exports = { codexHome, loggedIn, refused, authStamp, startLogin, waitForLogin, CALLBACK_PORT };

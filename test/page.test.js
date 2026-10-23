@@ -148,6 +148,13 @@ assert(/^Running claude-fable-5-1\. Backend: subscription\. Model and effort\. C
 assert.strictEqual($('#t-ctx').title, 'Context 42% used · 420k of 1M tokens');
 assert.strictEqual($('#t-ctx .fill').getAttribute('stroke-dasharray'), (0.42 * 2 * Math.PI * 6).toFixed(2) + ' ' + (2 * Math.PI * 6).toFixed(2));
 assert.strictEqual($('#t-cache').textContent, '50m', 'counts down from the last answer'); assert(/50 more minutes/.test($('#t-cache').title));
+// the session runs another model than the one chosen (Claude Code moved it after a refusal): the pill names that one, marked, and says why
+const OFF = { model: 'claude-opus-4-8', label: 'Opus 4.8', title: 'Running Opus 4.8 (claude-opus-4-8), not Fable 5.1: Claude Code moved this session to it.' };
+host({ type: 'tabs', tabs: [with_(A, { model: 'fable', effort: 'high', actualModel: 'claude-opus-4-8', backend: 'subscription', started: true, off: OFF }), B], active: 'a' });
+assert.deepStrictEqual([$('#t-model .m').textContent, $('#t-model .e').textContent, $('#t-model').className], ['Opus 4.8', 'High', 'tb off']);
+assert.strictEqual($('#t-model').title, OFF.title + ' Backend: subscription. Model and effort. Changes apply from the next message.');
+host({ type: 'tabs', tabs: [with_(A, { model: 'fable', actualModel: 'claude-fable-5-1', started: true }), B], active: 'a' });
+assert.deepStrictEqual([$('#t-model .m').textContent, $('#t-model').className], ['Fable 5.1', 'tb'], 'once it runs the model chosen, the choice again, unmarked');
 for (const [pct, cls] of [[79, 'tb'], [80, 'tb warn'], [95, 'tb error']]) { host({ type: 'tabs', tabs: [with_(A, { context: { percent: pct, used: 1, max: 2 } }), B], active: 'a' }); assert.strictEqual($('#t-ctx').className, cls, pct + '%'); }
 host({ type: 'tabs', tabs: [with_(A, { context: { percent: 1, used: 1, max: 2 } }), B], active: 'a' });
 assert(parseFloat($('#t-ctx .fill').getAttribute('stroke-dasharray')) > 1, 'a sliver is still visible at 1%');
@@ -555,6 +562,17 @@ ev('a', { kind: 'result', ok: true, duration_ms: 1200, usage: { input: 10, cache
 { const r = $$('#panes .pane .result').filter((n) => /via/.test(n.textContent)).pop();
   assert(/done · 1\.2s · in 10 · cached 0 · out 3 · via gpt-6-luna ×2, grok-4\.6$/.test(r.textContent), 'short names, with a count past one');
   assert.strictEqual(r.title, 'Answered through the gateway by global.openai.gpt-6-luna (2 requests), xai/grok-4.6, as the gateway reported. A gateway\'s own billing is not Anthropic\'s list price.'); }
+// off the gateway, a turn answered by another model than the one meant says which: Claude Code moved the session after a refusal
+ev('a', { kind: 'result', ok: true, duration_ms: 1000, usage: { input: 1, cache_read: 2, output: 3 }, answered: [{ model: 'claude-opus-4-8', label: 'Opus 4.8' }], wanted: 'claude-opus-5-5' });
+{ const r = $$('#panes .pane .result').pop();
+  assert(/done · 1\.0s · in 1 · cached 2 · out 3 · answered by Opus 4\.8$/.test(r.textContent), r.textContent);
+  assert.strictEqual(r.title, 'Answered by claude-opus-4-8, as each response named its model, not claude-opus-5-5.'); }
+// and Claude Code's notice of the move is marked, its link a link
+ev('a', { kind: 'note', level: 'warn', text: 'Opus 5.5\'s safeguards flagged this session. Learn more: https://support.claude.com/en/articles/8106465' });
+{ const n = $$('#panes .pane .status').pop();
+  assert.deepStrictEqual([n.className, n.querySelector('a') && n.querySelector('a').href], ['msg status warn', 'https://support.claude.com/en/articles/8106465']); }
+ev('a', { kind: 'note', text: 'an ordinary note' });
+assert.strictEqual($$('#panes .pane .status').pop().className, 'msg status', 'an ordinary note is not marked');
 // with the gateway's own figure, that is the cost shown, and Claude Code's estimate moves to the tooltip
 ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.3, costTurn: 0.045, gatewayCost: 0.002096, gatewayCostSoFar: 0.0123, gatewayEstimate: 0.0021, gatewayEstimateSoFar: 0.013, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
 { const r = $$('#panes .pane .result').pop();

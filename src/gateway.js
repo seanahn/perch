@@ -8,6 +8,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { PROVIDER_MODEL } = require('./meter');
 
 const DEFAULT_FILE = '~/.config/gateway-claude/env';
 const URL_VAR = 'ANTHROPIC_BASE_URL';
@@ -99,6 +100,35 @@ function gatewaySettings(env, baseUrl) {
 }
 
 /**
+ * What a pinned gateway also sets in settings.json and a tab off it must not keep: the model slots, which name gateway
+ * models (c3-gateway-login: Opus anthropic/opus-high, Sonnet nexus-auto-unlimited, Haiku nexus-auto-bargain) that the
+ * subscription and Bedrock refuse, and the gateway's switch-off of Anthropic's betas.
+ */
+const OFF_GATEWAY_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+  'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'];
+
+/**
+ * Settings that take a Claude tab OFF a gateway the pod pins in ~/.claude/settings.json (seclab "everywhere" mode:
+ * ANTHROPIC_BASE_URL + an apiKeyHelper). Command-line settings rank above the file, so empty values clear the pin
+ * (verified 2026-10-22: the CLI then left the gateway). The model is cleared too — the gateway's name
+ * (e.g. anthropic/opus-high) is not one a subscription or Bedrock knows, and would 400 — and so are the model slots
+ * (OFF_GATEWAY_VARS): each goes back to what this process inherited, the pod's own export, when that suits the backend
+ * (a Bedrock id such as us.anthropic.claude-sonnet-4-6 only on Bedrock), else to '', Claude Code's default.
+ * @param {boolean} bedrock  true for API / Bedrock, false for the subscription
+ * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)
+ * @returns {{ env: Record<string,string>, apiKeyHelper: string, model: string }}
+ */
+function offGatewaySettings(bedrock, inherited = process.env) {
+  const env = { CLAUDE_CODE_USE_BEDROCK: bedrock ? '1' : '0', ANTHROPIC_BASE_URL: '' };
+  for (const k of OFF_GATEWAY_VARS) {
+    const v = typeof inherited[k] === 'string' ? inherited[k] : '';
+    env[k] = (bedrock || !PROVIDER_MODEL.test(v)) ? v : '';
+  }
+  return { env, apiKeyHelper: '', model: '' };
+}
+
+/**
  * The models a tab on the gateway can choose, from the file: Claude Code's three aliases, each sent as the gateway name the
  * file maps it to (ANTHROPIC_DEFAULT_OPUS_MODEL and the others), and the default, ANTHROPIC_MODEL. Claude Code's own
  * catalog does not apply: its ids would go to the gateway as they are, and the gateway routes by its own names.
@@ -128,4 +158,4 @@ function createTemplate(file) {
   fs.writeFileSync(file, TEMPLATE, { flag: 'wx', mode: 0o600 });
 }
 
-module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, gatewayModels, describe, createTemplate };
+module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, gatewayModels, describe, createTemplate };

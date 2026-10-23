@@ -5,7 +5,7 @@
 
 const { randomUUID } = require('crypto');
 const { Relay } = require('./relay');
-const { gatewaySettings } = require('./gateway');
+const { gatewaySettings, offGatewaySettings } = require('./gateway');
 
 class AsyncQueue {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -73,9 +73,11 @@ class ClaudeAgent {
       includePartialMessages: true,
       abortController: this.abort,
       env,
-      // on the gateway, the same variables as this process's own settings, which Claude Code applies over ~/.claude/settings.json:
-      // a window set to API / Bedrock there does not take the tab off the gateway
-      ...(this.opts.gateway ? { settings: gatewaySettings(this.opts.env, env.ANTHROPIC_BASE_URL) } : {}),
+      // Settings are applied over ~/.claude/settings.json, so they decide the backend whatever the pod pins there.
+      // Gateway: this process's own gateway variables. Otherwise (subscription / API / Bedrock): clear a pinned gateway
+      // so the tab is truly on the chosen backend, not the gateway the pod forces (seclab "everywhere" mode).
+      ...(this.opts.gateway ? { settings: gatewaySettings(this.opts.env, env.ANTHROPIC_BASE_URL) }
+        : this.opts.offGateway ? { settings: offGatewaySettings(this.opts.offGateway.bedrock) } : {}),
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();
@@ -149,6 +151,34 @@ class ClaudeAgent {
   /** Nothing is queued any more (the session is idle, or its process ended): any bubble still marked queued is not. */
   _settle() { for (const q of this.waiting.splice(0)) this.emit({ kind: 'dequeued', qid: q }); }
 
+  /**
+   * A response of the main conversation, by the model that gave it, as the API named it (`message.model`): the turn's
+   * result lists them, so a turn answered by another model than the one chosen can say so. A response comes as one frame
+   * per block, all with its id. A frame can replace frames a refusal fallback took back (`supersedes`); Claude Code's own
+   * messages ('<synthetic>') are no model's.
+   */
+  _answered(m) {
+    for (const u of Array.isArray(m.supersedes) ? m.supersedes : []) this._retract(u);
+    const msg = m.message || {}, model = typeof msg.model === 'string' ? msg.model : '';
+    const key = msg.id || m.uuid;
+    if (!model || model.startsWith('<') || !key) return;
+    (this.answers = this.answers || new Map()).set(key, model);
+    if (m.uuid) (this.frames = this.frames || new Map()).set(m.uuid, key);
+  }
+  /** A frame Claude Code took back: the response it belonged to answered nothing. */
+  _retract(uuid) { const key = this.frames && this.frames.get(uuid); if (key !== undefined && this.answers) this.answers.delete(key); }
+
+  /**
+   * The model's safeguards refused a response, and Claude Code retried it on a fallback model: for the rest of the session
+   * (scope 'session', or none from an older CLI), or for that one response of a sub-agent or side question ('local'). The
+   * frames of the refused response, which it lists, answered nothing.
+   */
+  _fellBack(m) {
+    for (const u of Array.isArray(m.retracted_message_uuids) ? m.retracted_message_uuids : []) this._retract(u);
+    this.emit({ kind: 'fallback', from: String(m.original_model || ''), to: String(m.fallback_model || ''), scope: m.scope === 'local' ? 'local' : 'session',
+      category: typeof m.api_refusal_category === 'string' ? m.api_refusal_category : '', text: String(m.content || '') });
+  }
+
   _onMessage(m) {
     if (m.session_id && !this.sessionId) { this.sessionId = m.session_id; this.emit({ kind: 'session', id: m.session_id }); }
     this._taken(m);
@@ -157,6 +187,7 @@ class ClaudeAgent {
         if (m.subtype === 'init') { if (m.model) this.emit({ kind: 'model', id: m.model }); }   // the model actually in use, for the tab's tooltip
         else if (m.subtype === 'compact_boundary') this.emit({ kind: 'status', text: 'context compacted' });
         else if (m.subtype === 'session_state_changed') this._state(m.state);
+        else if (m.subtype === 'model_refusal_fallback') this._fellBack(m);
         return;
       case 'stream_event': {
         const ev = m.event || {};
@@ -195,6 +226,7 @@ class ClaudeAgent {
         }
         if (texts.length) { this.lastAnswer = texts.join('\n'); this.emit({ kind: 'text', text: this.lastAnswer }); }
         this.live = '';
+        if (!m.parent_tool_use_id) this._answered(m);
         return;
       }
       case 'user': {
@@ -213,7 +245,9 @@ class ClaudeAgent {
         const cost = typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined;
         const costTurn = cost !== undefined && this.lastCost !== null ? Math.max(0, cost - this.lastCost) : undefined;
         if (cost !== undefined) this.lastCost = cost;
-        this.emit({ kind: 'result', ok: m.subtype === 'success', cost, costTurn, duration_ms: m.duration_ms, turns: m.num_turns, usage: m.usage && { input: m.usage.input_tokens, cache_read: m.usage.cache_read_input_tokens, cache_write: m.usage.cache_creation_input_tokens, output: m.usage.output_tokens }, error: m.subtype !== 'success' ? (m.result || m.subtype) : undefined });
+        const models = this.answers ? [...new Set(this.answers.values())] : [];   // the models whose responses answered the turn
+        this.answers = null; this.frames = null;
+        this.emit(Object.assign({ kind: 'result', ok: m.subtype === 'success', cost, costTurn, duration_ms: m.duration_ms, turns: m.num_turns, usage: m.usage && { input: m.usage.input_tokens, cache_read: m.usage.cache_read_input_tokens, cache_write: m.usage.cache_creation_input_tokens, output: m.usage.output_tokens }, error: m.subtype !== 'success' ? (m.result || m.subtype) : undefined }, models.length ? { models } : {}));
         if (!this.running) this.emit({ kind: 'busy', busy: false });
         return;
       case 'system_commands': return;

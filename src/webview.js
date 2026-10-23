@@ -143,6 +143,7 @@ ${glyphCss}
   .toolres.err { border-left-color: var(--vscode-charts-red); color: var(--vscode-errorForeground); }
   .status { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: center; }
   .status .done { margin-top: 4px; color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+  .status.warn { color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow)); }
   .status.sub { text-align: left; padding-left: 4px; }
   .status.sub::before { content: '\\2937\\00a0'; }
   .status.sub .who { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
@@ -212,6 +213,7 @@ ${glyphCss}
   #t-model .m { overflow: hidden; text-overflow: ellipsis; }
   #t-model .e { flex: none; }
   #t-model .chev { display: none; }
+  #t-model.off .m { color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow)); }
   #t-mode.risk { color: var(--vscode-charts-yellow); }
   #send { flex: none; width: 28px; height: 28px; margin-left: 4px; border: none; border-radius: 7px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; }
   #send:hover:not(:disabled) { filter: brightness(1.1); }
@@ -626,15 +628,16 @@ ${glyphCss}
     $tIde.hidden = !t; $sep.hidden = !t || claude;   // the rule before it is Codex's look
     $tIde.className = 'tb' + (t && t.ide ? ' on' : ''); $tIde.setAttribute('aria-pressed', String(!!(t && t.ide)));
     $tIde.title = t && t.ide ? 'IDE context is on: the active file and selection are attached to each message. Click to turn off.' : 'IDE context is off. Click to attach the active file and selection to each message.';
+    $tModel.classList.toggle('off', !!(t && t.off));   // the session runs another model than the one chosen: the pill names it, marked
     $tSlash.hidden = !claude || !commands.claude.length;
     $tCtx.hidden = !claude; $tCache.hidden = !claude;
     if (!t) { syncVoice(); $tModel.querySelector('.m').textContent = ''; $tModel.querySelector('.e').textContent = ''; $tMode.textContent = ''; $send.disabled = true; $send.className = ''; $send.innerHTML = SVG.up; return; }
 
-    const model = resolved(t.models, t.model) || (t.gateway ? 'default' : claude ? 'Claude' : 'Codex');   // on a gateway whose file names no model, the default has no name to show
+    const model = t.off ? t.off.label : resolved(t.models, t.model) || (t.gateway ? 'default' : claude ? 'Claude' : 'Codex');   // on a gateway whose file names no model, the default has no name to show
     const hasEffort = (t.efforts || []).length > 1, effort = hasEffort ? cap(resolved(t.efforts, t.effort)) : '';
     $tModel.querySelector('.m').textContent = model;
     $tModel.querySelector('.e').textContent = effort;
-    $tModel.title = (t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : t.backend === 'gateway' ? 'LLM gateway' : 'subscription') + '. ' : '') + (t.via ? 'Last answered by ' + t.via + '. ' : '')
+    $tModel.title = (t.off ? t.off.title + ' ' : t.actualModel ? 'Running ' + t.actualModel + '. ' : '') + (t.backend ? 'Backend: ' + (t.backend === 'api' ? 'API / Bedrock' : t.backend === 'gateway' ? 'LLM gateway' : 'subscription') + '. ' : '') + (t.via ? 'Last answered by ' + t.via + '. ' : '')
       + 'Model and effort. Changes apply from the next message.';
 
     const mode = MODES[t.mode] || [t.mode, ''];
@@ -956,15 +959,18 @@ ${glyphCss}
       case 'result': { endLive(p); const u = m.usage || {};
         // through a gateway, which model answered: a turn is several requests, and a routed name may send each anywhere
         const via = Array.isArray(m.via) && m.via.length ? ' · via ' + m.via.map((v) => (v.short || v.model) + (v.n > 1 ? ' ×' + v.n : '')).join(', ') : '';
+        // off the gateway, which models answered, when one is not the model the tab means: Claude Code moved the session after a refusal, say
+        const by = Array.isArray(m.answered) && m.answered.length ? ' · answered by ' + m.answered.map((a) => a.label || a.model).join(', ') : '';
         // the turn's cost: the gateway's own figure when there is one (summed over the turn's requests), else Claude Code's estimate at list prices
         const gw = typeof m.gatewayCost === 'number', est = !gw && typeof m.gatewayEstimate === 'number', sub = cur() && cur().backend === 'subscription';
         const cost = gw ? ' · $' + gwUsd(m.gatewayCost) + ' this turn' : est ? ' · ≈$' + gwUsd(m.gatewayEstimate) + ' this turn' : m.costTurn !== undefined ? ' · ≈$' + usd(m.costTurn) + ' this turn' + (sub ? ' at API rates' : '') : '';
-        const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + cost + via);   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
+        const d = add(p, 'result', (m.ok ? 'done' : 'failed' + (m.error ? ': ' + m.error : '')) + (m.duration_ms ? ' · ' + (m.duration_ms / 1000).toFixed(1) + 's' : '') + (u.input !== undefined ? ' · in ' + u.input + ' · cached ' + (u.cache_read || 0) + ' · out ' + u.output : '') + cost + via + by);   // a first turn with nothing to subtract from says nothing: the session's total is in the tooltip
         if (gw) d.title = 'The gateway\\'s own figure for this turn, summed over its requests as the gateway reported each; the session so far $' + gwUsd(m.gatewayCostSoFar || m.gatewayCost) + ' by the same reckoning.' + (m.costTurn !== undefined ? ' Claude Code\\'s estimate at Anthropic\\'s list prices, ≈$' + usd(m.costTurn) + ', does not apply to a gateway\\'s names.' : '');
         else if (est) d.title = 'This turn at list prices for what answered: each request\\'s tokens at its model\\'s rates in LiteLLM\\'s public price table, since the gateway puts no price on a streamed response; the session so far ≈$' + gwUsd(m.gatewayEstimateSoFar || m.gatewayEstimate) + ' by the same reckoning.' + (m.costTurn !== undefined ? ' Claude Code\\'s own figure, ≈$' + usd(m.costTurn) + ', prices a gateway\\'s names as Opus.' : '');
         else if (m.cost !== undefined) d.title = (m.costTurn !== undefined ? 'This turn\\'s cost at Anthropic\\'s API list prices, as Claude Code reckons it; the session so far ≈$' + usd(m.cost) + '.' : 'The whole conversation so far ≈$' + usd(m.cost) + ' at Anthropic\\'s API list prices, as Claude Code reckons it; this turn\\'s own cost is shown from the next turn on.') + (sub ? ' On a subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer.' : '');
         if (via) d.title = (d.title ? d.title + ' ' : '') + 'Answered through the gateway by ' + m.via.map((v) => v.model + (v.n > 1 ? ' (' + v.n + ' requests)' : '')).join(', ') + ', as the gateway reported.' + (gw || est ? '' : ' A gateway\\'s own billing is not Anthropic\\'s list price.');
         if (typeof m.keySpend === 'number') d.title = (d.title ? d.title + ' ' : '') + 'The gateway counts $' + gwUsd(m.keySpend) + ' spent on this token in all, every use of it included, as of this answer.';
+        if (by) d.title = (d.title ? d.title + ' ' : '') + 'Answered by ' + m.answered.map((a) => a.model).join(', ') + ', as each response named its model' + (m.wanted ? ', not ' + m.wanted : '') + '.';
         // Codex: the turn's sub-agents as they ended, a count that opens to the table of them
         const sa = m.subagents;
         if (sa && Array.isArray(sa.list) && sa.list.length) {
@@ -975,7 +981,7 @@ ${glyphCss}
         }
         if (p.mxOpen) askUsage(sid);                     // the session's usage table, open: what the turn added
         break; }
-      case 'note': { endLive(p); const d = addLinked(p, 'status', m.text);
+      case 'note': { endLive(p); const d = addLinked(p, 'status' + (m.level === 'warn' ? ' warn' : ''), m.text);   // warn: Claude Code moved the session to another model, say
         if (m.nid) d.dataset.nid = m.nid;                 // a note the host can mark done later (a login made)
         if (m.done) d.append(el('div', 'done', m.done));   // replayed after it was
         // what can be done about it stays with the note: a notification is gone in seconds

@@ -4,10 +4,10 @@ const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
-const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelLabel } = require('./models');
+const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelLabel, sameModel, fallbackNote } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
-const { resolveProgram, sdkCodex } = require('./binaries');
+const { resolveProgram, sdkCodex, terminalRun } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
@@ -201,6 +201,13 @@ function program(kind) {
   let vendorRoot = ''; try { const ext = vscode.extensions.getExtension(VENDOR_EXTENSIONS[kind]); vendorRoot = (ext && (ext.extensionUri.fsPath || ext.extensionPath)) || ''; } catch (_) { /* not installed */ }
   return resolveProgram(kind, { configured: String(cfg(kind + '.executable') || ''), vendorRoot });
 }
+/** Settles when `term` is closed: by the user, or, for a terminal that runs a program itself, as the program ends. `dispose` stops listening. */
+function whenClosed(term) {
+  let sub = null;
+  const p = new Promise((resolve) => { sub = vscode.window.onDidCloseTerminal((t) => { if (t === term) { sub.dispose(); resolve(); } }); });
+  p.dispose = () => sub.dispose();
+  return p;
+}
 const MISSING = { claude: 'Perch runs the claude program that comes with the Claude Code extension, which is not installed here. Install it, or set perch.claude.executable to a claude program.', codex: 'Perch runs the codex program that comes with the ChatGPT extension, which is not installed here. Install it, or set perch.codex.executable to a codex program.' };
 
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
@@ -237,6 +244,7 @@ class Session {
     this.model = typeof model === 'string' ? model : defaultModel(kind);     // '' = the agent's default model
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
+    this.swap = null;                // claude only: Claude Code moved this session to another model after a refusal: { from, to, category }
     this.backend = '';               // claude only: the backend this tab's agent started on
     this.gateway = kind === 'claude' && !!gateway;   // claude only: this tab runs through the gateway (src/gateway.js), whatever the window's backend
     this.via = {};                   // gateway only: the models that answered this turn's requests, by name, with how many each
@@ -315,7 +323,37 @@ class Session {
    * names the default by what a new session starts on, and a session can leave that: chosen in a running session,
    * default is Claude Code's built-in one.
    */
-  runningDefault() { return this.kind === 'claude' && !this.gateway && !this.model && this.agent ? this.actualModel : ''; }
+  runningDefault() { return this.kind === 'claude' && !this.gateway && !this.model && this.agent ? this.running() : ''; }
+  /**
+   * The model the session runs, as Claude Code last said: the one it moved the session to after a refusal, which holds
+   * until another is chosen (a report naming the model asked for does not undo it), else the one the process reports.
+   */
+  running() { return this.swap ? this.swap.to : this.actualModel; }
+  /**
+   * The model this session is meant to run, as an id: the one Claude Code moved it off, else the one chosen, by the id
+   * the catalog resolves it to. '' on default, whose label follows what the session runs, and for a name the catalog lacks.
+   */
+  wanted() {
+    if (this.swap) return this.swap.from;
+    if (!this.model) return '';
+    const cat = this.catalog(), m = cat && cat.models.find((x) => x.value === this.model);
+    return m ? m.resolved || m.value : '';
+  }
+  /**
+   * Claude off the gateway, while its process runs: the model the session runs when it is not the one meant, for the
+   * pill to name, as { model, label, title }; else null. Claude Code moves a session itself when the model's safeguards
+   * refuse a response: it retries the response on a fallback model and keeps the session there.
+   */
+  offModel() {
+    if (this.kind !== 'claude' || this.gateway || !this.agent) return null;
+    const run = this.running(), want = this.wanted();
+    if (!run || !want || sameModel(run, want)) return null;
+    const cat = this.catalog(), name = (id) => modelLabel(cat, id) || id;
+    const title = this.swap
+      ? `Running ${name(run)} (${run}), not ${name(want)}: Claude Code moved this session to it when ${name(want)}'s safeguards stopped a response${this.swap.category ? ' (' + this.swap.category + ')' : ''}.`
+      : `Running ${name(run)} (${run}), as Claude Code reports, not ${name(want)} (${want}).`;
+    return { model: run, label: name(run), title };
+  }
   /** The agent says which model it runs. On default the effort choices follow it, so one that model lacks goes back to default. */
   ran(id) {
     if (!id || id === this.actualModel) return;
@@ -360,6 +398,15 @@ class Session {
         if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
         return;
       case 'model': this.ran(ev.id); this.view.sendTabs(); return;
+      case 'fallback': {             // Claude: the model's safeguards refused a response, and Claude Code retried it on another model
+        if (ev.scope !== 'local' && ev.to) {   // for the session, from now on; a sub-agent's one response leaves it where it was
+          this.swap = { from: ev.from || '', to: ev.to, category: ev.category || '' };
+          if (this.runningDefault() && this.reconcile()) { this.view.persist(); this.agent.setEffort(''); }   // on default the efforts follow the model, as when it reports one (ran)
+          this.view.sendTabs();
+        }
+        this.post({ kind: 'note', level: 'warn', text: fallbackNote({ content: ev.text, from: ev.from, to: ev.to, scope: ev.scope }) });
+        return;
+      }
       case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn
         if (typeof ev.cost === 'number' && Number.isFinite(ev.cost)) this.viaCost = (this.viaCost || 0) + ev.cost;
         if (typeof ev.keySpend === 'number') this.keySpend = ev.keySpend;
@@ -382,6 +429,13 @@ class Session {
         const via = Object.entries(this.via).map(([model, n]) => ({ model, short: shortModel(model), n }));
         if (via.length) ev.via = via;   // what answered this turn, for the line under the answer; kept with the transcript
         this.via = {};
+        // off the gateway, whose relay says what answered (via): the models whose responses answered the turn, as each response
+        // named its model, when one is not the model meant (Claude Code moved the session after a refusal, say)
+        if (this.kind === 'claude' && !this.gateway && Array.isArray(ev.models) && ev.models.length) {
+          const want = this.wanted(), cat = this.catalog();
+          if (want && ev.models.some((id) => !sameModel(id, want))) { ev.answered = ev.models.map((id) => ({ model: id, label: modelLabel(cat, id) || id })); ev.wanted = want; }
+        }
+        delete ev.models;
         // the gateway's own figure for the turn, in place of Claude Code's estimate, which prices a gateway's names by guess
         if (this.viaCost !== null) { this.gatewayCost += this.viaCost; ev.gatewayCost = this.viaCost; ev.gatewayCostSoFar = this.gatewayCost; this.viaCost = null; this.view.persist(); }
         // and, for a streamed response the gateway puts no price on, the turn at the answering models' list rates
@@ -454,15 +508,19 @@ class Session {
       this.backend = this.gateway ? 'gateway' : this.view.meter ? this.view.meter.backend() : '';
       const gw = this.gateway ? this.view.gateway() : null;
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
+      const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the pod pins a gateway for all Claude Code; a non-gateway tab must escape it
+      const launchCat = this.catalog();
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
-        model: this.model || undefined,
+        // off a pinned gateway the subscription does not know its name (anthropic/opus-high): keep the model only if the catalog has it
+        model: (this.model && (!pinned || !launchCat || modelEntry(launchCat, this.model))) ? this.model : undefined,
         effort: this.effort || undefined,
         executable: prog.path || undefined,
         costBefore: this.costSoFar === null ? undefined : this.costSoFar,
         env: gw ? Gateway.gatewayEnv(gw.vars) : undefined,
         gateway: gw ? { target: gw.vars.ANTHROPIC_BASE_URL } : undefined,   // through the relay, which sees which model answers
+        offGateway: pinned && this.backend ? { bedrock: this.backend !== 'subscription' } : undefined,   // take a sub/API tab off the pod-pinned gateway
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
@@ -683,6 +741,7 @@ class Session {
     if (!this.allowedModels().includes(value)) return;
     this.model = value;
     if (this.agent) this.actualModel = '';   // until the agent says what it runs now, which Claude is asked at once
+    this.swap = null;                        // a model chosen: the one Claude Code moved the session to is no longer the word
     // the new model may not accept the current effort. Default in a running Claude session is whatever Claude says it now
     // runs, so the effort is checked when it says (ran)
     const effortReset = !(value === '' && this.agent && this.kind === 'claude' && !this.gateway) && this.reconcile();
@@ -699,7 +758,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -719,7 +778,8 @@ class Session {
       id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
       thread: this.kind === 'codex' && !!this.agentSessionId,   // a Codex thread on record: its usage, sub-agents included, can be read
       mode: this.mode, modes: MODES[this.kind],
-      model: this.model, models: this.modelOptions(), actualModel: this.actualModel,
+      model: this.model, models: this.modelOptions(), actualModel: this.running(),
+      off: this.offModel(),            // the session runs another model than the one meant: the pill names it
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
       backend: this.agent ? this.backend : '',
@@ -766,7 +826,7 @@ class PerchView {
     this.graceTimer = null;
     this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
     this.unlockTimer = null;
-    this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex));
+    this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex), { program: () => program('claude') });
     // list prices for a gateway's models, in the extension's own storage: read when a tab goes through the gateway
     this.prices = Prices.createPrices({ file: require('path').join((context.globalStorageUri && context.globalStorageUri.fsPath) || require('path').join(require('os').tmpdir(), 'perch'), 'litellm-prices.json') });
     this.voice = new VoiceHost({
@@ -849,8 +909,7 @@ class PerchView {
     if (choice) {                    // from a note's button (the notification may be gone, or still waiting unseen): log in, if that is still what is missing
       if (choice !== 'Log In' || this.meter.backend() === 'api') return;
       if (this.meter.canRun()) { vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.'); return; }
-      await this.meter.login();
-      if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.');
+      await this.claudeSignIn();
       return;
     }
     if (this.claudeLoginOpen) return;
@@ -866,9 +925,21 @@ class PerchView {
       const pick = await vscode.window.showWarningMessage(`Claude is not logged in on ${host}. Perch runs Claude Code with its login, kept in ${this.meter.meter.claudeDir}. Log In opens Claude Code's sign-in; or use API / Bedrock credentials instead.`, 'Log In', 'Use API / Bedrock');
       if (pick === 'Use API / Bedrock') { await this.meter.toggleBackend(); return; }
       if (pick !== 'Log In') return;
-      await this.meter.login();
-      if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.');
+      await this.claudeSignIn();
     } finally { this.claudeLoginOpen = false; }
+  }
+
+  /**
+   * Log In, for a message held back: Claude Code's sign-in, or the one waiting already (opened by the backend switch, say,
+   * which brings it back), and said once when the login lands, however often Log In is pressed meanwhile.
+   */
+  async claudeSignIn() {
+    const opened = await this.meter.login();
+    if (!opened && !this.meter.signIn) return;        // no way in was found, and the user has been told
+    if (this.claudeSignInWatched) return;             // a press before this one waits for it already, and will say
+    this.claudeSignInWatched = true;
+    try { if (await this.meter.waitForLogin()) vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.'); }
+    finally { this.claudeSignInWatched = false; }
   }
 
   // ---- the gateway: an Anthropic-compatible endpoint a Claude tab can be put on, described by a file of the user's
@@ -977,6 +1048,7 @@ class PerchView {
       return;
     }
     this.codexLoginRunning = true;
+    let closed = null;               // the Device Code terminal's closing: the sign-in in it is over then, logged in or not
     try {
       const prog = program('codex');
       if (prog.from === 'none') { vscode.window.showErrorMessage('Perch: ' + MISSING.codex); return; }
@@ -986,7 +1058,13 @@ class PerchView {
       const since = codexAuth.authStamp();   // the login there now, if any, refused or not: only a new one ends the wait
       let child = null;
       if (pick === 'Device Code') {
-        const term = vscode.window.createTerminal({ name: 'Codex login' }); term.show(); term.sendText(codexAuth.loginCommand(exe)); this.codexLoginTerminal = term;
+        // the device-code sign-in prints a link and a one-time code; ChatGPT must allow it (a setting, off by default)
+        const run = terminalRun(exe, ['login', '--device-auth']);
+        const term = vscode.window.createTerminal(Object.assign({ name: 'Codex login' }, run.options));
+        term.show();
+        if (run.text) term.sendText(run.text);
+        this.codexLoginTerminal = term;
+        closed = whenClosed(term);
       } else {
         let started;
         try { started = await codexAuth.startLogin(exe); } catch (e) { vscode.window.showErrorMessage('Perch: the Codex login could not start. ' + e.message); return; }
@@ -996,12 +1074,12 @@ class PerchView {
         this.codexLoginUrl = started.url;
         await vscode.env.openExternal(vscode.Uri.parse(started.url));
       }
-      const ok = await codexAuth.waitForLogin({ since });
+      const ok = await codexAuth.waitForLogin(closed ? { since, until: closed } : { since });
       if (child) { try { child.kill(); } catch (_) { /* ended on its own */ } }
       if (ok) { this.context.globalState.update(REFUSED_LOGIN_KEY, undefined); this.codexLoginDone(); }
       if (ok) vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.');
       else vscode.window.showWarningMessage('Perch: the Codex login did not complete.');
-    } finally { this.codexLoginRunning = false; this.codexLoginUrl = null; this.codexLoginTerminal = null; }
+    } finally { if (closed) closed.dispose(); this.codexLoginRunning = false; this.codexLoginUrl = null; this.codexLoginTerminal = null; }
   }
 
   /** Codex is logged in: every login note, in every Codex tab, says so in place of its buttons, and so in what is replayed. */
@@ -1032,6 +1110,21 @@ class PerchView {
     this.sendEvent(sid, { kind: 'insert', text: picked.map((u) => '@' + rel(u)).join(' ') + ' ' });
   }
 
+  /**
+   * The gateway ~/.claude/settings.json pins for every Claude Code (seclab "everywhere" mode: an env.ANTHROPIC_BASE_URL
+   * with an apiKeyHelper), or '' if none. A non-gateway tab inherits this pin unless it is overridden, so Perch uses it to
+   * decide when a subscription / API tab needs offGatewaySettings and when the Claude catalog must load off the gateway.
+   */
+  pinnedGatewayUrl() {
+    try {
+      const p = this.meter && this.meter.meter && this.meter.meter.settingsPath;
+      if (!p) return '';
+      const d = JSON.parse(require('fs').readFileSync(p, 'utf8')) || {};
+      const url = d.env && d.env.ANTHROPIC_BASE_URL;
+      return (typeof url === 'string' && url && d.apiKeyHelper) ? url : '';
+    } catch (_) { return ''; }
+  }
+
   /** Read both agents' model lists. Codex is a file read; Claude starts its CLI without sending a message. */
   loadCatalogs(force) {
     if (this.loading && !force) return this.loading;
@@ -1045,7 +1138,9 @@ class PerchView {
     };
     try { apply('codex', loadCodexModels()); } catch (_) { /* keep the fallback lists */ }
     this.loading = Promise.resolve()
-      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined }))
+      // When the pod pins a gateway for all Claude Code, load the catalog off it (the subscription), so non-gateway tabs
+      // list native models rather than the gateway's anthropic/… names. Gateway tabs use Gateway.gatewayModels instead.
+      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(false) : undefined }))
       .then((cat) => apply('claude', cat))
       .catch(() => { /* keep the fallback lists */ });
     return this.loading;

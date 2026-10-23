@@ -66,4 +66,70 @@ function sdkCodex(modules = path.join(__dirname, '..', 'node_modules')) {
   return '';
 }
 
-module.exports = { resolveProgram, vendorClaude, vendorCodex, bundled, sdkCodex };
+/** Whether this Linux runs on musl rather than glibc, told the way the Claude SDK tells it. */
+function isMusl() {
+  try {
+    const r = process.report && typeof process.report.getReport === 'function' ? process.report.getReport() : null;
+    return !!r && (r.header ? r.header.glibcVersionRuntime : undefined) === undefined;
+  } catch (_) { return false; }
+}
+
+/**
+ * The SDK's own `claude`, found where the SDK looks for it: in its platform package, `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`,
+ * and on Linux in both builds, the one of this machine's C library first. For running the program directly, as a login
+ * does: the SDK finds it by itself when it runs it, so resolveProgram leaves the path empty.
+ * @returns {string} '' when there is none
+ */
+function sdkClaude(modules = path.join(__dirname, '..', 'node_modules'), { platform = process.platform, arch = process.arch, musl } = {}) {
+  if (musl === undefined) musl = platform === 'linux' && isMusl();
+  const names = platform === 'android' ? [`linux-${arch}-android`]
+    : platform === 'linux' ? (musl ? [`linux-${arch}-musl`, `linux-${arch}`] : [`linux-${arch}`, `linux-${arch}-musl`])
+    : [`${platform}-${arch}`];
+  for (const n of names) {
+    const p = path.join(modules, '@anthropic-ai', 'claude-agent-sdk-' + n, 'claude' + (platform === 'win32' ? '.exe' : ''));
+    if (isFile(p)) return p;
+  }
+  return '';
+}
+
+/**
+ * A program on PATH, found as a shell would find it: the first file of that name that may be run, on Windows with one of
+ * the endings PATHEXT lists.
+ * @returns {string} its path; '' when there is none
+ */
+function onPath(name, { env = process.env, platform = process.platform } = {}) {
+  const win = platform === 'win32';
+  const dirs = String(env.PATH || env.Path || '').split(win ? ';' : ':').map((d) => d.replace(/^"(.*)"$/, '$1')).filter(Boolean);
+  const ends = win ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+  for (const d of dirs) {
+    for (const e of ends) {
+      const p = path.join(d, name + e);
+      if (!isFile(p)) continue;
+      if (win) return p;
+      try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) { /* there, but not to be run */ }
+    }
+  }
+  return '';
+}
+
+/** A word as a POSIX shell reads it back unchanged: bare when nothing in it means anything to a shell, else in single quotes. */
+function shellQuote(word) {
+  const s = String(word);
+  return /^[A-Za-z0-9_./:@+-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * How a terminal is to run a program, with its arguments. On Windows the terminal runs the program itself and VS Code
+ * hands it the arguments as given, so no shell reads them: PowerShell and cmd quote differently, and Windows PowerShell
+ * drops the quotes inside an argument. That terminal closes when the program ends. Elsewhere the command is typed into the
+ * user's shell, quoted for a POSIX shell, so what the program printed stays on screen once it has ended.
+ * @param {string} program
+ * @param {string[]} args
+ * @returns {{ options: object, text: string }}  more options for createTerminal, and the line to send it ('' for none)
+ */
+function terminalRun(program, args, platform = process.platform) {
+  if (platform === 'win32') return { options: { shellPath: program, shellArgs: args.slice() }, text: '' };
+  return { options: {}, text: [program, ...args].map(shellQuote).join(' ') };
+}
+
+module.exports = { resolveProgram, vendorClaude, vendorCodex, bundled, sdkCodex, sdkClaude, onPath, shellQuote, terminalRun };

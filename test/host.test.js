@@ -7,6 +7,13 @@ const assert = require('assert');
 const { install, fakeView, created, engines, flush, CATALOGS, CODEX_LIMITS, knobs } = require('./stubs');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const vals = (list) => list.map((o) => o.value);
+// Claude's Log In, as typed into a terminal, for a window whose perch.claude.executable is /opt/claude (never run here)
+const CLAUDE_LOGIN = `/opt/claude --settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}' auth login`;
+const OFF_BEDROCK = '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}';
+/** `p`, or 'timed out' if it has not settled within `ms`: a wait that never ends must fail the test, not end it unseen */
+const within = (p, ms = 2000) => Promise.race([p, wait(ms).then(() => 'timed out')]);
+/** Run `f` as if on `platform`, for code that asks process.platform as it runs */
+const onPlatform = (platform, f) => { const was = Object.getOwnPropertyDescriptor(process, 'platform'); Object.defineProperty(process, 'platform', { value: platform }); try { return f(); } finally { Object.defineProperty(process, 'platform', was); } };
 const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.now() + 3660000).toISOString(), model: null }];
 
 (async () => {
@@ -265,7 +272,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
   // ======================================================================== Claude usage and backend (merged from AI Meter)
   {
-    const m = install();                                                      // subscription, logged in, AI Meter not installed
+    const m = install(undefined, { config: { 'claude.executable': '/opt/claude' } });   // subscription, logged in, AI Meter not installed
     await flush();
     assert.deepStrictEqual(m.ui.bars, [], 'perch puts nothing in the status bar: the gauge is the footer of each tab');
     assert.strictEqual(m.globalState._dump()['perch.meter.limits'].length, 2, 'the reading is cached for the next reload');
@@ -315,7 +322,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     await m.commands['perch.meter.toggleBackend'](); await flush(); await flush();
     assert.deepStrictEqual(m.box.writes, [true, false]);
     assert(/has no subscription login yet/.test(m.ui.infos.pop()));
-    assert.deepStrictEqual(m.ui.executed, ['claude-vscode.editor.openLast'], 'login opens the Claude Code panel when that extension is installed');
+    assert.deepStrictEqual([m.ui.executed, m.ui.terminals.map((t) => [t.o.env, t.sent])], [[], [[{ CLAUDE_CODE_USE_BEDROCK: '0' }, [CLAUDE_LOGIN]]]], 'login runs the CLI\'s sign-in off Bedrock, not the Claude Code panel, whose open session never shows a login page');
     assert.strictEqual(v.lastMeter().backend, 'subscription');
     assert.strictEqual(v.events(idle).filter((e) => e.kind === 'note' && /backend is now subscription/.test(e.text)).length, 1);
     assert.strictEqual(v.events(run).filter((e) => e.kind === 'note' && /backend is now/.test(e.text)).length, 2, 'moved each time the backend changes');
@@ -357,7 +364,77 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     assert.deepStrictEqual([v.lastMeter().text, v.lastMeter().action, v.lastMeter().level], ['—', 'login', 'none']);
     v.fire({ type: 'meterLogin' }); await flush();
-    assert.strictEqual(m.ui.terminals.length <= 1, true);                     // a terminal only if a claude CLI exists on this machine
+    // with no setting and no Claude Code extension, the tabs run the SDK's own claude, and so does the login: run directly,
+    // since `claude` on PATH, if there is one, need not be it
+    const B = require('../src/binaries'), sdk = B.sdkClaude();
+    assert(sdk, 'this checkout has the SDK\'s own claude');
+    assert.deepStrictEqual(m.ui.terminals.map((t) => [t.o.name, t.o.env, t.sent]), [['Claude login', { CLAUDE_CODE_USE_BEDROCK: '0' }, [`${B.shellQuote(sdk)} --settings '${OFF_BEDROCK}' auth login`]]], 'the program the tabs run');
+    m.perch.dispose();
+  }
+  {
+    // Claude's Log In: the program the tabs run, quoted for the shell; one sign-in at a time; done when a login lands that was
+    // not there when it began, or when its terminal closes
+    const m = install(undefined, { config: { 'claude.executable': '/opt/claude code/claude' }, meter: { login: false, usage: { limits: null, error: 'no-credentials' } } }); await flush();
+    const mh = m.perch.meter; mh.loginPollMs = 5;
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const typed = [`'/opt/claude code/claude' --settings '${OFF_BEDROCK}' auth login`];
+    v.fire({ type: 'meterLogin' }); await flush();
+    const [t1] = m.ui.terminals;
+    assert.deepStrictEqual([m.ui.terminals.length, t1.o.name, t1.o.env, t1.o.shellPath, t1.sent, t1.shows], [1, 'Claude login', { CLAUDE_CODE_USE_BEDROCK: '0' }, undefined, typed, 1], 'perch.claude.executable, as the tabs run it, typed into the user\'s shell, a space and all');
+    // pressed again while it waits, from the footer or the command: the same terminal, brought back, and said so
+    v.fire({ type: 'meterLogin' }); await m.commands['perch.meter.login'](); await flush();
+    assert.deepStrictEqual([m.ui.terminals.length, t1.shows, m.ui.infos.filter((x) => x === 'Perch: a Claude login is already waiting for you, in the Claude login terminal.').length], [1, 3, 2], 'one sign-in at a time');
+    // closed with no login: over, and the next press opens another
+    const d1 = mh.signIn.done; t1.dispose();
+    assert.deepStrictEqual([await within(d1), mh.signIn], [false, null], 'closed with no login: over');
+    v.fire({ type: 'meterLogin' }); await flush();
+    assert.deepStrictEqual([m.ui.terminals.length, m.ui.terminals[1].sent], [2, typed], 'the next press: another terminal');
+    const d2 = mh.signIn.done; m.box.login = true;
+    assert.deepStrictEqual([await within(d2), mh.signIn], [true, null], 'a login lands: done');
+    // an old login there already, as one refused: its being there does not end the wait; a new one does
+    m.box.token = 'refused';
+    v.fire({ type: 'meterLogin' }); await flush();
+    const d3 = mh.signIn.done;
+    assert.strictEqual(await within(d3, 60), 'timed out', 'the old login does not end it');
+    m.box.token = 'new';
+    assert.strictEqual(await within(d3), true, 'a new one does');
+    // a login made as the terminal closes: the last look sees it
+    v.fire({ type: 'meterLogin' }); await flush();
+    const d4 = mh.signIn.done; m.box.token = 'as it closed'; m.ui.terminals[m.ui.terminals.length - 1].dispose();
+    assert.strictEqual(await within(d4), true, 'logged in as it closed');
+    // on Windows the terminal runs the program itself, with its arguments as they are: no shell reads them, PowerShell and cmd
+    // quoting as they do. Its terminal closes as the program ends, which ends the wait
+    const n = m.ui.terminals.length;
+    onPlatform('win32', () => v.fire({ type: 'meterLogin' }));
+    const tw = m.ui.terminals[n];
+    assert.deepStrictEqual([m.ui.terminals.length, tw.o.name, tw.o.env, tw.o.shellPath, tw.o.shellArgs, tw.sent], [n + 1, 'Claude login', { CLAUDE_CODE_USE_BEDROCK: '0' }, '/opt/claude code/claude', ['--settings', OFF_BEDROCK, 'auth', 'login'], []], 'Windows: the program run directly, nothing typed');
+    const dw = mh.signIn.done; tw.dispose();
+    assert.deepStrictEqual([await within(dw), mh.signIn], [false, null], 'the program ended with no login: over');
+    // which program: the one the tabs run, as resolveProgram names it
+    const B = require('../src/binaries'), prog = mh.claudeProgram;
+    const pick = (p) => { mh.claudeProgram = () => p; return mh.loginProgram(); };
+    assert.deepStrictEqual([pick({ path: '/opt/x', from: 'setting' }), pick({ path: '/ext/anthropic.claude-code/resources/native-binary/claude', from: 'extension' }), pick({ path: '', from: 'sdk' }), pick({ path: '', from: 'none' }), pick(null)],
+      ['/opt/x', '/ext/anthropic.claude-code/resources/native-binary/claude', B.sdkClaude(), B.onPath('claude'), B.onPath('claude')], 'the setting; the Claude Code extension\'s; the SDK\'s own; else one on PATH, whatever this machine has');
+    mh.claudeProgram = () => { throw new Error('gone'); };
+    assert.strictEqual(mh.loginProgram(), B.onPath('claude'), 'a lookup that fails is none');
+    mh.claudeProgram = prog;
+    // no program at all: the Claude Code panel is the last way in; with no Claude Code either, say what is missing
+    mh.loginProgram = () => '';
+    m.ui.executed.length = 0; const n2 = m.ui.terminals.length;
+    assert.deepStrictEqual([await mh.login(), m.ui.executed, m.ui.terminals.length, mh.signIn], [true, ['claude-vscode.editor.openLast'], n2, null], 'the panel, when nothing can be run');
+    m.changeExtensions({ 'anthropic.claude-code': null });
+    assert.deepStrictEqual([await mh.login(), m.ui.executed.length, m.ui.terminals.length, m.ui.errors.pop()], [false, 1, n2, 'Perch: found no claude program to log in with, here or on PATH. Install the Claude Code extension, or set perch.claude.executable to a claude program, then log in.']);
+    delete mh.loginProgram;
+    // a held message's Log In, then its note's, twice, while that waits: one sign-in, and said once when the login lands
+    m.box.login = false; m.ui.infos.length = 0; const n3 = m.ui.terminals.length;
+    v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
+    m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: x, text: 'hello' }); await flush(); await flush();
+    assert.strictEqual(m.ui.terminals.length, n3 + 1, 'the notification\'s Log In: a sign-in');
+    v.fire({ type: 'noteAction', sid: x, action: 'claudeLogin' }); v.fire({ type: 'noteAction', sid: x, action: 'claudeLogin' }); await flush();
+    assert.deepStrictEqual([m.ui.terminals.length, m.ui.infos.filter((i) => /already waiting/.test(i)).length], [n3 + 1, 2], 'the note\'s, while it waits: that one, brought back');
+    m.box.login = true; await wait(30); await flush();
+    assert.deepStrictEqual(m.ui.infos.filter((i) => /Claude is logged in/.test(i)), ['Perch: Claude is logged in. Send your message again.'], 'said once');
+    m.perch.dispose();
   }
   {
     // the cached reading is shown before the first poll returns
@@ -956,7 +1033,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
   // ---- Claude with nothing to authenticate with: the first message is held back, the way in offered, the text put back
   {
-    const m = install(undefined, { meter: { login: false }, remote: 'ssh-remote' }); await flush();
+    const m = install(undefined, { meter: { login: false }, remote: 'ssh-remote', config: { 'claude.executable': '/opt/claude' } }); await flush();
+    m.perch.meter.loginPollMs = 5;
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active; const made = created.length;
     v.fire({ type: 'send', sid: x, text: 'hello' }); await flush(); await flush();
@@ -966,8 +1044,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(/^Claude is not logged in on .+\. Perch runs Claude Code with its login, kept in \/nonexistent\/perch-test\/\.claude\. Log In opens Claude Code's sign-in; or use API \/ Bedrock credentials instead\.$/.test(m.ui.warnings.pop()));
     assert.deepStrictEqual(m.ui.executed, [], 'declined: nothing opens');
     // Log In: Claude Code's own sign-in, watched until the login lands
-    m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: x, text: 'hello' }); m.box.login = true; await flush(); await flush(); await flush();
-    assert.deepStrictEqual([m.ui.executed, m.ui.infos.pop()], [['claude-vscode.editor.openLast'], 'Perch: Claude is logged in. Send your message again.']);
+    m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: x, text: 'hello' }); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.executed, m.ui.terminals.map((t) => t.sent), m.ui.infos.filter((i) => /logged in/.test(i))], [[], [[CLAUDE_LOGIN]], []], 'the sign-in, in a terminal; nothing said yet');
+    m.box.login = true; await wait(30); await flush();
+    assert.strictEqual(m.ui.infos.pop(), 'Perch: Claude is logged in. Send your message again.', 'said when the login lands');
     v.fire({ type: 'send', sid: x, text: 'hello' }); await flush();
     assert.strictEqual(created.length, made + 1, 'logged in: the message goes to a Claude of its own');
     // the other way: switch to API / Bedrock, which has credentials here
@@ -986,6 +1066,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(/^Perch: could not create \/nonexistent\/perch-test\/\.claude\/settings\.json\. /.test(m.ui.errors.pop()), 'a file is made to fill in; here the place for it cannot exist');
     m.ui.answers.push('Use Subscription'); m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: z, text: 'hey' }); await flush(); await flush(); await flush();
     assert.deepStrictEqual([m.box.writes, v.lastMeter().backend, /has no subscription login yet/.test(m.ui.infos.pop())], [[true, false], 'subscription', true], 'back to the subscription, whose login is offered by the switch');
+    assert.deepStrictEqual([m.ui.terminals.length, !!m.perch.meter.signIn], [2, true], 'the switch\'s Log In: a sign-in, waiting');
     // the same choices stay as buttons under each note, for when the notification has gone. A button may be an old note's: each acts only on what still applies
     const acts = (sid) => v.events(sid).filter((e) => e.kind === 'note' && e.actions).map((e) => e.actions.map((a) => a.id));
     assert.deepStrictEqual(acts(z)[0], ['claudeSettings', 'claudeSubscription'], 'under the note for API / Bedrock without credentials');
@@ -994,15 +1075,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.ui.warnings.length = 0; m.ui.infos.length = 0; m.ui.executed.length = 0; const w0 = m.box.writes.length;
     v.fire({ type: 'noteAction', sid: z, action: 'claudeSubscription' }); await flush();
     assert.strictEqual(m.box.writes.length, w0, 'Use Subscription from an old note, the window being on the subscription already: nothing');
-    v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); m.box.login = true; await flush(); await flush(); await flush();
-    assert.deepStrictEqual([m.ui.executed, m.ui.infos.pop(), m.ui.warnings.length], [['claude-vscode.editor.openLast'], 'Perch: Claude is logged in. Send your message again.', 0], 'Log In from the note: Claude Code\'s sign-in, with no notification first');
+    // Log In from the note, while the switch's sign-in waits: that one, brought back, with no notification first; and said when it lands
+    const t0 = m.ui.terminals.length, signIn = m.ui.terminals[t0 - 1];
+    v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); await flush();
+    assert.deepStrictEqual([m.ui.terminals.length, signIn.sent, signIn.shows, m.ui.infos.pop(), m.ui.warnings.length], [t0, [CLAUDE_LOGIN], 2, 'Perch: a Claude login is already waiting for you, in the Claude login terminal.', 0], 'Log In from the note: the sign-in waiting already');
+    m.box.login = true; await wait(30); await flush();
+    assert.deepStrictEqual([m.ui.infos.pop(), m.ui.warnings.length, m.perch.meter.signIn], ['Perch: Claude is logged in. Send your message again.', 0, null], 'and said when the login lands');
     v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); await flush(); await flush();
-    assert.deepStrictEqual([m.ui.executed.length, m.ui.infos.pop()], [1, 'Perch: Claude is logged in. Send your message again.'], 'pressed again once logged in: it says so and opens nothing');
+    assert.deepStrictEqual([m.ui.terminals.length, m.ui.infos.pop()], [t0, 'Perch: Claude is logged in. Send your message again.'], 'pressed again once logged in: it says so and opens nothing');
     m.box.apiCreds = true;   // with credentials there: the switch asks nothing
     v.fire({ type: 'noteAction', sid: z, action: 'claudeApi' }); await flush(); await flush();
     assert.deepStrictEqual([m.box.writes.length, v.lastMeter().backend], [w0 + 1, 'api'], 'Use API / Bedrock from the note');
     v.fire({ type: 'noteAction', sid: z, action: 'claudeApi' }); v.fire({ type: 'noteAction', sid: z, action: 'claudeLogin' }); await flush(); await flush();
-    assert.deepStrictEqual([m.box.writes.length, m.ui.executed.length], [w0 + 1, 1], 'again, and Log In while on API / Bedrock: nothing');
+    assert.deepStrictEqual([m.box.writes.length, m.ui.terminals.length], [w0 + 1, t0], 'again, and Log In while on API / Bedrock: nothing');
     v.fire({ type: 'noteAction', sid: z, action: 'claudeSettings' }); await flush(); await flush();
     assert(/^Perch: could not create \/nonexistent\/perch-test\/\.claude\/settings\.json\. /.test(m.ui.errors.pop()), 'Open settings.json from the note');
     m.perch.dispose();
@@ -1342,6 +1427,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([m.box.codexLogins.length, /codex$/.test(m.box.codexLogins[0]), m.ui.forwarded, m.ui.external.pop(), m.ui.terminals.length, m.box.codexWaits, m.box.codexKilled, m.ui.infos.pop()],
       [1, true, ['http://localhost:1455'], 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', 0, 1, 1, 'Perch: Codex is logged in. Send your message again.'],
       'the program here, the page there, the port between, and the server let go once the login is in');
+    assert.strictEqual(m.box.codexWaitUntil, false, 'the browser sign-in has no terminal to end its wait');
     v.fire({ type: 'send', sid: x, text: 'hello again' }); await flush(); await flush();
     assert.strictEqual(created.length, made + 1, 'logged in: the message goes to a Codex of its own');
     // the note's buttons, pressed once the login is in: they say so and start nothing
@@ -1355,7 +1441,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.box.codexLoggedIn = false; m.ui.answers.push('Device Code'); v.fire({ type: 'new', kind: 'codex' }); const y = v.lastTabs().active;
     v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
     const t = m.ui.terminals.pop();
-    assert.deepStrictEqual([t.o.name, t.sent.length, /login --device-auth$/.test(t.sent[0]), m.box.codexWaits, m.box.codexLogins.length], ['Codex login', 1, true, 3, 2], 'the device code runs no browser sign-in: the two before it were the notification\'s and the note\'s');
+    assert.deepStrictEqual([t.o.name, t.sent.length, /login --device-auth$/.test(t.sent[0]), m.box.codexWaits, m.box.codexLogins.length, m.box.codexWaitUntil], ['Codex login', 1, true, 3, 2, true], 'the device code runs no browser sign-in: the two before it were the notification\'s and the note\'s. Its wait ends when its terminal closes');
     // and the browser sign-in that cannot start says so
     m.box.codexLoggedIn = false; m.box.codexLoginFails = 'spawn ENOENT'; m.ui.answers.push('Log In'); v.fire({ type: 'send', sid: y, text: 'hi' }); await flush(); await flush(); await flush();
     assert.strictEqual(m.ui.errors.pop(), 'Perch: the Codex login could not start. spawn ENOENT');
@@ -1438,7 +1524,16 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const shown = m.ui.terminals.length;
     v.fire({ type: 'noteAction', sid: x, action: 'codexDevice' }); await flush();
     assert.deepStrictEqual([m.ui.terminals.length, /already waiting for you, in the Codex login terminal/.test(m.ui.infos.pop())], [shown, true]);
+    // its terminal closed before a login was made (by the user, or on Windows as codex ends): the wait is over, and said so
+    m.ui.warnings.length = 0;
+    m.ui.terminals[shown - 1].dispose(); for (let i = 0; i < 4; i++) await flush();
+    assert.deepStrictEqual(m.ui.warnings, ['Perch: the Codex login did not complete.'], 'closed with no login: over, not waited on for fifteen minutes');
+    // on Windows the terminal runs codex itself, with its arguments as they are: no shell reads them
+    onPlatform('win32', () => v.fire({ type: 'noteAction', sid: x, action: 'codexDevice' })); await flush();
+    const tw = m.ui.terminals[shown];
+    assert.deepStrictEqual([m.ui.terminals.length, tw.o.name, /codex(\.exe)?$/.test(tw.o.shellPath), tw.o.shellArgs, tw.sent], [shown + 1, 'Codex login', true, ['login', '--device-auth'], []], 'Windows: the program run directly, nothing typed');
     release(); for (let i = 0; i < 4; i++) await flush();
+    assert.strictEqual(m.ui.infos.pop(), 'Perch: Codex is logged in. Send your message again.');
     m.box.codexLoginHold = null;
     m.perch.dispose();
   }
@@ -1948,6 +2043,92 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     ev({ type: 'message_stop' });   // a stop with nothing open says nothing
     assert.deepStrictEqual(out, [{ kind: 'responded', at: out[0].at }, { kind: 'usage', usage: { input: 2, cache_write: 92842, cache_read: 0, output: 11, cache_write_1h: 0 } }, { kind: 'usage', usage: { input: 7, cache_write: 0, cache_read: 0, output: 40, cache_write_1h: 0 } }],
       'the counts as they stood at the end, each conversation\'s own; only the main thread\'s response restarts the cache clock');
+  }
+
+  // ---- which model answered: each response of the main conversation by the model it named, listed with the turn's result.
+  // A refusal fallback takes the refused response back (the frame that replaces it says so, and so does the notice), and
+  // says where the session went
+  {
+    const { ClaudeAgent } = require('module').prototype.require.call(module, '../src/claudeAgent.js');
+    const P = ClaudeAgent.prototype, out = [];
+    const a = { live: '', waiting: [], running: true, pending: 1, lastCost: null, emit: (e) => out.push(e), _context() {}, _taken: P._taken, _answered: P._answered, _retract: P._retract, _fellBack: P._fellBack };
+    const say = (m) => P._onMessage.call(a, m);
+    const A = (id, model, uuid, extra) => say(Object.assign({ type: 'assistant', uuid, message: { id, model, content: [] }, parent_tool_use_id: null }, extra));
+    const result = () => { say({ type: 'result', subtype: 'success' }); return out.filter((e) => e.kind === 'result').pop(); };
+    const fellBack = () => out.filter((e) => e.kind === 'fallback').pop();
+    A('msg_1', 'claude-opus-5-5', 'f1'); A('msg_1', 'claude-opus-5-5', 'f2');        // one response, a frame per block
+    A('msg_s', '<synthetic>', 'f3');                                                   // Claude Code's own message: no model's
+    A('msg_b', 'claude-haiku-4-5', 'f4', { parent_tool_use_id: 'toolu_1' });           // a sub-agent's
+    A(undefined, 'claude-fable-5-1', undefined);                                       // nothing to know it by
+    assert.deepStrictEqual(result().models, ['claude-opus-5-5'], 'the models that answered the main conversation, each once');
+    assert.strictEqual('models' in result(), false, 'a turn with no response names none');
+    // Opus 5.5's safeguards refuse a response: Claude Code takes it back, and Opus 4.8 answers instead
+    A('msg_2', 'claude-opus-5-5', 'f5'); A('msg_3', 'claude-opus-5-5', 'f6');
+    A('msg_4', 'claude-opus-4-8', 'f7', { supersedes: ['f5'] });
+    say({ type: 'system', subtype: 'model_refusal_fallback', trigger: 'refusal', direction: 'retry', scope: 'session', original_model: 'claude-opus-5-5', fallback_model: 'claude-opus-4-8', request_id: 'req_1',
+      api_refusal_category: 'cyber', api_refusal_explanation: null, retracted_message_uuids: ['f5', 'f6', 'gone'], refused_user_message_uuid: 'u1', content: 'NOTICE', uuid: 'n1', session_id: 's' });
+    assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'session', category: 'cyber', text: 'NOTICE' });
+    assert.deepStrictEqual(result().models, ['claude-opus-4-8'], 'the refused response answered nothing');
+    // an older CLI says no scope (it is the session's), no category, and nothing of what it took back
+    say({ type: 'system', subtype: 'model_refusal_fallback', original_model: 'claude-opus-5-5', fallback_model: 'claude-opus-4-8', content: 'x' });
+    assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'session', category: '', text: 'x' });
+    say({ type: 'system', subtype: 'model_refusal_fallback', scope: 'local', original_model: 'a', fallback_model: 'b', api_refusal_category: null, content: '' });
+    assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'a', to: 'b', scope: 'local', category: '', text: '' }, 'a sub-agent\'s response, or a side question\'s');
+  }
+
+  // ---- Claude Code moves a session to another model when the model's safeguards refuse a response (Opus 5.5 to Opus 4.8,
+  // cyber, as on 2026-10-20). The pill names the model running, marked; the transcript has Claude Code's notice; a turn
+  // answered by another model than the one meant says which. A report naming the model asked for does not undo the move
+  {
+    const NOTICE = 'Opus 5.5\'s safeguards flagged this session. Opus 4.6 is answering instead, or you can edit and retry with Opus 5.5.';
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+    v.fire({ type: 'setModel', sid: c, value: 'opus' });
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush();
+    const tab = () => v.tab(c), last = (sid, kind) => v.events(sid).filter((e) => e.kind === kind).pop();
+    assert.deepStrictEqual([tab().actualModel, tab().off], ['claude-opus-resolved', null], 'on the model chosen: nothing to say');
+    s.post({ kind: 'result', ok: true, models: ['claude-opus-resolved'] });
+    assert.deepStrictEqual([last(c, 'result').answered, last(c, 'result').models], [undefined, undefined], 'a turn the model chosen answered says nothing of it');
+    s.post({ kind: 'result', ok: true, models: ['us.anthropic.claude-opus-resolved-v1:0'] });
+    assert.strictEqual(last(c, 'result').answered, undefined, 'nor does one it answered under its provider\'s id');
+
+    s.post({ kind: 'fallback', from: 'claude-opus-resolved', to: 'claude-opus-4-6', scope: 'session', category: 'cyber', text: NOTICE });
+    assert.deepStrictEqual(last(c, 'note'), { kind: 'note', level: 'warn', text: NOTICE }, 'Claude Code\'s notice, in its own words');
+    const OFF = { model: 'claude-opus-4-6', label: 'Opus 4.6', title: 'Running Opus 4.6 (claude-opus-4-6), not Opus 5.5: Claude Code moved this session to it when Opus 5.5\'s safeguards stopped a response (cyber).' };
+    assert.deepStrictEqual([tab().off, tab().actualModel, tab().model], [OFF, 'claude-opus-4-6', 'opus'], 'the pill names the model running; the choice stays');
+    s.post({ kind: 'context', percent: 3, used: 30000, max: 1000000, model: 'claude-opus-resolved' });
+    assert.deepStrictEqual(tab().off, OFF, 'a report naming the model asked for does not undo the move');
+    s.post({ kind: 'result', ok: true, models: ['claude-opus-4-6'] });
+    assert.deepStrictEqual([last(c, 'result').answered, last(c, 'result').wanted], [[{ model: 'claude-opus-4-6', label: 'Opus 4.6' }], 'claude-opus-resolved'], 'each turn says which model answered it');
+    assert(s.history.some((h) => h.kind === 'note' && h.level === 'warn' && h.text === NOTICE), 'the notice is part of the transcript a page is rebuilt from');
+    // a model chosen: Claude Code is asked what it runs now, and that is the word
+    v.fire({ type: 'setModel', sid: c, value: 'haiku' });
+    assert.deepStrictEqual([tab().off, tab().actualModel], [null, 'claude-haiku-resolved']);
+    // a sub-agent's response from another model: the note, and the session stays where it is
+    s.post({ kind: 'fallback', from: 'claude-haiku-resolved', to: 'claude-opus-4-6', scope: 'local', category: '', text: '' });
+    assert.deepStrictEqual([last(c, 'note').text, tab().off], ['claude-haiku-resolved\'s safeguards stopped a response, and claude-opus-4-6 answered it instead.', null]);
+    // a restart starts afresh: the next process says what it runs
+    s.post({ kind: 'fallback', from: 'claude-haiku-resolved', to: 'claude-opus-4-6', scope: 'session', category: '', text: NOTICE });
+    assert.strictEqual(tab().off.title, 'Running Opus 4.6 (claude-opus-4-6), not Haiku 4.5: Claude Code moved this session to it when Haiku 4.5\'s safeguards stopped a response.');
+    s.restart();
+    assert.deepStrictEqual([tab().off, tab().actualModel], [null, '']);
+
+    // on default the pill names what runs anyway; a move is marked too, and the efforts follow it, as when the process reports a model
+    v.fire({ type: 'new', kind: 'claude' }); const d = v.lastTabs().active; const sd = m.perch.get(d);
+    v.fire({ type: 'send', sid: d, text: 'hi' }); await flush();
+    assert.deepStrictEqual([v.tab(d).off, v.tab(d).models[0].label], [null, 'default · Opus 5.5']);
+    sd.post({ kind: 'result', ok: true, models: ['claude-opus-4-6'] });
+    assert.strictEqual(last(d, 'result').answered, undefined, 'on default, with no move, there is no model meant to hold an answer to');
+    v.fire({ type: 'setEffort', sid: d, value: 'xhigh' });
+    sd.post({ kind: 'fallback', from: 'claude-opus-resolved', to: 'claude-opus-4-6', category: 'cyber', text: NOTICE });   // no scope, as from an older CLI: the session's
+    assert.deepStrictEqual([v.tab(d).off.label, v.tab(d).models[0].label, v.tab(d).effort, created[created.length - 1].efforts], ['Opus 4.6', 'default · Opus 4.6', '', ['xhigh', '']], 'xhigh, which Opus 4.6 lacks, back to default');
+    // on the gateway, whose relay says what answered: none of this
+    sd.gateway = true;
+    assert.strictEqual(sd.offModel(), null);
+    sd.post({ kind: 'result', ok: true, models: ['claude-opus-4-6'] });
+    assert.strictEqual(last(d, 'result').answered, undefined);
+    m.perch.dispose();
   }
 
   // ---- the real Codex agent: an app the turn tried is not connected (SharePoint, as seen on 2026-10-09): the connect link

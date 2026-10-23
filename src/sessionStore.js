@@ -11,6 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { newestRollouts } = require('./codexMeter');
+const { fallbackNote } = require('./models');
 
 const MAX_TITLE = 80;
 const HEAD_BYTES = 256 * 1024;   // a rollout opens with its instructions; the first message follows within this
@@ -175,10 +176,40 @@ function splitIde(said) {
   return { text: said.slice(0, at).trim(), tag };
 }
 
-/** @param {object[]} messages  as the Agent SDK returns them */
-function claudeEvents(messages) {
+/**
+ * The words of Claude Code's notices in a past session, by their record's uuid: a response its model's safeguards refused,
+ * retried on another model. The Agent SDK's reader gives a notice as its place in the conversation only, so they are read
+ * from the session's own file, `<id>.jsonl` in one of Claude Code's projects. Empty when there are none, or no file.
+ * A long session's file runs to tens of megabytes: it is read without blocking, and only the lines that name a notice
+ * are made text and parsed.
+ */
+async function claudeNotices(id, { claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude') } = {}) {
+  const out = new Map(), root = path.join(claudeDir, 'projects');
+  if (!/^[A-Za-z0-9_-]+$/.test(String(id || ''))) return out;   // a session's id names a file: nothing else does
+  let projects; try { projects = await fs.promises.readdir(root); } catch (_) { return out; }
+  const mark = Buffer.from('"model_refusal_fallback"');           // as a value; in text it would be escaped
+  for (const p of projects) {
+    let buf; try { buf = await fs.promises.readFile(path.join(root, p, id + '.jsonl')); } catch (_) { continue; }
+    for (let at = buf.indexOf(mark); at >= 0;) {
+      const nl = buf.indexOf(10, at), end = nl < 0 ? buf.length : nl;
+      let o; try { o = JSON.parse(buf.toString('utf8', buf.lastIndexOf(10, at) + 1, end)); } catch (_) { o = null; }
+      if (o && o.type === 'system' && o.subtype === 'model_refusal_fallback' && typeof o.uuid === 'string') out.set(o.uuid, fallbackNote({ content: o.content, from: o.originalModel, to: o.fallbackModel, scope: o.scope }));
+      at = buf.indexOf(mark, end);
+    }
+    break;
+  }
+  return out;
+}
+
+/**
+ * @param {object[]} messages  as the Agent SDK returns them
+ * @param {Map<string, string>} [notes]  the words of Claude Code's notices, by their record's uuid (claudeNotices): the SDK
+ *   returns a notice as its place in the conversation only
+ */
+function claudeEvents(messages, notes) {
   const out = [];
   for (const m of messages || []) {
+    if (m && m.type === 'system') { const text = !m.parent_tool_use_id && notes && m.uuid ? notes.get(m.uuid) : ''; if (text) out.push({ kind: 'note', level: 'warn', text }); continue; }
     if (!m || m.parent_tool_use_id || !m.message) continue;                    // a sub-agent's own exchange is not part of this one
     const c = m.message.content;
     const blocks = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
@@ -536,10 +567,15 @@ function codexRollout(id, home) {
  * What was said in a past session, newest `limit` entries of it.
  * @returns {Promise<{ events: object[], earlier: number }>}  `earlier` counts the entries before those returned
  */
-async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.codex'), sdk, limit = MAX_PAST } = {}) {
+async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.codex'), claudeDir, sdk, limit = MAX_PAST } = {}) {
   let events = [];
   if (!id) return { events, earlier: 0 };
-  if (kind === 'claude') events = claudeEvents(await (sdk || await claudeSdk()).getSessionMessages(id, dir ? { dir } : undefined));
+  if (kind === 'claude') {
+    const messages = await (sdk || await claudeSdk()).getSessionMessages(id, Object.assign(dir ? { dir } : {}, { includeSystemMessages: true }));
+    // a notice comes back as its place in the conversation, without its words: those are read from the session's own file
+    const notes = (messages || []).some((m) => m && m.type === 'system') ? await claudeNotices(id, claudeDir ? { claudeDir } : undefined) : null;
+    events = claudeEvents(messages, notes);
+  }
   else if (kind === 'codex') { const file = codexRollout(id, home); if (file) { const text = fs.readFileSync(file, 'utf8'); events = addSubagentUsage(codexEvents(text), home, { text }); } }
   const earlier = Math.max(0, events.length - limit);
   return { events: earlier ? events.slice(earlier) : events, earlier };
@@ -592,4 +628,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

@@ -147,13 +147,13 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     codex: { limits: CODEX_LIMITS(4, 1), error: null, plan: 'plus', at: Date.now() - 60000 }, codexReads: 0 }, meter);
   const fakeMeter = {
     claudeDir: '/nonexistent/perch-test/.claude', settingsPath: '/nonexistent/perch-test/.claude/settings.json',
-    bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, settingsEnv: () => box.settingsEnv || {}, readCredentials: () => (box.login ? { accessToken: 't' } : null), envNote: () => '',
+    bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, settingsEnv: () => box.settingsEnv || {}, readCredentials: () => (box.login ? { accessToken: box.token || 't' } : null), envNote: () => '',
     fetchUsage: async () => { box.fetches++; return box.usage; },
     computeCostStats: () => { if (box.cost instanceof Error) throw box.cost; return box.cost; },
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, executedWith: [], forwarded: [], external: [], copied: [] };
+  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, executedWith: [], forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -215,7 +215,10 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       get activeTextEditor() { return ui.editor; },
       get visibleTextEditors() { return ui.visible !== undefined ? ui.visible : (ui.editor ? [ui.editor] : []); },
       onDidChangeActiveTextEditor: (f) => { ui.listeners.editor.push(f); return { dispose() {} }; },
-      createTerminal: (o) => { const t = { o, sent: [], show() {}, sendText(x) { this.sent.push(x); } }; ui.terminals.push(t); return t; },
+      // a terminal: what it was opened with, the lines typed into it, how often it was shown; dispose() is its closing, by
+      // the user or as the program it runs ends
+      createTerminal: (o) => { const t = { o, sent: [], shows: 0, exitStatus: undefined, show() { this.shows++; }, sendText(x) { this.sent.push(x); }, dispose() { if (this.exitStatus) return; this.exitStatus = { code: undefined }; for (const f of ui.listeners.closeTerminal.slice()) f(this); } }; ui.terminals.push(t); return t; },
+      onDidCloseTerminal: (f) => { ui.listeners.closeTerminal.push(f); return { dispose() { const i = ui.listeners.closeTerminal.indexOf(f); if (i >= 0) ui.listeners.closeTerminal.splice(i, 1); } }; },
     },
     // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
@@ -244,11 +247,19 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './voice') return { VoiceEngine: FakeEngine, DEFAULT_HOME: '/home/u/.local/share/perch/voice' };
     if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
-    // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, and is counted
-    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => box.codexHome || '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => { box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; if (box.codexLoginHold) await box.codexLoginHold; box.codexLoggedIn = true; box.codexStamp = 'stamp-new-' + box.codexWaits; return true; },
+    // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, or when
+    // box.codexLoginHold settles, and is counted. Its sign-in ending first (o.until: its terminal closed) ends it unlogged
+    if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => box.codexHome || '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => {
+        box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; box.codexWaitUntil = !!(o && o.until);
+        if (box.codexLoginHold) {
+          const ended = await Promise.race([Promise.resolve(box.codexLoginHold).then(() => false), ...(o && o.until ? [Promise.resolve(o.until).then(() => true)] : [])]);
+          if (ended) return false;
+        }
+        box.codexLoggedIn = true; box.codexStamp = 'stamp-new-' + box.codexWaits; return true;
+      },
       // the browser sign-in: what program was run, and the page it printed; box.codexLoginFails makes it fail to start
       startLogin: async (program) => { (box.codexLogins = box.codexLogins || []).push(program); if (box.codexLoginFails) throw new Error(box.codexLoginFails); return { url: 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', child: { kill() { box.codexKilled = (box.codexKilled || 0) + 1; } } }; } });
-    if (req === './models') return { normalizeCommands: realModels.normalizeCommands, modelEntry: realModels.modelEntry, modelLabel: realModels.modelLabel, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
+    if (req === './models') return { ...realModels, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];

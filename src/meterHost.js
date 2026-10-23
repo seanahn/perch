@@ -4,12 +4,10 @@
 // Merged from AI Meter. The logic it drives lives in ./meter and has no VS Code dependency.
 const vscode = require('vscode');
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { execFileSync } = require('child_process');
 const { createMeter, summarize } = require('./meter');
 const CodexBedrock = require('./codexBedrock');
 const { readCodexUsage } = require('./codexMeter');
+const { sdkClaude, onPath, terminalRun } = require('./binaries');
 
 const CACHE_KEY = 'perch.meter.limits';
 const CODEX_BACKEND_KEY = 'perch.codex.backend';    // 'chatgpt' (the login), 'api' (a key) or 'bedrock' (AWS credentials); perch's own choice, since Codex has no setting for it
@@ -18,11 +16,18 @@ const STASH = 'perch.meter.stash.';
 const POLL_RETRY_MS = 15000;          // fast retry until the first successful fetch
 const MIN_BACKOFF_MS = 60000;         // after a rate limit, leave the endpoint alone for at least this long
 const MAX_BACKOFF_MS = 30 * 60000;
+const LOGIN_WAIT_MS = 15 * 60000;      // how long a login is waited for
+// for `claude --settings`, which ranks above the user's settings files: env.CLAUDE_CODE_USE_BEDROCK=1 in ~/.claude/settings.json
+// is applied over the process's environment, and a claude on Bedrock does not sign in to the subscription
+const OFF_BEDROCK = JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: '0' } });
 const unref = (t) => { if (t && typeof t.unref === 'function') t.unref(); return t; };
 
 class MeterHost {
-  /** @param {(claude: object, why: 'poll'|'backend'|'config'|'codex', codex: object) => void} onChange */
-  constructor(context, onChange) {
+  /**
+   * @param {(claude: object, why: 'poll'|'backend'|'config'|'codex', codex: object) => void} onChange
+   * @param {{ program?: () => { path: string, from: string } }} [o]  the claude program the tabs run, as resolveProgram gives it
+   */
+  constructor(context, onChange, { program } = {}) {
     this.context = context;
     this.onChange = onChange || (() => {});
     this.meter = createMeter();
@@ -36,6 +41,9 @@ class MeterHost {
     this.pollTimer = null; this.retryTimer = null; this.credWatcher = null; this.credDebounce = null;
     this.codexKey = null;              // the API key from secret storage, read once at start and kept in memory for the agents
     this.codexKeyReady = (context.secrets && context.secrets.get ? context.secrets.get(CODEX_SECRET) : Promise.resolve(undefined)).then((k) => { this.codexKey = k || null; }, () => { this.codexKey = null; });
+    this.claudeProgram = program || (() => ({ path: '', from: 'none' }));
+    this.signIn = null;                // the login running in a terminal, while it is waited for
+    this.loginPollMs = 2000;
     this.disposables = [];
   }
 
@@ -207,8 +215,12 @@ class MeterHost {
     return !!(process.env.ANTHROPIC_API_KEY || this.meter.readCredentials());
   }
 
-  /** Resolves true once a subscription login is there, false when the wait runs out. Polled; the credentials file may not exist yet. */
-  waitForLogin({ timeoutMs = 15 * 60000, intervalMs = 2000 } = {}) {
+  /**
+   * Resolves true once a subscription login is there, false when the wait runs out. Polled; the credentials file may not
+   * exist yet. While a login runs in a terminal, this is that login's wait (see watchSignIn).
+   */
+  waitForLogin({ timeoutMs = LOGIN_WAIT_MS, intervalMs = this.loginPollMs } = {}) {
+    if (this.signIn) return this.signIn.done;
     return new Promise((resolve) => {
       if (this.meter.readCredentials()) { resolve(true); return; }
       const t0 = Date.now();
@@ -219,43 +231,80 @@ class MeterHost {
     });
   }
 
-  /** Locate the claude CLI: PATH first, then the binary bundled inside the Claude Code extension. */
-  findClaudeBinary() {
-    try { execFileSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], { timeout: 3000 }); return 'claude'; } catch (_) { /* not on PATH */ }
-    const ext = vscode.extensions.getExtension('anthropic.claude-code');
-    if (ext) {
-      const bin = path.join(ext.extensionPath, 'resources', 'native-binary', process.platform === 'win32' ? 'claude.exe' : 'claude');
-      try { fs.accessSync(bin, fs.constants.X_OK); return bin; } catch (_) { /* no bundled binary */ }
-    }
-    return null;
+  /** The login there now, to tell a new one by. Kept in memory for the comparison, never shown. */
+  loginStamp() { const c = this.meter.readCredentials(); return c ? JSON.stringify(c) : ''; }
+
+  /**
+   * Wait for the login running in `terminal`, as the one login, until a login is there that was not there when it began,
+   * until the terminal is closed (on Windows it closes as the program ends), or until the wait runs out. The credentials
+   * of an old login may still be there, so their being there is not enough. Resolves true when a new login is there.
+   */
+  watchSignIn(terminal) {
+    const was = this.loginStamp(), t0 = Date.now();
+    const landed = () => { const now = this.loginStamp(); return !!now && now !== was; };
+    let finish, over = false;
+    const s = { terminal, done: new Promise((resolve) => { finish = resolve; }) };
+    s.end = (ok) => {
+      if (over) return;
+      over = true; clearInterval(timer); closed.dispose();
+      if (this.signIn === s) this.signIn = null;
+      finish(ok);
+    };
+    const timer = unref(setInterval(() => { if (landed()) s.end(true); else if (Date.now() - t0 >= LOGIN_WAIT_MS) s.end(false); }, this.loginPollMs));
+    const closed = vscode.window.onDidCloseTerminal((t) => { if (t === terminal) s.end(landed()); });   // a last look, for a login made as it closed
+    this.signIn = s;
+    return s.done;
   }
 
+  /**
+   * The claude to log in with: the one the tabs run (perch.claude.executable, else the SDK's own, else the Claude Code
+   * extension's), else one on PATH. '' when there is none.
+   */
+  loginProgram() {
+    let p = null;
+    try { p = this.claudeProgram(); } catch (_) { /* none to be had */ }
+    p = p || { path: '', from: 'none' };
+    return p.path || (p.from === 'sdk' ? sdkClaude() : '') || onPath('claude');
+  }
+
+  /**
+   * Log in to the subscription, with Claude Code's own sign-in run in a terminal. One at a time: pressed again while one
+   * waits, its terminal is brought back. Returns true when a sign-in was opened, false when none was.
+   */
   async login() {
-    // Preferred: the Claude Code panel. When logged out it shows its graphical login page, with no CLI onboarding in the way.
+    if (this.signIn) {
+      this.signIn.terminal.show();
+      vscode.window.showInformationMessage('Perch: a Claude login is already waiting for you, in the Claude login terminal.');
+      return false;
+    }
+    // Preferred: the CLI's own sign-in, `claude auth login`, in a terminal. The Claude Code panel is no way in: revealing
+    // it shows the session already running there, which keeps the backend it started on and never offers a login page,
+    // and a panel started under env.CLAUDE_CODE_USE_BEDROCK=1 in settings.json is on Bedrock and does not count as logged out.
+    // That settings value is applied over the process environment, so it is overridden with --settings, and in the
+    // terminal's environment for good measure.
+    const program = this.loginProgram();
+    if (program) {
+      const run = terminalRun(program, ['--settings', OFF_BEDROCK, 'auth', 'login']);
+      const terminal = vscode.window.createTerminal(Object.assign({ name: 'Claude login', env: { CLAUDE_CODE_USE_BEDROCK: '0' } }, run.options));
+      terminal.show();
+      if (run.text) terminal.sendText(run.text);
+      this.watchSignIn(terminal);
+      return true;
+    }
+    // No program to run: the panel is the last resort. It shows its login page only when it starts logged out on the subscription.
     if (vscode.extensions.getExtension('anthropic.claude-code')) {
       for (const cmd of ['claude-vscode.editor.openLast', 'claude-vscode.sidebar.open']) {
-        try { await vscode.commands.executeCommand(cmd); return; } catch (_) { /* try the next, then the terminal */ }
+        try { await vscode.commands.executeCommand(cmd); return true; } catch (_) { /* try the next */ }
       }
     }
-    const bin = this.findClaudeBinary();
-    if (!bin) { vscode.window.showErrorMessage('Perch: the claude CLI was not found on PATH and the Claude Code extension is not installed here. Install Claude Code, then log in.'); return; }
-    // The CLI's first run opens theme-picker onboarding before login. Mark onboarding done, keeping any existing theme,
-    // so /login starts at the login step. The CLI's folder-trust prompt is a real safety question and is left alone.
-    try {
-      const cfgPath = path.join(os.homedir(), '.claude.json');
-      let j = {};
-      try { j = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) || {}; } catch (_) { j = {}; }
-      if (!j.hasCompletedOnboarding) { j.hasCompletedOnboarding = true; if (!j.theme) j.theme = 'dark'; fs.writeFileSync(cfgPath, JSON.stringify(j, null, 2) + '\n'); }
-    } catch (_) { /* non-fatal: worst case the CLI shows its onboarding */ }
-    // Bedrock is forced off for this terminal so an exported CLAUDE_CODE_USE_BEDROCK=1 cannot keep the CLI in Bedrock mode.
-    const term = vscode.window.createTerminal({ name: 'Claude login', env: { CLAUDE_CODE_USE_BEDROCK: '0' } });
-    term.show();
-    term.sendText((bin === 'claude' ? 'claude' : JSON.stringify(bin)) + ' /login');
+    vscode.window.showErrorMessage('Perch: found no claude program to log in with, here or on PATH. Install the Claude Code extension, or set perch.claude.executable to a claude program, then log in.');
+    return false;
   }
 
   dispose() {
     clearInterval(this.pollTimer); clearInterval(this.retryTimer); clearTimeout(this.credDebounce);
     if (this.credWatcher) this.credWatcher.close();
+    if (this.signIn) this.signIn.end(false);
     for (const d of this.disposables) d.dispose();
   }
 }

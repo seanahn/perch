@@ -2,7 +2,7 @@
 // Catalog parsing: Codex's files on disk and the Claude SDK's model list. No model calls.
 const assert = require('assert');
 const fs = require('fs'); const os = require('os'); const path = require('path');
-const { loadCodexModels, normalizeClaudeModels, normalizeCommands, modelLabel, startModel, parseTopLevelToml } = require('../src/models');
+const { loadCodexModels, normalizeClaudeModels, normalizeCommands, modelLabel, modelKey, sameModel, fallbackNote, startModel, parseTopLevelToml } = require('../src/models');
 
 // ---- TOML: top-level string keys only, stops at the first table
 assert.deepStrictEqual(parseTopLevelToml('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "ultra"  # mine\nn = 3\nflag = true\nsq = \'single\'\n\n[profiles.x]\nmodel = "other"\n'),
@@ -79,6 +79,22 @@ assert.strictEqual(normalizeClaudeModels([{ value: 'opus', resolvedModel: 'claud
 // a model the CLI reports, named from the catalog
 assert.deepStrictEqual(['claude-haiku-4-5', 'haiku', 'claude-opus-4-6', 'claude-mystery-1', '', undefined].map((id) => modelLabel(cl, id)), ['Haiku 4.5', 'Haiku 4.5', 'Opus 4.6', 'claude-mystery-1', '', ''], 'by the id an entry resolves to or by its value; one the list lacks by its id');
 assert.strictEqual(modelLabel(null, 'claude-x'), 'claude-x', 'and with no catalog');
+// a provider's id for a listed model is that model: Claude Code on Bedrock names it so, a response by the model's own id
+assert.deepStrictEqual(['us.anthropic.claude-haiku-4-5-v1:0', 'claude-opus-5-5[1m]', 'global.anthropic.claude-opus-4-6', 'claude-opus-4-6@20260101'].map((id) => modelLabel(cl, id)), ['Haiku 4.5', 'Opus 5.5', 'Opus 4.6', 'Opus 4.6']);
+
+// ---- one model, whoever serves it
+assert.deepStrictEqual(['us.anthropic.claude-opus-5-5-v1:0', 'claude-opus-5-5[1m]', 'Claude-Opus-5-5', 'claude-haiku-4-5-20251001', 'claude-opus-4-1@20250805', 'global.openai.gpt-6-luna', '', null].map(modelKey),
+  ['claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-haiku-4-5', 'claude-opus-4-1', 'global.openai.gpt-6-luna', '', '']);
+assert.deepStrictEqual([sameModel('us.anthropic.claude-opus-5-5', 'claude-opus-5-5'), sameModel('claude-opus-5-5', 'claude-opus-4-8'), sameModel('claude-opus-5', 'claude-opus-5-5'), sameModel('', ''), sameModel(undefined, 'x')], [true, false, false, false, false],
+  'Opus 5 is not Opus 5.5, and no id is no model');
+
+// ---- what the transcript says when another model answered a refused response: Claude Code's words, else perch's
+assert.strictEqual(fallbackNote({ content: '  Opus 5.5\'s safeguards flagged this session.\n', from: 'a', to: 'b' }), 'Opus 5.5\'s safeguards flagged this session.');
+assert.deepStrictEqual([fallbackNote({ from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'session' }), fallbackNote({ from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'local' }), fallbackNote()], [
+  'claude-opus-5-5\'s safeguards stopped a response, and claude-opus-4-8 answered it instead. This session runs on claude-opus-4-8 from now on.',
+  'claude-opus-5-5\'s safeguards stopped a response, and claude-opus-4-8 answered it instead.',
+  'The model\'s safeguards stopped a response, and another model answered it instead. This session runs on another model from now on.',
+]);
 
 // ---- slash commands
 assert.deepStrictEqual(normalizeCommands([

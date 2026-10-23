@@ -154,9 +154,39 @@ function rollout(home, day, id, lines, mtime) {
   const asked = [];
   const reader = { getSessionMessages: async (...a) => { asked.push(a); return [U('hi'), A([{ type: 'text', text: 'hello' }])]; } };
   assert.deepStrictEqual(await S.loadTranscript('claude', 'c-1', { dir: '/w', sdk: reader }), { events: [{ kind: 'user', text: 'hi', queued: false }, { kind: 'text', text: 'hello' }], earlier: 0 });
-  assert.deepStrictEqual(asked, [['c-1', { dir: '/w' }]]);
+  assert.deepStrictEqual(asked, [['c-1', { dir: '/w', includeSystemMessages: true }]], 'with the system records too: where Claude Code\'s notices were said');
   assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0 });
   await assert.rejects(S.loadTranscript('claude', 'c-1', { sdk: { getSessionMessages: async () => { throw new Error('unreadable'); } } }), /unreadable/);
+
+  // ---- Claude Code's notice that the model's safeguards refused a response and another model answered (Opus 5.5 to Opus 4.8,
+  // cyber, as on 2026-10-20). The SDK gives a system record's place without its words, so they are read from the session's file
+  {
+    const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-claude-dir-'));
+    try {
+      const proj = path.join(claudeDir, 'projects', '-w'); fs.mkdirSync(proj, { recursive: true });
+      fs.mkdirSync(path.join(claudeDir, 'projects', '-other'));
+      const NOTICE = "Opus 5.5's safeguards flagged this session. Opus 4.8 is answering instead, or you can edit and retry with Opus 5.5.\n\nDetails: `[cyber]`";
+      const rec = (o) => JSON.stringify(Object.assign({ parentUuid: 'p', isSidechain: false, sessionId: 'c-2', timestamp: '2026-10-20T17:25:39.000Z' }, o));
+      fs.writeFileSync(path.join(proj, 'c-2.jsonl'), [
+        rec({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'scan this' } }),
+        rec({ type: 'system', subtype: 'informational', level: 'notice', uuid: 's1', content: "Opus 5.5's safeguards stopped the response above · continuing once with that noted" }),
+        rec({ type: 'system', subtype: 'model_refusal_fallback', level: 'warning', uuid: 's2', trigger: 'refusal', direction: 'retry', scope: 'session', originalModel: 'claude-opus-5-5', fallbackModel: 'claude-opus-4-8', apiRefusalCategory: 'cyber', content: NOTICE }),
+        rec({ type: 'system', subtype: 'model_refusal_fallback', uuid: 's3', scope: 'local', originalModel: 'claude-opus-5-5', fallbackModel: 'claude-opus-4-8', content: '' }),
+        rec({ type: 'user', uuid: 'u2', message: { role: 'user', content: 'what is a "model_refusal_fallback"?' } }),
+        '{"torn":"model_refusal_fallback"', '',
+      ].join('\n'));
+      assert.deepStrictEqual([...await S.claudeNotices('c-2', { claudeDir })], [['s2', NOTICE], ['s3', "claude-opus-5-5's safeguards stopped a response, and claude-opus-4-8 answered it instead."]],
+        'the fallback notices only, in Claude Code\'s words, else in perch\'s; a torn line, and the name said in text, are passed over');
+      assert.deepStrictEqual([(await S.claudeNotices('c-9', { claudeDir })).size, (await S.claudeNotices('../-w/c-2', { claudeDir })).size, (await S.claudeNotices('c-2', { claudeDir: path.join(claudeDir, 'nowhere') })).size], [0, 0, 0],
+        'no such session, a name that is not an id, no projects');
+      // as the SDK gives a system record: its place, not its words. The refused response itself is not in the conversation it gives
+      const Sys = (uuid) => ({ type: 'system', uuid, session_id: 'c-2', parent_tool_use_id: null, parent_agent_id: null });
+      const reader2 = { getSessionMessages: async () => [U('scan this'), Sys('s1'), Sys('s2'), A([{ type: 'text', text: 'Done.' }]), Sys('s9')] };
+      assert.deepStrictEqual(await S.loadTranscript('claude', 'c-2', { dir: '/w', sdk: reader2, claudeDir }), { events: [
+        { kind: 'user', text: 'scan this', queued: false }, { kind: 'note', level: 'warn', text: NOTICE }, { kind: 'text', text: 'Done.' },
+      ], earlier: 0 }, 'the notice where it was said; any other system record says nothing');
+    } finally { fs.rmSync(claudeDir, { recursive: true, force: true }); }
+  }
 
     // the IDE context perch attaches is shown as a tag, as on a live message, never as text
   assert.deepStrictEqual(S.splitIde('what model am i using?\n\n<ide_context>\nActive file: docs/notes/821.md (markdown)\nCursor: line 167\n</ide_context>'), { text: 'what model am i using?', tag: '821.md' });

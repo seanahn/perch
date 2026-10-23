@@ -253,10 +253,16 @@ is copied from elsewhere, so a fresh remote has neither.
 
 - **Claude, on a subscription**: the first message to a Claude tab on a
   machine with no login is held back, the text put back in the box, and
-  **Log In** offered: Claude Code's own sign-in page (or `claude /login`
-  in a terminal when that extension is absent). Perch notices when the
-  login lands and says so; send the message again. The footer's "log in"
-  does the same at any time.
+  **Log In** offered: `claude auth login` in a terminal, run with the
+  `claude` the tabs run (`perch.claude.executable` when it is set), and
+  off Bedrock even when `~/.claude/settings.json` sets
+  `CLAUDE_CODE_USE_BEDROCK=1` (the Claude Code panel only when no
+  program is found). Perch notices when a new login lands and says so;
+  send the message again. One login runs at a time: pressed again while
+  one waits, Log In brings its terminal back, and closing that terminal
+  ends the wait. On Windows the terminal runs `claude` itself, with no
+  shell in between, and closes when it ends. The footer's "log in" does
+  the same at any time.
 - **Claude, on API / Bedrock**: the `API` switch in the footer moves
   Claude to those credentials. They are Claude Code's, not Perch's: AWS
   credentials or a profile on the workspace machine (`~/.aws`, or
@@ -320,8 +326,10 @@ is copied from elsewhere, so a fresh remote has neither.
   `codex login --device-auth` in a terminal instead: a link and a one-time
   code, for a machine with no forwarding, which ChatGPT has to allow first
   (Settings → Security and login → App security → "Enable device code
-  sign-in"). Either way Perch notices when the login lands and says so;
-  send the message again.
+  sign-in"). On Windows that terminal runs `codex` itself, with no shell
+  in between, and closes when it ends; closing it ends the wait. Either
+  way Perch notices when the login lands and says so; send the message
+  again.
   A login can also end later: ChatGPT ends the session on a logout, a
   password change, a revoked session, or when the same login is refreshed
   on another machine. **Give each machine its own login: never copy
@@ -336,7 +344,8 @@ is copied from elsewhere, so a fresh remote has neither.
   `auth.json`, so signing in again works though the old file is still
   there. One login runs at a time (it listens on a fixed port): pressed
   again while one waits, from the note, the notification, or another tab,
-  a button opens the same sign-in page again; once the login lands, every
+  a button opens the same sign-in page again, or brings back the Device
+  Code terminal; once the login lands, every
   login note in every Codex tab says so in place of its buttons.
   On the gateway the model menu is the file's names, not Claude Code's
   catalog: the default is `ANTHROPIC_MODEL`, and opus, sonnet and haiku
@@ -497,6 +506,16 @@ the pill names that model. Once the session runs, the pill and the
 effort list follow the model the session reports. Choosing default in a
 running session gives Claude Code's own default, not the model the
 session started on; the option's tooltip says which is which.
+
+Claude Code itself can move a session to another model. When a model's
+safeguards refuse a response, it retries the response on a fallback
+model and keeps the session there: Opus 5.5 to Opus 4.8, say. The pill
+then names the model running, in the warning colour, with the reason in
+its tooltip, and Claude Code's notice is in the transcript, also when
+the session is opened again later. A turn answered by a model other
+than the one chosen ends its line with `answered by Opus 4.8`: each
+response names the model that gave it. A new session starts on the
+chosen model again.
 
 Codex: model, effort, and sandbox change from the next message too. Codex
 runs each turn as a process of its own, so perch takes the thread up again

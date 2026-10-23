@@ -1,8 +1,8 @@
 'use strict';
-// Codex's login on this machine: found, awaited, and the command that makes it.
+// Codex's login on this machine: found, awaited, and the program run to make it.
 const assert = require('assert');
 const fs = require('fs'); const os = require('os'); const path = require('path');
-const { codexHome, loggedIn, loginCommand, waitForLogin } = require('../src/codexAuth');
+const { codexHome, loggedIn, waitForLogin } = require('../src/codexAuth');
 
 const alive = setInterval(() => {}, 1000);   // the wait's timer does not hold the process, as it must not in the extension host; this test does
 (async () => {
@@ -19,9 +19,6 @@ const alive = setInterval(() => {}, 1000);   // the wait's timer does not hold t
   assert.strictEqual(loggedIn({ env: {}, home }), true, 'the ChatGPT login Codex writes');
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'sk-x' }));
   assert.strictEqual(loggedIn({ env: {}, home }), true, 'an API key stored by codex login --with-api-key');
-
-  assert.strictEqual(loginCommand('codex'), 'codex login --device-auth');
-  assert.strictEqual(loginCommand('/home/me/.vscode-server/extensions/openai.chatgpt-1/bin/linux-x86_64/codex'), '"/home/me/.vscode-server/extensions/openai.chatgpt-1/bin/linux-x86_64/codex" login --device-auth', 'a path is quoted for the shell');
 
   // the browser sign-in: the program is run, and the page it prints is found among its colour codes; an early exit is an error
   {
@@ -89,6 +86,18 @@ const alive = setInterval(() => {}, 1000);   // the wait's timer does not hold t
     assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 60, since: before }), false, 'removed, not yet written again: still waiting');
     setTimeout(() => fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: {}, last_refresh: 'the new one' })), 30);
     assert.strictEqual(await waitForLogin({ env: {}, home: h, intervalMs: 10, timeoutMs: 2000, since: before }), true, 'written by the new login: done');
+    // `until`: the sign-in is over (its terminal closed). The wait ends then, on a last look, not when the poll next comes round
+    const now = authStamp({ env: {}, home: h });
+    let close; const t0 = Date.now();
+    const p = waitForLogin({ env: {}, home: h, intervalMs: 60000, timeoutMs: 120000, since: now, until: new Promise((r) => { close = r; }) });
+    setTimeout(close, 20);
+    assert.deepStrictEqual([await p, Date.now() - t0 < 5000], [false, true], 'closed with no new login: not logged in, at once');
+    const q = waitForLogin({ env: {}, home: h, intervalMs: 60000, timeoutMs: 120000, since: now, until: new Promise((r) => { close = r; }) });
+    fs.writeFileSync(file, JSON.stringify({ auth_mode: 'chatgpt', tokens: {}, last_refresh: 'as it closed' })); close();
+    assert.strictEqual(await q, true, 'a login made as it closed is seen by the last look');
+    const t1 = Date.now();
+    const r = await waitForLogin({ env: {}, home: h, intervalMs: 60000, timeoutMs: 120000, since: authStamp({ env: {}, home: h }), until: Promise.reject(new Error('gone')) });
+    assert.deepStrictEqual([r, Date.now() - t1 < 5000], [false, true], 'a sign-in that failed is over too');
     fs.rmSync(h, { recursive: true, force: true });
   }
   fs.rmSync(home, { recursive: true, force: true });
