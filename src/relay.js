@@ -1,6 +1,6 @@
 'use strict';
 // A relay between a tab's Claude Code and the gateway, so the tab can see which model answered. An LLM gateway resolves
-// a routed name such as `nexus-auto` to a deployment per request and says which in a response header
+// a routed name such as `auto` to a deployment per request and says which in a response header
 // (`x-litellm-model-name`), which the body does not carry and the Agent SDK does not surface. The relay listens on the
 // loopback interface, forwards every request to the gateway unchanged (method, path, headers, body, the token among
 // them), streams the response back byte for byte, and reads those headers as they pass. It changes nothing a model

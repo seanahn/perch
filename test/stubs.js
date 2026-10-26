@@ -65,7 +65,7 @@ class FakeAgent {
     this.emit({ kind: 'status', text: 'ready · fake' });
     if (this.claude) this.emit({ kind: 'model', id: this.now });
     // through a gateway, the relay reports each response's model: a turn here is three requests, two to one model and one to another
-    if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) { this.emit(Object.assign({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'nexus-auto', fallbacks: 0, callId: 'c', keySpend: 0.5 }, knobs.relayCost === null ? {} : { cost: knobs.relayCost })); this.emit({ kind: 'usage', model: 'nexus-auto', usage: { input: 1000, cache_write: 0, cache_read: 0, output: 100 } }); }
+    if (this.claude && this.o.gateway) for (const model of ['global.openai.gpt-6-luna', 'xai/grok-4.6', 'global.openai.gpt-6-luna']) { this.emit(Object.assign({ kind: 'relay', path: '/v1/messages', status: 200, model, group: 'router-auto', fallbacks: 0, callId: 'c', keySpend: 0.5 }, knobs.relayCost === null ? {} : { cost: knobs.relayCost })); this.emit({ kind: 'usage', model: 'router-auto', usage: { input: 1000, cache_write: 0, cache_read: 0, output: 100 } }); }
     if (/^hold/.test(t)) { this.held = t; return; }
     this.answer(t);
   }

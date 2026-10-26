@@ -73,9 +73,9 @@ class ClaudeAgent {
       includePartialMessages: true,
       abortController: this.abort,
       env,
-      // Settings are applied over ~/.claude/settings.json, so they decide the backend whatever the pod pins there.
+      // Settings are applied over ~/.claude/settings.json, so they decide the backend whatever the machine pins there.
       // Gateway: this process's own gateway variables. Otherwise (subscription / API / Bedrock): clear a pinned gateway
-      // so the tab is truly on the chosen backend, not the gateway the pod forces (seclab "everywhere" mode).
+      // so the tab is truly on the chosen backend, not the gateway the machine sets for every Claude Code.
       ...(this.opts.gateway ? { settings: gatewaySettings(this.opts.env, env.ANTHROPIC_BASE_URL) }
         : this.opts.offGateway ? { settings: offGatewaySettings(this.opts.offGateway.bedrock) } : {}),
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),

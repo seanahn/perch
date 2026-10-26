@@ -1,6 +1,9 @@
 'use strict';
 process.env.PERCH_RESTORE_GRACE_MS = '60';   // the wait for VS Code to bring back editor tabs, shortened
 process.env.PERCH_UNLOCK_DELAY_MS = '10';    // and the wait before a group that Perch tabs have left is unlocked
+// Codex on Bedrock takes the machine's AWS profile and region before Claude Code's settings (src/codexBedrock.js): the
+// developer's own are kept out, so what the tests expect does not depend on the machine they run on
+delete process.env.AWS_PROFILE; delete process.env.AWS_REGION;
 // Host behaviour: tabs, isolation between sessions, replay after the page is recreated,
 // permission prompts, and persistence across a window reload.
 const assert = require('assert');
@@ -1098,14 +1101,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const m = install(); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
-    v.fire({ type: 'send', sid: c, text: 'review https://github.com/c3-e/c3securitytools/pull/277' }); await flush(); await flush();
+    v.fire({ type: 'send', sid: c, text: 'review https://github.com/acme/toolbox/pull/277' }); await flush(); await flush();
     const sid = 'sess-' + (created.length - 1);
-    assert.strictEqual(v.tab(c).title, 'review https://github.com/c3', 'at first, the start of the first message; the agent has no record of the session to ask');
+    assert.strictEqual(v.tab(c).title, 'review https://github.com/ac', 'at first, the start of the first message; the agent has no record of the session to ask');
     // Claude Code titles the session itself; the tab follows when a turn ends
-    const rec = { kind: 'claude', id: sid, title: 'c3securitytools PR #277', named: false, updatedAt: Date.now() }; m.store.sessions.push(rec);
+    const rec = { kind: 'claude', id: sid, title: 'toolbox PR #277', named: false, updatedAt: Date.now() }; m.store.sessions.push(rec);
     v.fire({ type: 'send', sid: c, text: 'more' }); await flush(); await flush();
-    assert.strictEqual(v.tab(c).title, 'c3securitytools PR #277', 'the record\'s title, which is what the sessions list shows');
-    assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c).title, 'c3securitytools PR #277', 'kept with the tab');
+    assert.strictEqual(v.tab(c).title, 'toolbox PR #277', 'the record\'s title, which is what the sessions list shows');
+    assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c).title, 'toolbox PR #277', 'kept with the tab');
     // and when the list opens, for a title that moved since the last turn
     rec.title = 'PR #277 follow-up';
     const qp = await m.perch.pickSession(); await flush();
@@ -1165,7 +1168,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   {
     const fs = require('fs'), os = require('os'), path = require('path');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-gw-')); const file = path.join(dir, 'env');
-    fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\nexport ANTHROPIC_MODEL=nexus-auto-bargain[1m]\nexport ANTHROPIC_DEFAULT_OPUS_MODEL=nexus-auto-quality[1m]\nexport ANTHROPIC_DEFAULT_SONNET_MODEL=nexus-auto-unlimited[1m]\n');
+    fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\nexport ANTHROPIC_MODEL=router-auto-bargain[1m]\nexport ANTHROPIC_DEFAULT_OPUS_MODEL=router-auto-quality[1m]\nexport ANTHROPIC_DEFAULT_SONNET_MODEL=router-auto-unlimited[1m]\n');
     const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
@@ -1174,7 +1177,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'setBackend', sid: x, value: 'gateway' }); await flush();
     const t = v.tab(x);
     assert.deepStrictEqual([t.gateway, t.model, t.effort], [true, '', ''], 'Fable means nothing to the gateway: back to the file\'s default');
-    assert.deepStrictEqual(t.models.map((o) => [o.value, o.label]), [['', 'default · nexus-auto-bargain[1m]'], ['opus', 'nexus-auto-quality[1m]'], ['sonnet', 'nexus-auto-unlimited[1m]']], 'the menu is the file\'s names, carried by the aliases Claude Code maps to them');
+    assert.deepStrictEqual(t.models.map((o) => [o.value, o.label]), [['', 'default · router-auto-bargain[1m]'], ['opus', 'router-auto-quality[1m]'], ['sonnet', 'router-auto-unlimited[1m]']], 'the menu is the file\'s names, carried by the aliases Claude Code maps to them');
     assert.strictEqual(t.models[0].title, 'ANTHROPIC_MODEL in the gateway file');
     v.fire({ type: 'setModel', sid: x, value: 'opus' }); await flush();
     assert.deepStrictEqual([v.tab(x).model, v.tab(x).efforts.map((e) => e.value)], ['opus', ['', 'low', 'medium', 'high']]);
@@ -1219,14 +1222,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.box.codexLoggedIn = true;
     // Bedrock, from the footer's menu: every Codex tab gets Codex's own Bedrock provider as --config overrides, the region and profile from
     // perch's settings or Claude Code's, and its model in Bedrock's form; no key, no login needed
-    m.box.settingsEnv = { AWS_REGION: 'us-west-2', AWS_PROFILE: 'stage2' }; m.box.apiCreds = true;
+    m.box.settingsEnv = { AWS_REGION: 'us-west-2', AWS_PROFILE: 'dev' }; m.box.apiCreds = true;
     v.fire({ type: 'codexBackend', value: 'bedrock' }); await flush(); await flush();
     const bm = v.lastCodexMeter();
     assert.deepStrictEqual([bm.backend, bm.backendLabel, bm.plan, bm.segments, bm.bedrock, m.globalState._dump()['perch.codex.backend']],
-      ['bedrock', 'Bedrock', '', [], { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'stage2' }, 'bedrock'], 'the runtime endpoint, in the region and with the profile Claude Code is set up with');
-    assert(/Codex runs on Amazon Bedrock \(the runtime endpoint, us-west-2, profile stage2\)/.test(bm.backendTitle));
+      ['bedrock', 'Bedrock', '', [], { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'dev' }, 'bedrock'], 'the runtime endpoint, in the region and with the profile Claude Code is set up with');
+    assert(/Codex runs on Amazon Bedrock \(the runtime endpoint, us-west-2, profile dev\)/.test(bm.backendTitle));
     const bz = created[created.length - 1];
-    assert.deepStrictEqual([bz.backends.pop(), v.lastTabs().tabs[2].backend], [{ apiKey: null, bedrock: { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'stage2', defaultModel: 'gpt-5.6-sol' } }, 'bedrock'], 'the open tab moves on its next turn, with the catalog\'s default for when it has no model of its own');
+    assert.deepStrictEqual([bz.backends.pop(), v.lastTabs().tabs[2].backend], [{ apiKey: null, bedrock: { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'dev', defaultModel: 'gpt-5.6-sol' } }, 'bedrock'], 'the open tab moves on its next turn, with the catalog\'s default for when it has no model of its own');
     assert(/Codex backend is now Amazon Bedrock \(the runtime endpoint, us-west-2\), from the next message/.test(v.events(z).filter((e) => e.kind === 'note').pop().text));
     m.box.codexLoggedIn = false;   // no ChatGPT login: no matter on Bedrock
     v.fire({ type: 'new', kind: 'codex' }); const w = v.lastTabs().active; const madeW = created.length; v.fire({ type: 'send', sid: w, text: 'go' }); await flush();
@@ -1234,7 +1237,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     // with nothing to sign with, the first message is held, and the note's button goes back to ChatGPT
     m.box.apiCreds = false; v.fire({ type: 'new', kind: 'codex' }); const q = v.lastTabs().active; const madeQ = created.length; v.fire({ type: 'send', sid: q, text: 'go' }); await flush();
     const hold = v.events(q).filter((e) => e.kind === 'note').pop();
-    assert.deepStrictEqual([created.length, /^Codex is set to Amazon Bedrock on .+ \(us-west-2, profile stage2\), and no AWS credentials were found there/.test(hold.text), hold.actions], [madeQ, true, [{ id: 'codexChatgpt', label: 'Use ChatGPT' }]]);
+    assert.deepStrictEqual([created.length, /^Codex is set to Amazon Bedrock on .+ \(us-west-2, profile dev\), and no AWS credentials were found there/.test(hold.text), hold.actions], [madeQ, true, [{ id: 'codexChatgpt', label: 'Use ChatGPT' }]]);
     v.fire({ type: 'noteAction', sid: q, action: 'codexChatgpt' }); await flush(); await flush();
     assert.strictEqual(v.lastCodexMeter().backend, 'chatgpt');
     v.fire({ type: 'noteAction', sid: q, action: 'codexChatgpt' }); await flush();
@@ -1971,7 +1974,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   }
 
   // ---- "default" names the model a Claude session is really on: before it starts, the one Claude Code says new sessions
-  // start on (ANTHROPIC_MODEL or its settings' model; here Sonnet 4.6, as on seclab), and while it runs, the one its process
+  // start on (ANTHROPIC_MODEL or its settings' model; here Sonnet 4.6), and while it runs, the one its process
   // reports. Chosen in a running session, default is Claude Code's built-in one (Opus 5.5 here). The efforts follow the label.
   {
     const ALL5 = ['low', 'medium', 'high', 'xhigh', 'max'], SONNET = ['low', 'medium', 'high', 'max'];
@@ -2459,17 +2462,17 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       // back on, from the footer's menu, with a usable file: the process gets the file's variables, with Bedrock off
       v.fire({ type: 'setBackend', sid: g, value: 'gateway' });
       assert.strictEqual(v.lastTabs().tabs[0].gateway, true);
-      fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example.com/llm-api\nexport ANTHROPIC_AUTH_TOKEN="tok"   # mine\nexport ANTHROPIC_MODEL=nexus-auto[1m]\n');
+      fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example.com/llm-api\nexport ANTHROPIC_AUTH_TOKEN="tok"   # mine\nexport ANTHROPIC_MODEL=router-auto[1m]\n');
       v.fire({ type: 'send', sid: g, text: 'hello gateway' });
       assert.strictEqual(created.length, n0 + 1, 'a process starts');
       const agent = created[n0];
-      assert.deepStrictEqual(agent.o.env, { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_MODEL: 'nexus-auto[1m]' }, 'the file\'s variables, and Bedrock off');
+      assert.deepStrictEqual(agent.o.env, { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_MODEL: 'router-auto[1m]' }, 'the file\'s variables, and Bedrock off');
       assert.strictEqual(agent.o.model, undefined, 'the tab on default sends no model: the file\'s ANTHROPIC_MODEL decides');
       assert.deepStrictEqual(agent.o.gateway, { target: 'https://gw.example.com/llm-api' }, 'the process runs through the relay to the file\'s base URL');
       t = v.lastTabs();
       assert.deepStrictEqual([t.tabs[0].backend, t.tabs[0].gatewayWarn, t.tabs[0].started, t.gateway.ok, t.tabs[0].cache.minutes], ['gateway', false, true, true, 5]);
       // what answered: the relay's word on each response, counted for the turn and put on the result; the last one on the tab
-      assert.deepStrictEqual(t.tabs[0].models[0], { value: '', label: 'default · nexus-auto[1m]', title: 'ANTHROPIC_MODEL in the gateway file' }, 'the default is the file\'s model, not the window\'s');
+      assert.deepStrictEqual(t.tabs[0].models[0], { value: '', label: 'default · router-auto[1m]', title: 'ANTHROPIC_MODEL in the gateway file' }, 'the default is the file\'s model, not the window\'s');
       assert.strictEqual(t.tabs[0].via, 'global.openai.gpt-6-luna', 'the model that answered last');
       const res = v.events(g).filter((e) => e.kind === 'result').pop();
       assert.deepStrictEqual(res.via, [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 2 }, { model: 'xai/grok-4.6', short: 'grok-4.6', n: 1 }], 'three requests, two models, on the result line');

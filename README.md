@@ -34,7 +34,7 @@ Codex on Bedrock: every turn after the first read its whole prefix from
 the cache), with a lag on the newest options (the hour-long Claude cache
 only on some models, no 5m/1h breakdown). Behind a proxy such as an LLM
 gateway, whether the markers survive depends on the route; perch shows
-what came back, and `design.md` says what was measured.
+what came back, and [note 103](docs/notes/103-token-economy.md) says what was measured.
 
 ```
 PERCH TAB   (the vendor's agent lays out the prompt; perch never touches it)
@@ -114,7 +114,8 @@ terminal session" on no source, and a public 5.5× figure turns out to be
 one run on mixed models with no cache analysis. What perch can show is
 that a tab's cache reads and costs are a terminal's, turn by turn, in its
 own footer. The full reasoning, with what has and has not been verified,
-is in [design.md](design.md), sections 2 and 3.
+is in the design notes, [102](docs/notes/102-why-a-shell.md) and
+[103](docs/notes/103-token-economy.md).
 
 | Tab kind | Agent | How it runs | Auth |
 | --- | --- | --- | --- |
@@ -304,7 +305,7 @@ is copied from elsewhere, so a fresh remote has neither.
   Perch's on the loopback interface, which forwards each request to the
   gateway unchanged and reads the header in which a LiteLLM gateway
   names the model that answered (`x-litellm-model-name`); a routed name
-  such as `nexus-auto` may send each request anywhere. The line under
+  such as `auto` may send each request anywhere. The line under
   each answer then says what answered the turn's requests, `via
   gpt-6-luna ×3, grok-4.6`, and what the gateway charged for them,
   `$0.0021 this turn`, its own figure (`x-litellm-response-cost`,

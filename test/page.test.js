@@ -253,11 +253,11 @@ assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-pla
 $('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
 $('#m-codex').click(); assert.deepStrictEqual([out.pop(), $('#m-codex').title], [{ type: 'openExternal', url: 'https://chatgpt.com/' }, 'Open chatgpt.com'], 'the vendor mark opens the vendor site');
 // under a Codex tab the backend button shows the Codex backend, and a click asks the host to switch it
-host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { bedrock: { endpoint: 'runtime', region: 'us-west-2', profile: 'stage2' }, backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { bedrock: { endpoint: 'runtime', region: 'us-west-2', profile: 'dev' }, backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
 assert.deepStrictEqual([shown($('#m-backend')), $('#m-backend').textContent, $('#m-backend').title], [true, 'ChatGPT', 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.']);
 $('#m-backend').click();
 { assert.deepStrictEqual(menuItems().map((i) => [i.label, i.on]), [['ChatGPT (login)', true], ['OpenAI API key', false], ['Amazon Bedrock', false]], 'a menu of the three Codex backends, the current one marked');
-  assert(/The runtime endpoint in us-west-2, profile stage2/.test(menuItems()[2].desc), 'Bedrock\'s entry says where it goes');
+  assert(/The runtime endpoint in us-west-2, profile dev/.test(menuItems()[2].desc), 'Bedrock\'s entry says where it goes');
   $$('#menu .it')[2].click(); assert.deepStrictEqual([out.pop(), $('#menu')], [{ type: 'codexBackend', value: 'bedrock' }, null], 'a choice goes to the host and closes the menu'); }
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
 assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
@@ -471,9 +471,9 @@ assert.deepStrictEqual([...paneA.querySelectorAll('.perm button')].map((b) => b.
 // ---- a permission request reads as what it is: a diff for an edit, the file for a write, the command for a shell
 {
   const perm = (tool, input) => { ev('a', { kind: 'permission', id: 'p' + Math.random(), tool, input, hasSuggestions: false }); return [...paneA.querySelectorAll('.perm')].pop(); };
-  const e = perm('Edit', { file_path: '/home/jovyan/c3securitytools/docs/notes/604-conmon-evidence-mapping.md', old_string: 'Open deployment decisions: review-storage bucket\nand owner', new_string: 'Open deployment decisions (settled):\nbucket and owner\nnamespace' });
-  assert.strictEqual(e.querySelector('div').textContent, 'Allow Edit · 604-conmon-evidence-mapping.md?');
-  assert.strictEqual(e.querySelector('.path').textContent, '/home/jovyan/c3securitytools/docs/notes/604-conmon-evidence-mapping.md');
+  const e = perm('Edit', { file_path: '/home/user/project/docs/notes/604-deployment-notes.md', old_string: 'Open deployment decisions: review-storage bucket\nand owner', new_string: 'Open deployment decisions (settled):\nbucket and owner\nnamespace' });
+  assert.strictEqual(e.querySelector('div').textContent, 'Allow Edit · 604-deployment-notes.md?');
+  assert.strictEqual(e.querySelector('.path').textContent, '/home/user/project/docs/notes/604-deployment-notes.md');
   assert.deepStrictEqual([...e.querySelectorAll('.diff .del')].map((n) => n.textContent), ['- Open deployment decisions: review-storage bucket', '- and owner']);
   assert.deepStrictEqual([...e.querySelectorAll('.diff .add')].map((n) => n.textContent), ['+ Open deployment decisions (settled):', '+ bucket and owner', '+ namespace']);
   assert.strictEqual(e.querySelectorAll('button').length, 2, 'allow and deny; always only when the agent offers it');
@@ -509,12 +509,12 @@ assert(kids[ti + 1].classList.contains('toolres'), 'result sits directly under i
 }
 {
   // a code block in an answer, and a tool call's command, each carry a copy button; the host does the copying
-  ev('a', { kind: 'text', text: 'Run this in your terminal:\n\n```bash\ngit -C /home/jovyan status --short --branch\n```\n\nand `git log` after.' });
+  ev('a', { kind: 'text', text: 'Run this in your terminal:\n\n```bash\ngit -C /home/user status --short --branch\n```\n\nand `git log` after.' });
   const msg = [...paneA.querySelectorAll('.assistant.md')].pop();
   const boxes = msg.querySelectorAll('.code');
-  assert.deepStrictEqual([boxes.length, boxes[0].querySelector('pre code').textContent, msg.querySelectorAll('.cp').length], [1, 'git -C /home/jovyan status --short --branch', 1], 'the fenced block, not the inline code');
+  assert.deepStrictEqual([boxes.length, boxes[0].querySelector('pre code').textContent, msg.querySelectorAll('.cp').length], [1, 'git -C /home/user status --short --branch', 1], 'the fenced block, not the inline code');
   const n0 = out.length; boxes[0].querySelector('.cp').click();
-  assert.deepStrictEqual(out.slice(n0), [{ type: 'copy', text: 'git -C /home/jovyan status --short --branch' }]);
+  assert.deepStrictEqual(out.slice(n0), [{ type: 'copy', text: 'git -C /home/user status --short --branch' }]);
   assert.strictEqual(boxes[0].querySelector('.cp').textContent, 'copied');
   ev('a', { kind: 'tool_use', id: 't3', name: 'shell', input: { command: '/bin/bash -lc \'git status --short --branch\'' } });
   const tool = [...paneA.querySelectorAll('.tool')].pop(); tool.querySelector('.cp').click();

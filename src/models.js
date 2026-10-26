@@ -135,7 +135,7 @@ async function loadClaudeModels({ cwd, executable, settings, timeoutMs = 15000 }
   const idle = { [Symbol.asyncIterator]() { return { next: () => new Promise((r) => { release = () => r({ done: true, value: undefined }); }), return: async () => ({ done: true, value: undefined }) }; } };
   const options = { cwd: cwd || process.cwd(), permissionMode: 'default', abortController: abort, stderr: () => {} };
   if (executable) options.pathToClaudeCodeExecutable = executable;
-  if (settings) options.settings = settings;   // load the catalog under a backend's override (e.g. off a pod-pinned gateway)
+  if (settings) options.settings = settings;   // load the catalog under a backend's override (e.g. off a pinned gateway)
   let timer;
   try {
     const q = sdk.query({ prompt: idle, options });

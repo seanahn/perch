@@ -21,7 +21,7 @@ try {
     '# a comment', '',
     'export ANTHROPIC_BASE_URL=https://gw.example.com/llm-api',
     'export ANTHROPIC_AUTH_TOKEN="sk-abc=def"   # trailing comment after a quoted value',
-    "ANTHROPIC_MODEL='nexus-auto[1m]'",
+    "ANTHROPIC_MODEL='router-auto[1m]'",
     'PLAIN=value # a comment after an unquoted value',
     'HASHED=a#b',
     'EMPTY=',
@@ -31,7 +31,7 @@ try {
     '1BAD=x',
   ].join('\n'));
   assert.deepStrictEqual(vars, {
-    ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'sk-abc=def', ANTHROPIC_MODEL: 'nexus-auto[1m]',
+    ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'sk-abc=def', ANTHROPIC_MODEL: 'router-auto[1m]',
     PLAIN: 'value', HASHED: 'a#b', EMPTY: '', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   }, 'export or not, quotes stripped, a # with a space before it ends an unquoted value, a # inside a word does not; other lines are passed over');
   assert.deepStrictEqual(G.parseEnvFile('A=1\r\nB=2\r\n'), { A: '1', B: '2' }, 'Windows line ends');
@@ -81,10 +81,10 @@ try {
 
   // the models a tab on the gateway may choose: the file's names, carried by Claude Code's aliases; the default is ANTHROPIC_MODEL
   {
-    const vars = { ANTHROPIC_MODEL: 'nexus-auto-bargain[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'nexus-auto-quality[1m]', ANTHROPIC_DEFAULT_SONNET_MODEL: 'nexus-auto-unlimited[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'nexus-auto-bargain[1m]' };
+    const vars = { ANTHROPIC_MODEL: 'router-auto-bargain[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'router-auto-quality[1m]', ANTHROPIC_DEFAULT_SONNET_MODEL: 'router-auto-unlimited[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'router-auto-bargain[1m]' };
     const c = G.gatewayModels(vars);
-    assert.deepStrictEqual([c.defaultModel.value, c.defaultModel.label, c.defaultModel.description], ['', 'nexus-auto-bargain[1m]', 'ANTHROPIC_MODEL in the gateway file']);
-    assert.deepStrictEqual(c.models.map((m) => [m.value, m.label]), [['opus', 'nexus-auto-quality[1m]'], ['sonnet', 'nexus-auto-unlimited[1m]'], ['haiku', 'nexus-auto-bargain[1m]']], 'each alias sent as itself, shown as what the gateway receives');
+    assert.deepStrictEqual([c.defaultModel.value, c.defaultModel.label, c.defaultModel.description], ['', 'router-auto-bargain[1m]', 'ANTHROPIC_MODEL in the gateway file']);
+    assert.deepStrictEqual(c.models.map((m) => [m.value, m.label]), [['opus', 'router-auto-quality[1m]'], ['sonnet', 'router-auto-unlimited[1m]'], ['haiku', 'router-auto-bargain[1m]']], 'each alias sent as itself, shown as what the gateway receives');
     assert.deepStrictEqual(c.models[0].efforts, ['low', 'medium', 'high']);
     assert(/ANTHROPIC_DEFAULT_OPUS_MODEL in the gateway file; sent as Claude Code's "opus"/.test(c.models[0].description));
     const bare = G.gatewayModels({ ANTHROPIC_BASE_URL: 'u', ANTHROPIC_AUTH_TOKEN: 't' });
@@ -93,8 +93,8 @@ try {
   }
 
   // ---- the same variables as the process's own settings, which Claude Code applies over ~/.claude/settings.json: without the token, to the relay
-  assert.deepStrictEqual(G.gatewaySettings(G.gatewayEnv({ ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key', ANTHROPIC_MODEL: 'nexus-auto[1m]' }), 'http://127.0.0.1:5000'),
-    { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'http://127.0.0.1:5000', ANTHROPIC_MODEL: 'nexus-auto[1m]' } }, 'Bedrock off and the file\'s names over the user\'s settings; the token stays in the environment; requests go to the relay');
+  assert.deepStrictEqual(G.gatewaySettings(G.gatewayEnv({ ANTHROPIC_BASE_URL: 'https://gw.example.com/llm-api', ANTHROPIC_AUTH_TOKEN: 'tok', ANTHROPIC_API_KEY: 'key', ANTHROPIC_MODEL: 'router-auto[1m]' }), 'http://127.0.0.1:5000'),
+    { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'http://127.0.0.1:5000', ANTHROPIC_MODEL: 'router-auto[1m]' } }, 'Bedrock off and the file\'s names over the user\'s settings; the token stays in the environment; requests go to the relay');
   assert.deepStrictEqual(G.gatewaySettings(undefined), { env: {} });
 
   // ---- settings that take a non-gateway tab OFF a pod-pinned gateway: clear the base URL + apiKeyHelper + model, set the
@@ -103,7 +103,7 @@ try {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '' };
   assert.deepStrictEqual(G.offGatewaySettings(false, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'subscription: Bedrock off, the pinned gateway and its model slots cleared');
   assert.deepStrictEqual(G.offGatewaySettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'API/Bedrock: Bedrock on, the pinned gateway and its model slots cleared');
-  const pod = { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: 'us.anthropic.claude-sonnet-4-6', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' };   // a seclab pod's export, and a first-party pin
+  const pod = { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: 'us.anthropic.claude-sonnet-4-6', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' };   // a pod's own export, and a first-party pin
   assert.strictEqual(G.offGatewaySettings(true, pod).env.ANTHROPIC_MODEL, 'us.anthropic.claude-sonnet-4-6', 'API/Bedrock: the pod\'s Bedrock model comes back');
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_MODEL, '', 'subscription: a Bedrock id is not carried over');
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5', 'subscription: a first-party pin comes back');

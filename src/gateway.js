@@ -100,8 +100,8 @@ function gatewaySettings(env, baseUrl) {
 }
 
 /**
- * What a pinned gateway also sets in settings.json and a tab off it must not keep: the model slots, which name gateway
- * models (c3-gateway-login: Opus anthropic/opus-high, Sonnet nexus-auto-unlimited, Haiku nexus-auto-bargain) that the
+ * What a pinned gateway also sets in settings.json and a tab off it must not keep: the model slots, which name the
+ * gateway's own models (a gateway's login script may point the Opus, Sonnet and Haiku slots at its routes) that the
  * subscription and Bedrock refuse, and the gateway's switch-off of Anthropic's betas.
  */
 const OFF_GATEWAY_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
@@ -109,11 +109,11 @@ const OFF_GATEWAY_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTH
   'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'];
 
 /**
- * Settings that take a Claude tab OFF a gateway the pod pins in ~/.claude/settings.json (seclab "everywhere" mode:
- * ANTHROPIC_BASE_URL + an apiKeyHelper). Command-line settings rank above the file, so empty values clear the pin
- * (verified 2026-10-22: the CLI then left the gateway). The model is cleared too — the gateway's name
- * (e.g. anthropic/opus-high) is not one a subscription or Bedrock knows, and would 400 — and so are the model slots
- * (OFF_GATEWAY_VARS): each goes back to what this process inherited, the pod's own export, when that suits the backend
+ * Settings that take a Claude tab OFF a gateway the machine pins in ~/.claude/settings.json for every Claude Code
+ * (ANTHROPIC_BASE_URL + an apiKeyHelper). Command-line settings rank above the file, so empty values clear the pin
+ * (verified 2026-10-22: the CLI then left the gateway). The model is cleared too — the gateway's own name for a model
+ * is not one a subscription or Bedrock knows, and would 400 — and so are the model slots
+ * (OFF_GATEWAY_VARS): each goes back to what this process inherited, the machine's own export, when that suits the backend
  * (a Bedrock id such as us.anthropic.claude-sonnet-4-6 only on Bedrock), else to '', Claude Code's default.
  * @param {boolean} bedrock  true for API / Bedrock, false for the subscription
  * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)

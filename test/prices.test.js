@@ -20,10 +20,10 @@ const near = (a, b) => Math.abs(a - b) < 1e-12;
 assert.deepStrictEqual(P.candidates('global.openai.gpt-6-luna'), ['global.openai.gpt-6-luna', 'openai.gpt-6-luna', 'gpt-6-luna']);
 assert.deepStrictEqual(P.candidates('xai/grok-4.6'), ['xai/grok-4.6', 'grok-4.6']);
 assert.deepStrictEqual(P.candidates('bedrock/us.anthropic.claude-opus-5-5'), ['bedrock/us.anthropic.claude-opus-5-5', 'us.anthropic.claude-opus-5-5', 'anthropic.claude-opus-5-5', 'claude-opus-5-5']);
-assert.deepStrictEqual(P.candidates('nexus-auto-bargain[1m]'), ['nexus-auto-bargain'], 'a context suffix is Claude Code\'s, not the model\'s');
+assert.deepStrictEqual(P.candidates('router-auto-bargain[1m]'), ['router-auto-bargain'], 'a context suffix is Claude Code\'s, not the model\'s');
 assert.strictEqual(P.lookup(TABLE, 'global.openai.gpt-6-luna').name, 'openai.gpt-6-luna', 'the most specific name the table has wins');
 assert.strictEqual(P.lookup(TABLE, 'azure/gpt-6-luna').name, 'gpt-6-luna');
-assert.strictEqual(P.lookup(TABLE, 'nexus-auto-bargain'), null, 'a router\'s alias has no price');
+assert.strictEqual(P.lookup(TABLE, 'router-auto-bargain'), null, 'a router\'s alias has no price');
 assert.strictEqual(P.lookup(TABLE, 'sample_spec'), null, 'an entry without a numeric input price is no entry');
 assert.strictEqual(P.lookup(null, 'gpt-6-luna'), null);
 

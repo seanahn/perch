@@ -508,19 +508,19 @@ class Session {
       this.backend = this.gateway ? 'gateway' : this.view.meter ? this.view.meter.backend() : '';
       const gw = this.gateway ? this.view.gateway() : null;
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
-      const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the pod pins a gateway for all Claude Code; a non-gateway tab must escape it
+      const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
       const launchCat = this.catalog();
       this.agent = new ClaudeAgent({
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
-        // off a pinned gateway the subscription does not know its name (anthropic/opus-high): keep the model only if the catalog has it
+        // off a pinned gateway the subscription does not know the gateway's model names: keep the model only if the catalog has it
         model: (this.model && (!pinned || !launchCat || modelEntry(launchCat, this.model))) ? this.model : undefined,
         effort: this.effort || undefined,
         executable: prog.path || undefined,
         costBefore: this.costSoFar === null ? undefined : this.costSoFar,
         env: gw ? Gateway.gatewayEnv(gw.vars) : undefined,
         gateway: gw ? { target: gw.vars.ANTHROPIC_BASE_URL } : undefined,   // through the relay, which sees which model answers
-        offGateway: pinned && this.backend ? { bedrock: this.backend !== 'subscription' } : undefined,   // take a sub/API tab off the pod-pinned gateway
+        offGateway: pinned && this.backend ? { bedrock: this.backend !== 'subscription' } : undefined,   // take a sub/API tab off the pinned gateway
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
@@ -1111,8 +1111,8 @@ class PerchView {
   }
 
   /**
-   * The gateway ~/.claude/settings.json pins for every Claude Code (seclab "everywhere" mode: an env.ANTHROPIC_BASE_URL
-   * with an apiKeyHelper), or '' if none. A non-gateway tab inherits this pin unless it is overridden, so Perch uses it to
+   * The gateway ~/.claude/settings.json pins for every Claude Code (an env.ANTHROPIC_BASE_URL with an apiKeyHelper, as
+   * a managed machine may set), or '' if none. A non-gateway tab inherits this pin unless it is overridden, so Perch uses it to
    * decide when a subscription / API tab needs offGatewaySettings and when the Claude catalog must load off the gateway.
    */
   pinnedGatewayUrl() {
@@ -1138,7 +1138,7 @@ class PerchView {
     };
     try { apply('codex', loadCodexModels()); } catch (_) { /* keep the fallback lists */ }
     this.loading = Promise.resolve()
-      // When the pod pins a gateway for all Claude Code, load the catalog off it (the subscription), so non-gateway tabs
+      // When the machine pins a gateway for all Claude Code, load the catalog off it (the subscription), so non-gateway tabs
       // list native models rather than the gateway's anthropic/… names. Gateway tabs use Gateway.gatewayModels instead.
       .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(false) : undefined }))
       .then((cat) => apply('claude', cat))
