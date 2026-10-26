@@ -8,6 +8,7 @@ docs/**
 package-lock.json
 audio/**
 voice/__pycache__/**
+codeindex/__pycache__/**
 # The agents' programs are not packaged: hundreds of megabytes, and one platform's only. Perch runs the ones inside
 # the vendors' own extensions (src/binaries.js).
 node_modules/@anthropic-ai/claude-agent-sdk-*/**

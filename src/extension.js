@@ -7,6 +7,7 @@ const { getHtml } = require('./webview');
 const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelLabel, sameModel, fallbackNote } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
+const { CodeIndex } = require('./codeIndex');
 const { resolveProgram, sdkCodex, terminalRun } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
@@ -245,6 +246,7 @@ class Session {
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
     this.swap = null;                // claude only: Claude Code moved this session to another model after a refusal: { from, to, category }
+    this.search = false;             // the agent's process has codebase search (codeindex/): the setting it started under
     this.backend = '';               // claude only: the backend this tab's agent started on
     this.gateway = kind === 'claude' && !!gateway;   // claude only: this tab runs through the gateway (src/gateway.js), whatever the window's backend
     this.via = {};                   // gateway only: the models that answered this turn's requests, by name, with how many each
@@ -395,7 +397,10 @@ class Session {
         this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
         if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
         if (!this.busy) this.view.syncTitle(this);         // and a tab the user has not named takes the title its agent's record has by now
-        if (!this.busy && this.restartWhenIdle) { this.restart(); this.post({ kind: 'note', text: 'Moved to the new Claude backend; the conversation continues from the next message.' }); }
+        if (!this.busy && this.restartWhenIdle) {   // true: a backend switch; else the note to give, once restarted
+          const note = typeof this.restartWhenIdle === 'string' ? this.restartWhenIdle : 'Moved to the new Claude backend; the conversation continues from the next message.';
+          this.restart(); this.post({ kind: 'note', text: note });
+        }
         return;
       case 'model': this.ran(ev.id); this.view.sendTabs(); return;
       case 'fallback': {             // Claude: the model's safeguards refused a response, and Claude Code retried it on another model
@@ -510,7 +515,10 @@ class Session {
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
       const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
       const launchCat = this.catalog();
+      const search = this.view.codeSearch();
+      this.search = !!search;          // whether this process has codebase search: a change in the setting restarts it
       this.agent = new ClaudeAgent({
+        search: search || undefined,
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
         // off a pinned gateway the subscription does not know the gateway's model names: keep the model only if the catalog has it
@@ -524,7 +532,10 @@ class Session {
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
+      const search = this.view.codeSearch();
+      this.search = !!search;
       this.agent = new CodexAgent({
+        search: search || undefined,
         cwd: cwd(), emit, resume,
         additionalDirectories: additionalCwds(),
         sandboxMode: this.mode,
@@ -537,6 +548,7 @@ class Session {
       });
       this.backend = this.view.meter ? this.view.meter.codexBackend() : '';
     }
+    if (this.search) this.view.offerSearch();   // once a machine: search by meaning is an install, keywords are not
     return this.agent;
   }
 
@@ -758,7 +770,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = false; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -829,11 +841,18 @@ class PerchView {
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex), { program: () => program('claude') });
     // list prices for a gateway's models, in the extension's own storage: read when a tab goes through the gateway
     this.prices = Prices.createPrices({ file: require('path').join((context.globalStorageUri && context.globalStorageUri.fsPath) || require('path').join(require('os').tmpdir(), 'perch'), 'litellm-prices.json') });
+    this.root = (context.extensionUri && (context.extensionUri.fsPath || context.extensionUri.path)) || context.extensionPath || require('path').join(__dirname, '..');
     this.voice = new VoiceHost({
-      root: (context.extensionUri && (context.extensionUri.fsPath || context.extensionUri.path)) || context.extensionPath || require('path').join(__dirname, '..'),
+      root: this.root,
       send: (sid, ev) => this.sendEvent(sid, ev),
       deliver: (sid, text) => this.deliver(sid, text),
     });
+    // codebase search, the MCP server Perch gives its tabs (codeindex/, src/codeIndex.js). Off by default, and then nothing
+    // of it runs: whether this machine's Python can run it is asked once the setting is on, and a tab started before the
+    // answer simply goes without
+    this.searchUsable = false; this.searchProbed = null;
+    this.codeIndex = new CodeIndex({ root: this.root, python: cfg('codebaseIndex.python') || undefined });
+    if (cfg('codebaseIndex.enabled') === true) this.probeSearch();
     this.restore();
   }
 
@@ -874,6 +893,71 @@ class PerchView {
     if (JSON.stringify(next) === JSON.stringify(this.commands[kind])) return;
     this.commands[kind] = next;
     this.raw({ type: 'commands', kind, list: next });
+  }
+
+  // ---- codebase search (codeindex/, src/codeIndex.js, docs/notes/201-codebase-indexing.md)
+  /** Whether this machine's Python can run the search server: asked once, and only once search is wanted. */
+  probeSearch() {
+    if (!this.searchProbed) this.searchProbed = this.codeIndex.probe().then((ok) => { this.searchUsable = ok; return ok; });
+    return this.searchProbed;
+  }
+  /** The search server for a tab's next process, or null: off (the default), or no Python here that can run it. */
+  codeSearch() {
+    if (cfg('codebaseIndex.enabled') !== true || !this.searchUsable) return null;
+    return this.codeIndex.mcpServer(cwd());
+  }
+  /**
+   * The setting changed. A tab takes it from its process's next start: a Claude tab is restarted after its turn, as on
+   * a backend switch, since the tool list is part of the cached prompt; a Codex tab's next turn is a new process anyway.
+   */
+  async searchChanged() {
+    const python = cfg('codebaseIndex.python') || undefined;
+    if ((python || (process.platform === 'win32' ? 'python' : 'python3')) !== this.codeIndex.python) {
+      this.codeIndex = new CodeIndex({ root: this.root, python });
+      this.searchUsable = false; this.searchProbed = null;
+    }
+    if (cfg('codebaseIndex.enabled') === true) await this.probeSearch();
+    const on = !!this.codeSearch();
+    for (const s of this.sessions) {
+      if (!s.agent || s.search === on) continue;
+      const what = `Codebase search is ${on ? 'on' : 'off'}`;
+      if (s.kind === 'codex') { s.agent.setSearch(this.codeSearch()); s.search = on; s.post({ kind: 'note', text: `${what} for this tab from its next turn.` }); }
+      else if (s.busy) { s.restartWhenIdle = `${what} for this tab; the conversation continues, the prompt cache starts over.`; s.post({ kind: 'note', text: `${what}. This tab takes it up after the current turn.` }); }
+      else { s.restart(); s.post({ kind: 'note', text: `${what} for this tab from the next message; the conversation continues, the prompt cache starts over.` }); }
+    }
+    if (on) this.offerSearch();
+  }
+  /** Turn codebase search on or off where it is set: in the workspace's settings if they have it, else the user's. */
+  async toggleSearch() {
+    const c = vscode.workspace.getConfiguration('perch'), i = (c.inspect && c.inspect('codebaseIndex.enabled')) || {};
+    const was = c.get('codebaseIndex.enabled') === true;
+    const target = i.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    await c.update('codebaseIndex.enabled', !was, target);
+    vscode.window.showInformationMessage(`Perch: codebase search is ${was ? 'off' : 'on'}${!was && !this.searchUsable ? ', but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python' : ''}. Each tab takes it up from its next message.`);
+  }
+  /** Once a machine, as a tab starts with codebase search: keywords need nothing; meaning is an install. */
+  async offerSearch() {
+    if (this.searchOffered || this.codeIndex.isInstalled() || this.context.globalState.get('perch.codebaseIndex.offered')) return;
+    this.searchOffered = true;
+    const pick = await vscode.window.showInformationMessage('Perch: Claude and Codex tabs can search this workspace by keywords (codebase search). Install search by meaning as well? About 300 MB, once, in ~/.local/share/perch/codeindex; the code never leaves this machine.', 'Install', 'Not Now', 'Turn Off');
+    if (pick) await this.context.globalState.update('perch.codebaseIndex.offered', true);
+    if (pick === 'Install') await this.installSearch();
+    else if (pick === 'Turn Off') await vscode.workspace.getConfiguration('perch').update('codebaseIndex.enabled', false, vscode.ConfigurationTarget.Global);
+  }
+  /** Install search by meaning, its progress in a notification. Running search servers move onto it by themselves. */
+  async installSearch() {
+    if (this.codeIndex.isInstalled()) { vscode.window.showInformationMessage('Perch: search by meaning is already installed here.'); return true; }
+    try {
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Perch: installing search by meaning' }, (progress) => {
+        let last = 0;
+        return this.codeIndex.install((message, pct) => { progress.report({ message, increment: Math.max(0, pct - last) }); last = pct; });
+      });
+      vscode.window.showInformationMessage('Perch: search by meaning is installed. Codebase search moves to it by itself; until a workspace\'s index has its vectors, a few minutes the first time, it searches by keywords.');
+      return true;
+    } catch (e) {
+      vscode.window.showErrorMessage('Perch: search by meaning could not be installed: ' + String((e && e.message) || e) + ' Search by keywords goes on.');
+      return false;
+    }
   }
 
   /** Put text into a session's message box, at the cursor. If its page is not there to take it, it waits. */
@@ -1710,6 +1794,9 @@ function activate(context) {
     vscode.commands.registerCommand('perch.voice.toggle', () => { const s = perch.active(); if (s) perch.voice.start(s.id); }),
     vscode.commands.registerCommand('perch.voice.cancel', () => perch.voice.cancel()),
     vscode.commands.registerCommand('perch.voice.unload', () => perch.voice.unload()),
+    vscode.commands.registerCommand('perch.codebaseIndex.toggle', () => perch.toggleSearch()),
+    vscode.commands.registerCommand('perch.codebaseIndex.install', () => perch.installSearch()),
+    vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('perch.codebaseIndex')) perch.searchChanged(); }),
     { dispose: () => perch.dispose() },
   );
   perch.start();

@@ -528,6 +528,57 @@ Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,
 `perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
 
+## Codebase search
+
+Claude and Codex tabs get one more tool, `codebase_search`: a question
+in plain words finds the files that answer it, even when they share no
+names with it. It is Cursor's codebase index, done the Perch way: a tool
+the agent calls, so results come after the cached prompt, never into it.
+The design and the measurements are in
+[note 201](docs/notes/201-codebase-indexing.md).
+
+- **Off by default.** `perch.codebaseIndex.enabled` turns it on, for
+  every workspace or for one; `Perch: Toggle Codebase Search` flips it.
+  A change reaches each tab from its next message: a Claude tab
+  restarts, after its turn if one is running (its tool list is part of
+  its cached prompt, so the cache starts over once); a Codex tab's next
+  turn is a process of its own anyway.
+- **Keywords at once, meaning once installed.** Keyword search (BM25)
+  needs only the machine's `python3`, 3.8 or newer with SQLite FTS5.
+  Search by meaning needs an embedding model, MiniLM, in a private
+  environment of about 300 MB under `~/.local/share/perch/codeindex`:
+  Perch offers it once, as the first tab starts, and `Perch: Install
+  Codebase Search by Meaning` installs it later. A tab's search server
+  moves onto it by itself, without a restart.
+- **The index stays on the machine with the code.** It is kept in
+  `~/.cache/codebase-index/`, outside the repository, private to you, and
+  brought up to date from the files that changed. Under Remote-SSH it is
+  built on the remote, where the agents run; nothing leaves that machine
+  but the one-time download. The first index of a repository of about
+  1,500 files takes seconds by keywords and a few minutes by meaning, on
+  a CPU, in the background: until then the tool says how far it has got
+  and the agent goes on with grep.
+- **What is left out:** whatever git ignores, lockfiles, binaries, files
+  over 256 KB, and the patterns in a `.codebaseignore` at the repository
+  root (`dir/` for a directory, else a path pattern such as `*.min.js`).
+  A `.codebaseignore` that is just `*` turns search off for that
+  repository; the tool stays, and says so.
+- **Codex may need telling.** Claude reaches for the tool by itself;
+  Codex, in testing, kept to `rg`. A line in the repository's `AGENTS.md`
+  ("use `codebase_search` when you do not know the names involved")
+  changes that.
+- **In a terminal too.** The server is Perch's `codeindex/server.py`;
+  `claude mcp add -s user codebase -- python3 <it>` or `codex mcp add
+  codebase -- python3 <it>` gives the CLIs the same tool outside Perch.
+- `perch.codebaseIndex.python` names the Python to run it on, if not
+  `python3`.
+
+Whether it pays depends on the repository, which is why it is off until
+you turn it on. On a well-documented one of 1,500 files, Claude and Codex
+found nine answers in ten without it, and the tool cost Claude a step or
+two a question; it helps where the names in the code are not what you
+would ask for.
+
 ## Usage, in the footer
 
 The footer follows the active tab.
@@ -709,6 +760,8 @@ Installed from a `.vsix` file, Perch does not fetch it: build it with
 - `src/meterHost.js` — polling, the backend switch, login
 - `src/voice.js`, `src/voiceHost.js` — the speech-to-text engine, and dictation
 - `voice/server.py` — Whisper behind JSON lines
+- `src/codeIndex.js` — codebase search's Perch side: the Python it runs on, the server a tab gets, the install of search by meaning
+- `codeindex/indexer.py`, `codeindex/server.py` — the codebase index (BM25, and vectors when installed) and its MCP server
 - `audio/` — Perch Audio, the recording companion, an extension of its own
 - `src/webview.js` — the page: tab bar, per-tab panes, compose box
 - `test/meter.test.js` — usage, cost, and the switch, against throwaway home directories
@@ -717,6 +770,8 @@ Installed from a `.vsix` file, Perch does not fetch it: build it with
 - `test/sessionStore.test.js` — listing and naming, against throwaway directories and a fake Agent SDK
 - `test/models.test.js` — catalog parsing, no model calls
 - `test/voice.test.js` — the engine, against a stand-in server
+- `test/codeIndex.test.js` — codebase search's install and server choice, against a stand-in Python
+- `test/codeindex_test.py` — the index and the MCP server, against throwaway git repositories, no model
 - `audio/test/recorder.test.js` — the recorder, with a library that plays back frames
 - `test/host.test.js` — host logic against a stubbed VS Code API, no model calls
 - `test/page.test.js` — the real page script in a DOM, no model calls

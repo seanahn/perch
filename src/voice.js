@@ -191,4 +191,4 @@ class VoiceEngine {
   }
 }
 
-module.exports = { VoiceEngine, DEFAULT_HOME };
+module.exports = { VoiceEngine, DEFAULT_HOME, fetchText };

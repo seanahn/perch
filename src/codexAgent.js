@@ -66,6 +66,7 @@ class CodexAgent {
    * @param {string} [opts.reasoningEffort]
    * @param {string} [opts.resume]   thread id to resume
    * @param {string} [opts.executable]  path to a codex program, in place of the one that comes with the SDK
+   * @param {{command: string, args: string[], env?: object}} [opts.search]  the codebase search MCP server (src/codeIndex.js)
    */
   constructor(opts) {
     this.opts = opts;
@@ -99,8 +100,16 @@ class CodexAgent {
     const o = {};
     if (this.opts.executable) o.codexPathOverride = this.opts.executable;
     if (this.opts.apiKey) o.apiKey = this.opts.apiKey;
-    if (this.opts.bedrock) o.config = bedrockConfig(this.opts.bedrock);
+    // codebase search (codeindex/server.py) as one more MCP server, given as --config overrides: ~/.codex/config.toml is not touched
+    const config = Object.assign({}, this.opts.bedrock ? bedrockConfig(this.opts.bedrock) : {}, this.opts.search ? { mcp_servers: { codebase: this.opts.search } } : {});
+    if (Object.keys(config).length) o.config = config;
     return new this.sdk.Codex(o);
+  }
+  /** Give the next turn codebase search, or take it away: Codex runs each turn as a process, so nothing restarts. */
+  setSearch(search) {
+    this.opts.search = search || undefined;
+    if (!this.sdk) return;
+    this.codex = this._client(); this.changed = true;
   }
   /** Switch the key the next turn runs with: null means the ChatGPT login. The thread is taken up again by the new client. */
   setApiKey(key) { this.setBackend({ apiKey: key }); }

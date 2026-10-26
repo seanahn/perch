@@ -97,11 +97,12 @@ class FakeAgent {
     if (!knobs.slowModel) this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: this.now });
   }
   dispose() { this.disposed = true; }
+  setSearch(s) { (this.searches = this.searches || []).push(s || null); this.o.search = s || undefined; }
   setApiKey(k) { this.setBackend({ apiKey: k }); }
   setBackend(b) { (this.apiKeys = this.apiKeys || []).push(b.apiKey || null); (this.backends = this.backends || []).push(b); this.o.apiKey = b.apiKey || undefined; this.o.bedrock = b.bedrock || undefined; }
 }
 
-function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders } = {}) {
+function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders, codeIndex } = {}) {
   // the agents' own records of past sessions: what they list, and every name written to them
   const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [] }, past);
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
@@ -112,7 +113,16 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     loadTranscript: async (kind, id, o) => { store.loads.push([kind, id, o]); const t = store.transcripts[id]; if (t instanceof Error) throw t; return t ? JSON.parse(JSON.stringify(t)) : { events: [], earlier: 0 }; },
     renameSession: async (kind, id, title, o) => { const name = realStore.cleanTitle(title); if (!name) throw new Error('A session name cannot be empty.'); if (store.failRename) throw new Error(store.failRename); store.renamed.push([kind, id, name, o]); for (const x of store.sessions) if (x.kind === kind && x.id === id) { x.title = name; x.named = true; } return name; },
   });
-  const cfgBox = Object.assign({}, config);                 // mutable, so a test can change a setting and fire the change event
+  const cfgBox = Object.assign({}, config);
+  // codebase search: whether this machine's Python can run it (usable), search by meaning installed, the installs run
+  const ibox = Object.assign({ usable: false, installed: false, installs: 0, made: [], failInstall: null }, codeIndex);
+  class FakeCodeIndex {
+    constructor(o) { this.o = o; this.python = o.python || 'python3'; ibox.made.push(this); }
+    probe() { return Promise.resolve(!!ibox.usable); }
+    isInstalled() { return !!ibox.installed; }
+    mcpServer(ws) { return { command: ibox.installed ? '/home/u/.local/share/perch/codeindex/venv/bin/python' : this.python, args: ['/ext/fennets.perch/codeindex/server.py', ws], env: { CODEINDEX_MODELS: '/home/u/.local/share/perch/codeindex/models' } }; }
+    async install(onStep) { ibox.installs++; onStep('Creating a private Python environment', 5); if (ibox.failInstall) throw new Error(ibox.failInstall); onStep('Ready', 100); ibox.installed = true; return { ready: true }; }
+  }                 // mutable, so a test can change a setting and fire the change event
   const cats = Object.assign({}, CATALOGS, catalogs);     // pass { claude: null } to simulate an agent that cannot list models
   const loads = { claude: 0, codex: 0 };
   const installed = extensions || {
@@ -153,7 +163,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, executedWith: [], forwarded: [], external: [], copied: [] };
+  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [] }, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -195,7 +205,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const focus = (p) => { for (const x of ui.panels) x.active = false; p.active = true; };
   const say = (list) => (msg, ...rest) => { list.push(msg); if (rest[0] && typeof rest[0] === 'object' && rest[0].detail) ui.details.push(rest[0].detail); const a = ui.answers.shift(); return Promise.resolve(a); };
   const vscodeStub = {
-    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: (section) => section === 'workbench.editor' ? { get: (k) => ui.editorSettings[k] } : ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
+    workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: (section) => section === 'workbench.editor' ? { get: (k) => ui.editorSettings[k] } : ({ get: (k) => { const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; }, inspect: (k) => ({ globalValue: cfgBox[k], workspaceValue: (ui.workspaceConfig || {})[k] }), update: async (k, v, target) => { ui.configUpdates.push([k, v, target]); Object.assign(cfgBox, { [k]: v }); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => ('perch.' + k).startsWith(sec) }); } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; } },
     window: {
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
@@ -224,6 +234,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
     env: { clipboard: { writeText: async (t) => { ui.copied.push(t); } }, remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     extensions: {
       getExtension: (id) => { const e = installed[String(id).toLowerCase()]; const root = e && e.__root ? e.__root : '/ext/' + id; return e ? { extensionUri: { path: root, fsPath: root }, extensionPath: root, packageJSON: e } : undefined; },
       onDidChange: (f) => { ui.listeners.extensions.push(f); return { dispose() {} }; },
@@ -245,6 +256,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './codexAgent') return { CodexAgent: FakeAgent };
     if (req === './meter') return Object.assign({}, realMeter, { createMeter: () => fakeMeter });   // real formatting and summary, fake machine
     if (req === './voice') return { VoiceEngine: FakeEngine, DEFAULT_HOME: '/home/u/.local/share/perch/voice' };
+    if (req === './codeIndex') return { CodeIndex: FakeCodeIndex };
     if (req === './sessionStore') return fakeStore;
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, or when
@@ -276,7 +288,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const restorePanel = (sid, title) => { const p = makePanel('perch.session', title || 'restored', { viewColumn: 2, preserveFocus: true }, {}); ui.serializers['perch.session'].deserializeWebviewPanel(p, sid === undefined ? undefined : { sid }); return p; };
   const changeExtensions = (patch) => { for (const [k, v] of Object.entries(patch)) { if (v) installed[k] = v; else delete installed[k]; } for (const f of ui.listeners.extensions) f(); };
   const tabsChanged = (e) => { for (const f of ui.listeners.tabs) f(Object.assign({ opened: [], closed: [], changed: [] }, e)); };
-  return { perch, registered, commands, memento, globalState, secrets, picks, cats, loads, box, ui, changeConfig, changeExtensions, restorePanel, waitingTab, tabsChanged, vbox, abox, store, vscode: vscodeStub };
+  return { perch, registered, commands, memento, globalState, secrets, picks, cats, loads, box, ui, ibox, changeConfig, changeExtensions, restorePanel, waitingTab, tabsChanged, vbox, abox, store, vscode: vscodeStub };
 }
 
 function fakeView() {

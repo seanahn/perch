@@ -2134,6 +2134,89 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- codebase search (codeindex/, docs/notes/201): off by default; turned on, wherever this machine's Python can run it, a
+  // tab's process is given the server; a change in the setting reaches each tab from its next message (a Claude tab restarts,
+  // after its turn if one is running; a Codex tab's next turn is a process anyway); search by meaning is offered once
+  {
+    const m = install(undefined, { codeIndex: { usable: true } }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c0 = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c0, text: 'hi' }); await flush(); await flush();
+    assert.strictEqual(created[created.length - 1].o.search, undefined, 'off by default: no server, and nothing offered');
+    assert.strictEqual(m.ui.infos.filter((i) => /search by meaning/.test(i)).length, 0);
+    m.ui.answers.push('Not Now');       // turning it on offers search by meaning at once
+    m.changeConfig({ 'codebaseIndex.enabled': true }); await flush(); await flush();
+    const SERVER = { command: 'python3', args: ['/ext/fennets.perch/codeindex/server.py', process.cwd()], env: { CODEINDEX_MODELS: '/home/u/.local/share/perch/codeindex/models' } };
+    const offers = () => m.ui.infos.filter((i) => /Install search by meaning/.test(i)).length;
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush(); await flush();
+    const a = created[created.length - 1];
+    assert.deepStrictEqual(a.o.search, SERVER, 'turned on: the tab\'s process is given the search server');
+    assert.deepStrictEqual([offers(), m.globalState.get('perch.codebaseIndex.offered')], [1, true], 'search by meaning is offered, and once answered, not again');
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    v.fire({ type: 'send', sid: x, text: 'hi' }); await flush(); await flush();
+    const xa = created[created.length - 1];
+    assert.deepStrictEqual([xa.o.search, offers()], [SERVER, 1], 'Codex too; no second offer');
+    // turned off: the idle Claude tab's process ends, the next one goes without; the Codex tab, from its next turn
+    m.changeConfig({ 'codebaseIndex.enabled': false }); await flush(); await flush();
+    assert.strictEqual(a.disposed, true, 'the Claude process ends: its tool list is part of its cached prompt');
+    assert(v.events(c).some((e) => e.kind === 'note' && /^Codebase search is off for this tab from the next message; the conversation continues, the prompt cache starts over\.$/.test(e.text)));
+    assert.deepStrictEqual(xa.searches, [null], 'the Codex agent is told for its next turn');
+    assert(v.events(x).some((e) => e.kind === 'note' && e.text === 'Codebase search is off for this tab from its next turn.'));
+    v.fire({ type: 'send', sid: c, text: 'again' }); await flush();
+    const a2 = created[created.length - 1];
+    assert.strictEqual(a2.o.search, undefined, 'its next process has no search');
+    // on again, by the command, while the Claude tab's turn runs: it moves after the turn
+    v.fire({ type: 'send', sid: c, text: 'hold on' }); await flush();
+    await m.commands['perch.codebaseIndex.toggle'](); await flush(); await flush();
+    assert.deepStrictEqual(m.ui.configUpdates.pop(), ['codebaseIndex.enabled', true, 1], 'written where it was set: the user\'s settings here');
+    assert(/^Perch: codebase search is on\. Each tab takes it up from its next message\.$/.test(m.ui.infos.pop()));
+    assert.strictEqual(a2.disposed, false, 'a running turn is not cut short');
+    assert(v.events(c).some((e) => e.kind === 'note' && e.text === 'Codebase search is on. This tab takes it up after the current turn.'));
+    a2.finish(); await flush();
+    assert.strictEqual(a2.disposed, true);
+    assert(v.events(c).some((e) => e.kind === 'note' && e.text === 'Codebase search is on for this tab; the conversation continues, the prompt cache starts over.'));
+    v.fire({ type: 'send', sid: c, text: 'after' }); await flush();
+    assert.deepStrictEqual(created[created.length - 1].o.search, SERVER);
+    // search by meaning, installed by the command: new processes run the server on the private environment's Python
+    assert.strictEqual(await m.commands['perch.codebaseIndex.install'](), true);
+    assert.deepStrictEqual([m.ibox.installs, m.ui.progress.includes('Perch: installing search by meaning')], [1, true]);
+    assert(/^Perch: search by meaning is installed\. Codebase search moves to it by itself/.test(m.ui.infos.pop()));
+    assert.strictEqual(m.perch.codeSearch().command, '/home/u/.local/share/perch/codeindex/venv/bin/python');
+    assert.strictEqual(await m.commands['perch.codebaseIndex.install'](), true, 'twice: nothing to do');
+    assert.deepStrictEqual([m.ibox.installs, m.ui.infos.pop()], [1, 'Perch: search by meaning is already installed here.']);
+    // another Python, from the settings: asked again whether it can run the server
+    m.changeConfig({ 'codebaseIndex.python': '/opt/py312/bin/python3' }); await flush(); await flush();
+    assert.deepStrictEqual(m.ibox.made.map((i) => i.python), ['python3', '/opt/py312/bin/python3']);
+    m.perch.dispose();
+  }
+  // where no Python here can run it (too old, or SQLite without FTS5): no tool at all, and nothing offered
+  {
+    const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: false } }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush(); await flush();
+    assert.deepStrictEqual([created[created.length - 1].o.search, m.ui.infos.filter((i) => /search by meaning/.test(i)).length], [undefined, 0]);
+    m.perch.dispose();
+  }
+
+  // ---- the real Codex agent: the search server as --config overrides beside Bedrock's, never written to config.toml.
+  // (Claude's: the SDK's mcpServers, always loaded so the tool is in the first request's prefix; checked by a live run.)
+  {
+    const SERVER = { command: 'python3', args: ['/ext/codeindex/server.py', '/w'], env: { CODEINDEX_MODELS: '/m' } };
+    const { CodexAgent } = require('module').prototype.require.call(module, '../src/codexAgent.js');
+    const made = [];
+    const x = Object.create(CodexAgent.prototype);
+    Object.assign(x, { opts: { cwd: '/w', search: SERVER, bedrock: { endpoint: 'runtime', provider: 'amazon-bedrock-runtime', region: 'us-west-2', profile: 'dev' } }, sdk: { Codex: class { constructor(o) { made.push(o); } } } });
+    x._client();
+    assert.deepStrictEqual(made[0].config.mcp_servers, { codebase: SERVER }, 'the search server, as Codex config overrides');
+    assert.strictEqual(made[0].config.model_provider, 'amazon-bedrock-runtime', 'beside Bedrock\'s');
+    x.setSearch(null);
+    assert.deepStrictEqual([made[1].config.mcp_servers, x.changed], [undefined, true], 'taken away: the next turn runs without it');
+    x.opts.bedrock = undefined; x._client();
+    assert.strictEqual(made[2].config, undefined, 'and with neither, no overrides at all');
+  }
+
   // ---- the real Codex agent: an app the turn tried is not connected (SharePoint, as seen on 2026-10-09): the connect link
   // Codex's apps server gives in the result's _meta is said in a note, once a turn, as a button to chatgpt.com
   {

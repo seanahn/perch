@@ -36,6 +36,7 @@ class AsyncQueue {
  * @param {number} [opts.costBefore]                   the session's cost so far, as last reported, so the first turn's own cost is known
  * @param {Record<string,string>} [opts.env]           variables added to the process's environment: a gateway's ANTHROPIC_BASE_URL and token
  * @param {{target: string}} [opts.gateway]            run the process through a relay to this base URL, so each response's model is seen (events of kind `relay`)
+ * @param {{command: string, args: string[], env?: object}} [opts.search]  the codebase search MCP server (src/codeIndex.js)
  */
 class ClaudeAgent {
   constructor(opts) {
@@ -95,6 +96,12 @@ class ClaudeAgent {
         return { behavior: 'deny', message: ans.message || 'Denied by user in perch' };
       },
     };
+    // codebase search (codeindex/server.py, docs/notes/201): a tool the agent calls, never retrieval into the prompt.
+    // Always loaded, so it is in the first request's tool list and stays there: the prefix the cache keeps does not move.
+    if (this.opts.search) {
+      options.mcpServers = { codebase: Object.assign({ type: 'stdio' }, this.opts.search, { alwaysLoad: true }) };
+      options.allowedTools = ['mcp__codebase__codebase_search', 'mcp__codebase__codebase_status'];   // read-only: no permission card per search
+    }
     if (this.opts.model) options.model = this.opts.model;
     if (this.opts.effort) options.effort = this.opts.effort;
     if (this.opts.resume) options.resume = this.opts.resume;

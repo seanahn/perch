@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.6.55",
+  "version": "0.7.1",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -134,6 +134,14 @@
       {
         "command": "perch.moveAllToSidebar",
         "title": "Perch: Move All Tabs to the Sidebar"
+      },
+      {
+        "command": "perch.codebaseIndex.toggle",
+        "title": "Perch: Toggle Codebase Search"
+      },
+      {
+        "command": "perch.codebaseIndex.install",
+        "title": "Perch: Install Codebase Search by Meaning"
       },
       {
         "command": "perch.voice.setup",
@@ -359,6 +367,16 @@
           "default": true,
           "description": "New tabs attach the active file and, if there is one, the selection to each message, as the vendors' own panels do. Each tab can turn it on or off; the choice is kept with the tab."
         },
+        "perch.codebaseIndex.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Give Claude and Codex tabs a `codebase_search` tool: search this workspace by keywords, and by meaning once that is installed (`Perch: Install Codebase Search by Meaning`). Off by default: on a well-documented repository the agents found their answers as fast by grep, and the tool cost them steps; turn it on, here or for one workspace, where the names in the code are not what you would ask for. The index is kept in `~/.cache/codebase-index/`, on the machine the workspace is on. A change applies to each tab from its next message."
+        },
+        "perch.codebaseIndex.python": {
+          "type": "string",
+          "default": "",
+          "description": "The Python that codebase search runs on, and that makes its private environment: 3.8 or newer, with SQLite FTS5. Empty uses python3."
+        },
         "perch.codex.approvalPolicy": {
           "type": "string",
           "enum": [
@@ -525,10 +543,10 @@
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
-    "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py",
+    "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py codeindex/indexer.py codeindex/server.py test/codeindex_test.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/gateway.test.js && node test/relay.test.js && node test/prices.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codexAuth.test.js && node test/codexBedrock.test.js && node test/codexWatch.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/gateway.test.js && node test/relay.test.js && node test/prices.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codeIndex.test.js && python3 test/codeindex_test.py && node test/codexAuth.test.js && node test/codexBedrock.test.js && node test/codexWatch.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"
