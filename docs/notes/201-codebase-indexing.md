@@ -396,9 +396,11 @@ In a repository, git's own view of its files: tracked, and untracked but not ign
 is no repository but holds some (a home directory opened as the workspace, as on a pod) is walked:
 each repository inside is taken by git's view and its own `.codebaseignore`, and every hidden file
 and directory is left out, there being no `.gitignore` to go by and a hidden file at a home's root
-being a shell's history or a tool's credentials. (Found on 2026-10-27: a pod's home as the
+being a shell's history or a tool's credentials. The root's own `.codebaseignore` prunes that walk,
+so a repository it names is never listed and cannot fill the 50,000-file cap before the others are
+reached; links are followed, each real directory once. (Found on 2026-10-27: a pod's home as the
 workspace, 46,000 files indexed with `.bash_history` among them, each repository's ignore files
-unread.) Then `.gitignore`, plus a `.codebaseignore`, plus a default list: virtual environments (`.venv*`),
+unread; then, the ignore file applied only after the walk, three repositories never reached.) Then `.gitignore`, plus a `.codebaseignore`, plus a default list: virtual environments (`.venv*`),
 `node_modules`, lockfiles, `.git`, build output, and any large generated or vendored tree. A library
 of thousands of scanner templates, say, drowns every search unless it is left out; it is indexed
 only on request, when that is the work. Notes and docs are indexed: much of "how does X work?" is

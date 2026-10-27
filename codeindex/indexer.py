@@ -98,10 +98,20 @@ def list_files(root, ignore):
     at a home's root is a shell's history or a tool's credentials."""
     names = git_files(root)
     if names is None:
-        names = []
-        for d, dirs, files in os.walk(root):
+        names, seen = [], set()
+        # links are followed (a repository linked into a home is the usual thing on a pod), each real directory once:
+        # a link back up the tree, or to one already taken, is pruned
+        for d, dirs, files in os.walk(root, followlinks=True):
+            real = os.path.realpath(d)
+            if real in seen:
+                dirs[:] = []
+                continue
+            seen.add(real)
             rel = os.path.relpath(d, root).replace(os.sep, '/')
             rel = '' if rel == '.' else rel + '/'
+            if rel and ignore.skip(rel):               # the root's .codebaseignore prunes the walk: what it names is never listed
+                dirs[:] = []
+                continue
             if d != root and os.path.exists(os.path.join(d, '.git')):   # a repository inside: by its own view and its own ignore file
                 inner = git_files(d)
                 if inner is not None:
@@ -110,7 +120,8 @@ def list_files(root, ignore):
                         names += [rel + p for p in inner if not ig.skip(p)]
                     dirs[:] = []
                     continue
-            dirs[:] = [x for x in dirs if x not in SKIP_DIRS and not x.startswith('.')]
+            dirs[:] = [x for x in dirs if x not in SKIP_DIRS and not x.startswith('.') and not ignore.skip(rel + x + '/')
+                       and os.path.realpath(os.path.join(d, x)) not in seen]
             names += [rel + f for f in files if not f.startswith('.')]
             if len(names) > MAX_FILES:
                 break

@@ -93,6 +93,26 @@ try:
     assert 'inner/scripts/untracked_tool.sh' in got, 'untracked but not ignored, by git\'s view of that repository'
     for bad in ('.bash_history', '.cache/x.txt', 'plain/sub/.hidden', 'inner/secret.env', 'inner/package-lock.json', 'inner/docs/notes/101-relay.md', 'inner/logo.png'):
         assert bad not in got, bad + ' must be out'
+    # the home's own .codebaseignore prunes the walk: a repository it names is never listed, so it cannot fill the cap
+    # before the others are reached (seen on a pod: three repositories left out, the cap reached on one that was ignored)
+    big = repo('home/big')
+    write(home, '.codebaseignore', 'big/\n')
+    cap, indexer.MAX_FILES = indexer.MAX_FILES, 8
+    try:
+        got = indexer.list_files(home, indexer.Ignore(home))
+    finally:
+        indexer.MAX_FILES = cap
+    assert not any(p.startswith('big/') for p in got) and 'inner/src/gateway.py' in got, got
+    os.remove(os.path.join(home, '.codebaseignore'))
+    import shutil as _sh; _sh.rmtree(big)
+
+    # a repository linked into the home (the usual thing on a pod), and a link back up the tree
+    elsewhere = repo('elsewhere')                     # outside the home, linked into it
+    os.symlink(elsewhere, os.path.join(home, 'linked'))
+    os.symlink(home, os.path.join(home, 'plain', 'loop'))
+    got = indexer.list_files(home, indexer.Ignore(home))
+    assert 'linked/src/gateway.py' in got, 'a linked repository is taken, by git\'s view: ' + str([p for p in got if p.startswith('linked')][:3])
+    assert not any('loop/' in p for p in got) and len(got) == len(set(got)), 'a link back up the tree is pruned, nothing twice'
     write(inner, '.codebaseignore', '*\n')
     assert not any(p.startswith('inner/') for p in indexer.list_files(home, indexer.Ignore(home))), 'a repository that says no'
 
