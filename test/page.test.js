@@ -1071,6 +1071,17 @@ window.close();
     assert.deepStrictEqual(out8.pop(), { type: 'subagentUsage', sid: 'c' });
     p8.host({ type: 'event', sid: 'c', ev: { kind: 'result', ok: true, duration_ms: 5 } });
     assert.deepStrictEqual(out8.pop(), { type: 'subagentUsage', sid: 'c' }, 'a turn ended: what it added');
+    // a Claude tab has the table too, once its session is on record, and its note speaks of a Claude subscription
+    p8.host({ type: 'tabs', tabs: [with_(C, { thread: true }), with_(K, { thread: true, started: true, backend: 'subscription' })], active: 'k' });
+    assert(p8.shown(btn), 'a Claude tab whose session is on record offers it');
+    out8.length = 0; btn.click();
+    assert.deepStrictEqual(out8.pop(), { type: 'subagentUsage', sid: 'k' });
+    p8.host({ type: 'subagentUsage', sid: 'k', at: 1, kind: 'claude', prices: true, backend: 'subscription', main: row('', 'claude-opus-5-5', 3, 1000000, 900000, 10000, 1.23, { thread: 'c-1', effort: 'max' }),
+      subagents: [row('Find the gateway code', 'claude-opus-5-5', 1, 100000, 0, 1000, 0.52, { thread: 'aaa1', state: 'finished', nickname: 'general-purpose', effort: 'low' })] });
+    const kbox = p8.$$('.pane')[1].querySelector('.mx');
+    assert(/^Main thread and 1 sub-agent · ≈\$1\.75 at list prices, sub-agents ≈\$0\.520 \(30%\)/.test(kbox.querySelector('.mxh .what').textContent), kbox.querySelector('.mxh .what').textContent);
+    assert(/On a Claude subscription nothing is billed per token/.test(kbox.querySelector('.mxh .what').title) && /a sub-agent's kept beside the session's\.$/.test(kbox.querySelector('.mxh .what').title));
+    p8.host({ type: 'tabs', tabs: [with_(C, { thread: true }), K], active: 'c' });
     // a thread on a model with no list price: no cost for it, and shares of tokens
     p8.host(Object.assign({}, U, { subagents: [row('odd', 'gpt-unknown', 1, 10e6, 0, 1e6, null, { unpriced: ['gpt-unknown'] })] }));
     assert.deepStrictEqual(cells()[2], ['odd', 'gpt-unknown · ultra', '1', '10M', '0', '1M', '—', '4%'], 'shares of input and output tokens');

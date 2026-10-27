@@ -35,7 +35,7 @@ const engines = [];   // every FakeEngine constructed, in order
 const knobs = { relayCost: 0.0001 };   // what the fake gateway puts on each response; null for a streamed response, which carries none
 // knobs.startsOn: what a fake Claude on default starts on, as ANTHROPIC_MODEL or the settings' model make the real one; unset, the
 // built-in default, claude-opus-resolved, which is also where setModel('') takes it, as it takes the real one
-const PRICES = { 'openai.gpt-6-luna': { input_cost_per_token: 1e-7, output_cost_per_token: 5e-7, cache_creation_input_token_cost: 1.25e-7, cache_read_input_token_cost: 1e-8 }, 'xai/grok-4.6': { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6, cache_read_input_token_cost: 5e-7 }, 'gpt-6.1-sol': { input_cost_per_token: 2e-6, output_cost_per_token: 1e-5, cache_creation_input_token_cost: 2.5e-6, cache_read_input_token_cost: 2e-7 } };
+const PRICES = { 'claude-opus-5-5': { input_cost_per_token: 5e-6, output_cost_per_token: 2.5e-5, cache_creation_input_token_cost: 6.25e-6, cache_read_input_token_cost: 5e-7 }, 'openai.gpt-6-luna': { input_cost_per_token: 1e-7, output_cost_per_token: 5e-7, cache_creation_input_token_cost: 1.25e-7, cache_read_input_token_cost: 1e-8 }, 'xai/grok-4.6': { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6, cache_read_input_token_cost: 5e-7 }, 'gpt-6.1-sol': { input_cost_per_token: 2e-6, output_cost_per_token: 1e-5, cache_creation_input_token_cost: 2.5e-6, cache_read_input_token_cost: 2e-7 } };
 let storage = null;
 /** The extension's storage directory for a test run, holding a fresh price table so a gateway turn is priced without a fetch. */
 function storageDir() {
@@ -104,12 +104,13 @@ class FakeAgent {
 
 function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders, codeIndex } = {}) {
   // the agents' own records of past sessions: what they list, and every name written to them
-  const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [] }, past);
+  const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [], claudeUsage: {} }, past);
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
   const fakeStore = Object.assign({}, realStore, {
     titleOf: async (kind, id) => { const x = store.sessions.find((r) => r.kind === kind && r.id === id); return x && kind === 'claude' ? { title: x.title, named: !!x.named } : null; },
     deleteSession: async (kind, id, o) => { if (store.failDelete) throw new Error(store.failDelete); store.deleted.push([kind, id, o]); store.sessions = store.sessions.filter((x) => !(x.kind === kind && x.id === id)); },
     listSessions: async (o) => { store.lists.push(o); return { sessions: store.sessions.map((x) => Object.assign({}, x)), failed: store.failed.slice() }; },
+    claudeSessionUsage: async (id) => { const u = store.claudeUsage[id]; if (u instanceof Error) throw u; return u ? JSON.parse(JSON.stringify(u)) : null; },
     loadTranscript: async (kind, id, o) => { store.loads.push([kind, id, o]); const t = store.transcripts[id]; if (t instanceof Error) throw t; return t ? JSON.parse(JSON.stringify(t)) : { events: [], earlier: 0 }; },
     renameSession: async (kind, id, title, o) => { const name = realStore.cleanTitle(title); if (!name) throw new Error('A session name cannot be empty.'); if (store.failRename) throw new Error(store.failRename); store.renamed.push([kind, id, name, o]); for (const x of store.sessions) if (x.kind === kind && x.id === id) { x.title = name; x.named = true; } return name; },
   });

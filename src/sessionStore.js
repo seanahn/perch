@@ -615,6 +615,87 @@ async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.
   return { events: earlier ? events.slice(earlier) : events, earlier };
 }
 
+/**
+ * One Claude Code thread's usage from its records: the main thread's from the session's file, a sub-agent's from its
+ * own. An assistant response comes as several records with one `message.id`, each carrying the response's usage so
+ * far, so a response counts once, at its largest figures. `input` counts every token sent, cached and written among
+ * them, as Codex's does. A turn is a prompt of the user's (claudeSaid), and goes to the model of the response after it.
+ */
+function claudeThreadUsage(text) {
+  const seen = new Map(), results = new Set(), byModel = new Map();
+  let model = '', effort = '', turns = 0, pending = false, first = NaN, last = NaN;
+  for (const line of String(text || '').split('\n')) {
+    if (!line) continue;
+    let o; try { o = JSON.parse(line); } catch (_) { continue; }
+    if (!o || typeof o !== 'object') continue;
+    const at = Date.parse(o.timestamp);
+    if (!Number.isNaN(at)) { if (Number.isNaN(first) || at < first) first = at; if (Number.isNaN(last) || at > last) last = at; }
+    const m = o.message;
+    if (!m || typeof m !== 'object') continue;
+    const c = m.content, blocks = Array.isArray(c) ? c : typeof c === 'string' ? [{ type: 'text', text: c }] : [];
+    if (o.type === 'user') {
+      for (const b of blocks) if (b && b.type === 'tool_result' && b.tool_use_id) results.add(b.tool_use_id);
+      if (!o.isMeta && !blocks.some((b) => b && b.type === 'tool_result') && blocks.some((b) => b && b.type === 'text' && claudeSaid(b.text))) { turns++; pending = true; }
+    } else if (o.type === 'assistant') {
+      const id = m.id || o.uuid; if (!id) continue;
+      const own = typeof m.model === 'string' && m.model && !m.model.startsWith('<') ? m.model : '';   // '<synthetic>': Claude Code's own words, no model's
+      if (own) { model = own; if (typeof o.effort === 'string' && o.effort) effort = o.effort; }
+      const u = m.usage || {}, n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+      const s = seen.get(id) || { model: own, input: 0, read: 0, write: 0, output: 0 };
+      s.input = Math.max(s.input, n(u.input_tokens)); s.read = Math.max(s.read, n(u.cache_read_input_tokens));
+      s.write = Math.max(s.write, n(u.cache_creation_input_tokens)); s.output = Math.max(s.output, n(u.output_tokens));
+      if (own) s.model = own;
+      seen.set(id, s);
+      if (pending && own) { byModel.set(own, (byModel.get(own) || 0) + 1); pending = false; }
+    }
+  }
+  let input = 0, cached = 0, output = 0; const spentBy = new Map();
+  for (const s of seen.values()) {
+    const sent = s.input + s.read + s.write;
+    input += sent; cached += s.read; output += s.output;
+    const x = spentBy.get(s.model) || { model: s.model, input: 0, cached: 0, write: 0, output: 0 };
+    x.input += sent; x.cached += s.read; x.write += s.write; x.output += s.output;
+    spentBy.set(s.model, x);
+  }
+  const summary = { model, effort, turns, tokens: { input, cached, output } };
+  if (byModel.size > 1) summary.models = [...byModel.entries()].map(([mm, t]) => ({ model: mm, turns: t }));
+  return { summary, spent: [...spentBy.values()].filter((x) => x.input || x.output), results, first: Number.isNaN(first) ? null : first, last: Number.isNaN(last) ? null : last };
+}
+
+/**
+ * A Claude session's usage, thread by thread, as sessionUsage gives a Codex one's: the main thread from the session's
+ * own file (`<id>.jsonl` in one of Claude Code's projects), and each sub-agent from its own, kept beside it since Claude
+ * Code 2.1 under `<id>/subagents/`: `agent-<agentId>.jsonl`, with `agent-<agentId>.meta.json` naming it (the Agent call's
+ * description and type) and the call that started it, whose result in the parent's file says it has finished. Null when
+ * the session's file is not found.
+ * @returns {Promise<{ main: object, subagents: object[] }|null>}
+ */
+async function claudeSessionUsage(id, { claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), read = (f) => fs.promises.readFile(f, 'utf8') } = {}) {
+  if (!/^[A-Za-z0-9_-]+$/.test(String(id || ''))) return null;
+  const root = path.join(claudeDir, 'projects');
+  let projects; try { projects = await fs.promises.readdir(root); } catch (_) { return null; }
+  let file = null;
+  for (const p of projects) { const f = path.join(root, p, id + '.jsonl'); try { await fs.promises.access(f); file = f; break; } catch (_) { /* in another project */ } }
+  if (!file) return null;
+  const main = claudeThreadUsage(await read(file));
+  const subDir = path.join(path.dirname(file), id, 'subagents');
+  let names = []; try { names = (await fs.promises.readdir(subDir)).filter((n) => /^agent-.+\.jsonl$/.test(n)).sort(); } catch (_) { /* no sub-agent yet */ }
+  const threads = [], answered = new Set(main.results);
+  for (const n of names) {
+    let text; try { text = await read(path.join(subDir, n)); } catch (_) { continue; }
+    let meta = {}; try { meta = JSON.parse(await read(path.join(subDir, n.replace(/\.jsonl$/, '.meta.json')))) || {}; } catch (_) { /* unnamed */ }
+    const u = claudeThreadUsage(text), agent = n.slice('agent-'.length, -'.jsonl'.length);
+    for (const r of u.results) answered.add(r);
+    threads.push({ agent, meta, u });
+  }
+  const subagents = threads.map(({ agent, meta, u }) => Object.assign(
+    { name: (typeof meta.description === 'string' && meta.description.trim()) || (typeof meta.agentType === 'string' && meta.agentType) || agent.slice(0, 8), thread: agent,
+      first: u.first, last: u.last, state: meta.toolUseId && answered.has(meta.toolUseId) ? 'finished' : 'active' },
+    typeof meta.description === 'string' && meta.description.trim() && typeof meta.agentType === 'string' && meta.agentType ? { nickname: meta.agentType } : {},
+    u.summary, { spent: u.spent }));
+  return { main: Object.assign({ thread: id }, main.summary, { spent: main.spent }), subagents };
+}
+
 // ---- both
 /**
  * Every past session of a directory, from both agents, newest first. An agent whose records cannot be read is left
@@ -662,4 +743,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

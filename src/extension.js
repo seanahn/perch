@@ -13,7 +13,7 @@ const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
-const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage } = require('./sessionStore');
+const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
@@ -952,7 +952,7 @@ class Session {
   toTab() {
     return {
       id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
-      thread: this.kind === 'codex' && !!this.agentSessionId,   // a Codex thread on record: its usage, sub-agents included, can be read
+      thread: !!this.agentSessionId,   // a session on record: its usage, thread by thread, can be read from the agent's files
       mode: this.mode, modes: MODES[this.kind],
       model: this.model, models: this.modelOptions(), actualModel: this.running(),
       off: this.offModel(),            // the session runs another model than the one meant: the pill names it
@@ -1684,23 +1684,25 @@ class PerchView {
   }
 
   /**
-   * A Codex tab's session, thread by thread, for the table the footer's "sub-agents" opens: the main thread and every
-   * sub-agent it started, each with its model, turns and tokens from its own file (sessionStore.sessionUsage), and what
-   * those would cost at list prices, from the table the gateway's turns are priced with. Nothing is billed per token on a
-   * ChatGPT plan; the figures still say where the work went.
+   * A tab's session, thread by thread, for the table the footer's "sub-agents" opens: the main thread and every
+   * sub-agent it started, each with its model, turns and tokens from its own file (sessionStore.sessionUsage for Codex,
+   * claudeSessionUsage for Claude), and what those would cost at list prices, from the table the gateway's turns are
+   * priced with. Nothing is billed per token on a plan; the figures still say where the work went.
    */
   async subagentUsage(s) {
     if (!s) return;
-    const say = (o) => { const f = this.surface(s); if (f && f.ready) f.webview.postMessage(Object.assign({ type: 'subagentUsage', sid: s.id, at: Date.now() }, o)); };
-    if (s.kind !== 'codex' || !s.agentSessionId) { say({ error: 'This tab has no Codex session yet. Its table can be read once its first turn has started.' }); return; }
+    const say = (o) => { const f = this.surface(s); if (f && f.ready) f.webview.postMessage(Object.assign({ type: 'subagentUsage', sid: s.id, at: Date.now(), kind: s.kind }, o)); };
+    const vendor = s.kind === 'claude' ? 'Claude' : 'Codex';
+    if (!s.agentSessionId) { say({ error: `This tab has no ${vendor} session yet. Its table can be read once its first turn has started.` }); return; }
     const home = codexAuth.codexHome();
     // the list prices: a table read before serves at once (an old one is fetched again behind it); with none yet, the fetch
     // is waited for a few seconds at most, and the table is unpriced until it lands
     const loading = this.prices.load();
     if (!this.prices.loaded) await Promise.race([loading, new Promise((r) => { const t = setTimeout(r, 5000); if (t.unref) t.unref(); })]);
     let u;
-    try { u = await sessionUsage(s.agentSessionId, { home }); } catch (err) { say({ error: 'Could not read this session\'s files: ' + String((err && err.message) || err) }); return; }
-    if (!u) { say({ error: 'This session\'s file was not found under ' + require('path').join(home, 'sessions') + '.' }); return; }
+    try { u = s.kind === 'claude' ? await claudeSessionUsage(s.agentSessionId) : await sessionUsage(s.agentSessionId, { home }); }
+    catch (err) { say({ error: 'Could not read this session\'s files: ' + String((err && err.message) || err) }); return; }
+    if (!u) { say({ error: 'This session\'s file was not found under ' + (s.kind === 'claude' ? require('path').join(process.env.CLAUDE_CONFIG_DIR || require('path').join(require('os').homedir(), '.claude'), 'projects') : require('path').join(home, 'sessions')) + '.' }); return; }
     // each model's share of a thread at that model's rates; a thread with a model the table does not price is not priced
     const priced = (row) => {
       let cost = 0; const unpriced = [];
@@ -1714,7 +1716,7 @@ class PerchView {
       delete out.spent;
       return out;
     };
-    say({ main: priced(u.main), subagents: u.subagents.map(priced), prices: this.prices.loaded, backend: this.meter.codexBackend() });
+    say({ main: priced(u.main), subagents: u.subagents.map(priced), prices: this.prices.loaded, backend: s.kind === 'claude' ? (s.backend || this.meter.backend()) : this.meter.codexBackend() });
   }
 
   // ---- session management

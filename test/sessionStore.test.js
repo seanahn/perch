@@ -158,6 +158,55 @@ function rollout(home, day, id, lines, mtime) {
   assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0 });
   await assert.rejects(S.loadTranscript('claude', 'c-1', { sdk: { getSessionMessages: async () => { throw new Error('unreadable'); } } }), /unreadable/);
 
+  // ---- a Claude session's usage, thread by thread: the main thread from the session's file, each sub-agent from its own
+  // under <id>/subagents/ with a meta file naming it; a response counts once however many records carry it
+  {
+    const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-claude-usage-'));
+    try {
+      const proj = path.join(claudeDir, 'projects', '-w'); fs.mkdirSync(path.join(proj, 'c-u', 'subagents'), { recursive: true });
+      const rec = (o) => JSON.stringify(Object.assign({ sessionId: 'c-u', timestamp: '2026-10-27T10:00:00Z' }, o));
+      const usage = (i, r, w, o) => ({ input_tokens: i, cache_read_input_tokens: r, cache_creation_input_token_cost: 0, cache_creation_input_tokens: w, output_tokens: o });
+      const asst = (id, model, u, extra) => rec(Object.assign({ type: 'assistant', uuid: 'u-' + id + '-' + u.output_tokens, message: { id, model, usage: u, content: [{ type: 'text', text: 'x' }] } }, extra));
+      fs.writeFileSync(path.join(proj, 'c-u.jsonl'), [
+        rec({ type: 'user', uuid: 'p1', message: { role: 'user', content: 'first prompt' }, timestamp: '2026-10-27T09:00:00Z' }),
+        asst('msg_1', 'claude-opus-5-5', usage(10, 1000, 200, 5), { effort: 'max' }),
+        asst('msg_1', 'claude-opus-5-5', usage(10, 1000, 200, 50), { effort: 'max' }),             // the same response, a block later: counts once, at 50 out
+        rec({ type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'done' }] } }),   // a tool's result, no turn
+        rec({ type: 'user', uuid: 'm1', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'injected context' }] } }),           // Claude Code's, no turn
+        rec({ type: 'user', uuid: 'p2', message: { role: 'user', content: [{ type: 'text', text: 'second prompt' }] } }),
+        asst('msg_2', 'claude-fable-5-1', usage(20, 2000, 0, 100), { effort: 'high' }),
+        asst('<none>', '<synthetic>', usage(0, 0, 0, 0)),                                           // Claude Code's own words: no model's
+        rec({ type: 'user', uuid: 'p3', message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' } }),   // not the user's
+        rec({ type: 'system', subtype: 'informational', content: 'x', uuid: 's1' }),
+        '{"torn', '',
+      ].join('\n'));
+      const sub = (agent, prompt, u, model) => {
+        fs.writeFileSync(path.join(proj, 'c-u', 'subagents', 'agent-' + agent + '.jsonl'), [
+          rec({ type: 'user', uuid: 'sp-' + agent, isSidechain: true, agentId: agent, message: { role: 'user', content: prompt }, timestamp: '2026-10-27T09:30:00Z' }),
+          asst('msg_' + agent, model, u, { isSidechain: true, agentId: agent, effort: 'low', timestamp: '2026-10-27T09:31:00Z' }),
+        ].join('\n'));
+      };
+      sub('aaa1', 'find the gateway code', usage(5, 500, 0, 40), 'claude-fable-5-1');
+      fs.writeFileSync(path.join(proj, 'c-u', 'subagents', 'agent-aaa1.meta.json'), JSON.stringify({ agentType: 'general-purpose', description: 'Find the gateway code', toolUseId: 'toolu_a' }));
+      sub('bbb2', 'count the tests', usage(3, 0, 0, 7), 'claude-haiku-4-5');
+      fs.writeFileSync(path.join(proj, 'c-u', 'subagents', 'agent-bbb2.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 'toolu_b' }));   // no result for toolu_b yet: still at it
+      sub('ccc3', 'no meta file', usage(1, 0, 0, 1), 'claude-haiku-4-5');
+      const u = await S.claudeSessionUsage('c-u', { claudeDir });
+      assert.deepStrictEqual(u.main, { thread: 'c-u', model: 'claude-fable-5-1', effort: 'high', turns: 2, tokens: { input: 3230, cached: 3000, output: 150 },
+        models: [{ model: 'claude-opus-5-5', turns: 1 }, { model: 'claude-fable-5-1', turns: 1 }],
+        spent: [{ model: 'claude-opus-5-5', input: 1210, cached: 1000, write: 200, output: 50 }, { model: 'claude-fable-5-1', input: 2020, cached: 2000, write: 0, output: 100 }] },
+        'two prompts, two turns, each to its model; the response counted once at its largest figures; input counts every token sent');
+      assert.deepStrictEqual(u.subagents.map((s) => [s.name, s.nickname || null, s.thread, s.state, s.model, s.effort, s.turns, s.tokens]), [
+        ['Find the gateway code', 'general-purpose', 'aaa1', 'finished', 'claude-fable-5-1', 'low', 1, { input: 505, cached: 500, output: 40 }],
+        ['Explore', null, 'bbb2', 'active', 'claude-haiku-4-5', 'low', 1, { input: 3, cached: 0, output: 7 }],
+        ['ccc3', null, 'ccc3', 'active', 'claude-haiku-4-5', 'low', 1, { input: 1, cached: 0, output: 1 }],
+      ], 'named by the meta file, finished when the parent has its result, the rest at it');
+      assert.deepStrictEqual([u.subagents[0].first, u.subagents[0].last], [Date.parse('2026-10-27T09:30:00Z'), Date.parse('2026-10-27T09:31:00Z')]);
+      assert.deepStrictEqual([await S.claudeSessionUsage('c-none', { claudeDir }), await S.claudeSessionUsage('../x', { claudeDir }), await S.claudeSessionUsage('c-u', { claudeDir: path.join(claudeDir, 'nowhere') })], [null, null, null]);
+      assert.deepStrictEqual(S.claudeThreadUsage('').summary, { model: '', effort: '', turns: 0, tokens: { input: 0, cached: 0, output: 0 } });
+    } finally { fs.rmSync(claudeDir, { recursive: true, force: true }); }
+  }
+
   // ---- Claude Code's notice that the model's safeguards refused a response and another model answered (Opus 5.5 to Opus 4.8,
   // cyber, as on 2026-10-20). The SDK gives a system record's place without its words, so they are read from the session's file
   {

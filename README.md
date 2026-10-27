@@ -482,9 +482,11 @@ message, queued behind the turn if it is still working. The SDK streams
 neither, so perch reads them from the thread's own record in
 `~/.codex/sessions/` as the turn runs.
 
-For the **whole session's usage**, click **sub-agents** in the footer of a
-Codex tab. It opens a table with one row per thread: the main thread, each
-sub-agent it started, and the totals. Each row has the model and effort,
+For the **whole session's usage**, click **sub-agents** in the footer of
+a tab. It opens a table with one row per thread: the main thread, each
+sub-agent it started, and the totals. Codex's threads are read from their
+rollout files, Claude's from the session's file and the sub-agent files
+Claude Code keeps beside it. Each row has the model and effort,
 turns, input (the cached part shown too), output, and what those tokens
 would cost at OpenAI's list prices (LiteLLM's public price table), with
 each one's share of the session. Click a column to sort the sub-agents by

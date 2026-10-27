@@ -242,7 +242,18 @@ files.
   since reset.
 - perch re-reads after each Codex turn it runs.
 
-## A Codex session's usage, thread by thread
+## A session's usage, thread by thread
+
+Built for Codex first (below), and given to Claude tabs on 2026-10-27, from Claude Code's own
+records: the session's file for the main thread, and for each sub-agent the file Claude Code 2.1
+keeps under `<session>/subagents/` (`agent-<id>.jsonl`, with `agent-<id>.meta.json` naming it and
+the Agent call that started it; the call's result in the parent's file says it finished). A response
+comes as one record per block, each with the response's usage so far, so it is counted once, at its
+largest figures; `input` counts every token sent, cached and written among them, as Codex's does; a
+turn is a prompt of the user's, attributed to the model that answered it. Priced at Anthropic's list
+rates from the same LiteLLM table; on a subscription the figures say where the work went. Read from
+this session's own files: 387 turns, 1.03 G input tokens of which 1.015 G from the cache, 3.4 M out,
+two models over its life, and one sub-agent.
 
 The plan's limits say how much is left, not where it went. A session that
 starts sub-agents spends in many threads at once: the user's own thread on

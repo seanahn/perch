@@ -2338,9 +2338,21 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([u.sid, typeof u.at, u.prices, u.backend, u.main.thread, u.main.turns, u.main.tokens, 'spent' in u.main], [x, 'number', true, 'chatgpt', id, 1, { input: 1000000, cached: 900000, output: 10000 }, false]);
     assert.deepStrictEqual(u.subagents.map((s) => [s.name, s.model, s.cost === null ? null : 'priced', s.unpriced || null]), [['alpha', 'gpt-6.1-sol', 'priced', null], ['odd', 'gpt-unknown', null, ['gpt-unknown']]],
       'a thread on a model the table does not price: no cost, and which model');
+    // a Claude tab: the same table, read by claudeSessionUsage, priced at Anthropic's list rates, with the tab's backend
     v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
-    v.fire({ type: 'subagentUsage', sid: c }); for (let i = 0; i < 100 && answers().pop().sid !== c; i++) await new Promise((r) => setTimeout(r, 5));
-    assert(/no Codex session/.test(answers().pop().error) && v.tab(c).thread === false, 'a Claude tab has no such table');
+    const askC = async () => { const n = answers().length; v.fire({ type: 'subagentUsage', sid: c }); for (let i = 0; i < 400 && answers().length === n; i++) await new Promise((r) => setTimeout(r, 5)); return answers().pop(); };
+    assert(/no Claude session yet/.test((await askC()).error) && v.tab(c).thread === false, 'asked before its first turn: said why there is nothing');
+    v.fire({ type: 'send', sid: c, text: 'hello' }); await flush();
+    const cid = v.events(c).find((e) => e.kind === 'session').id;
+    assert.strictEqual(v.tab(c).thread, true, 'its session on record: the footer offers the table');
+    assert(/not found under .*projects/.test((await askC()).error), 'its file not found: said where it was looked for');
+    m.store.claudeUsage[cid] = { main: { thread: cid, model: 'claude-opus-5-5', effort: 'max', turns: 3, tokens: { input: 1000000, cached: 900000, output: 10000 }, spent: [{ model: 'claude-opus-5-5', input: 1000000, cached: 900000, write: 50000, output: 10000 }] },
+      subagents: [{ name: 'Find the gateway code', nickname: 'general-purpose', thread: 'aaa1', state: 'finished', first: 1, last: 2, model: 'claude-opus-5-5', effort: 'low', turns: 1, tokens: { input: 100000, cached: 0, output: 1000 }, spent: [{ model: 'claude-opus-5-5', input: 100000, cached: 0, write: 0, output: 1000 }] }] };
+    const uc = await askC();
+    // claude-opus-5-5 in the test table: $5/M input, $6.25/M written to the cache, $0.50/M read from it, $25/M output
+    near(uc.main.cost, 50000 * 5e-6 + 50000 * 6.25e-6 + 900000 * 5e-7 + 10000 * 2.5e-5, 'the main thread at Anthropic\'s rates');
+    near(uc.subagents[0].cost, 100000 * 5e-6 + 1000 * 2.5e-5, 'a sub-agent too');
+    assert.deepStrictEqual([uc.kind, uc.backend, uc.main.thread, uc.main.turns, uc.subagents[0].name, uc.subagents[0].state], ['claude', 'subscription', cid, 3, 'Find the gateway code', 'finished']);
   }
 
   // ---- the real Codex agent watches its thread's file while a turn runs, for what the SDK does not stream

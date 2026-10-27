@@ -546,9 +546,12 @@ ${glyphCss}
     what.title = (!u.prices ? 'LiteLLM\\'s price table could not be read, so the figures are tokens only. '
       : !priced ? 'Some threads ran on a model LiteLLM\\'s table has no price for (the cost column says which), so shares are of tokens. '
       : 'Each thread\\'s tokens at its models\\' list prices, from LiteLLM\\'s public price table: uncached input, input written to the cache, cached input, and output, each at its rate. ') +
-      (u.backend === 'chatgpt' ? 'On a ChatGPT plan nothing is billed per token: turns count against the plan\\'s limits, shown in the footer. The figures say where the work went.'
+      (u.kind === 'claude'
+        ? (u.backend === 'subscription' ? 'On a Claude subscription nothing is billed per token: turns count against the plan\\'s limits, shown in the footer. The figures say where the work went.'
+          : u.backend === 'gateway' ? 'Through the gateway, the result lines carry its own figures; these are Anthropic\\'s list prices.' : 'The API is billed at Anthropic\\'s rates, which these follow; Bedrock at its own.')
+        : u.backend === 'chatgpt' ? 'On a ChatGPT plan nothing is billed per token: turns count against the plan\\'s limits, shown in the footer. The figures say where the work went.'
         : u.backend === 'bedrock' ? 'Amazon Bedrock bills at its own rates.' : 'An API key is billed at OpenAI\\'s own rates, which these follow.') +
-      ' Input counts every token sent, cached ones among them. Each thread is read whole from its own file, a fork\\'s copy of its parent\\'s history left out.';
+      ' Input counts every token sent, cached ones among them. Each thread is read whole from its own file' + (u.kind === 'claude' ? ', a sub-agent\\'s kept beside the session\\'s.' : ', a fork\\'s copy of its parent\\'s history left out.');
     const table = el('table'), hr = el('tr'), s = p.mxSort;
     for (const [k, label] of USAGE_COLS) {
       const th = el('th', k === 'name' || k === 'model' ? '' : 'n', label + (s.key === k ? (s.dir < 0 ? ' ▾' : ' ▴') : ''));
@@ -1104,7 +1107,7 @@ ${glyphCss}
     const claude = meterKind === 'claude';
     $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
-    $msubs.hidden = claude || !t.thread; syncUsageButton();   // a Codex tab whose thread is on record: its usage, thread by thread
+    $msubs.hidden = !t.thread; syncUsageButton();   // a tab whose session is on record: its usage, thread by thread
     // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
     onGateway = claude && !!t.gateway;
     if (onGateway) {

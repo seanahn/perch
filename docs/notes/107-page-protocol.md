@@ -17,7 +17,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
-| `subagentUsage` | `sid` | Read a Codex session's usage, thread by thread (the footer's **sub-agents**); asked again at a turn's end while the table is open |
+| `subagentUsage` | `sid` | Read a session's usage, thread by thread, Codex's or Claude's (the footer's **sub-agents**); asked again at a turn's end while the table is open |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
 
