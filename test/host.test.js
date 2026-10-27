@@ -2190,6 +2190,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(m.ibox.made.map((i) => i.python), ['python3', '/opt/py312/bin/python3']);
     m.perch.dispose();
   }
+  // the toggle, first thing in a window: the Python check has not run yet (it waits for the setting), and the message waits for it
+  {
+    const m = install(undefined, { codeIndex: { usable: true } }); await flush(); await flush();
+    m.ui.answers.push('Not Now');
+    await m.commands['perch.codebaseIndex.toggle'](); await flush();
+    assert.strictEqual(m.ui.infos.filter((i) => /codebase search is on/.test(i)).pop(), 'Perch: codebase search is on. Each tab takes it up from its next message.', 'a Python that can run it is not called missing');
+    m.perch.dispose();
+  }
   // where no Python here can run it (too old, or SQLite without FTS5): no tool at all, and nothing offered
   {
     const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: false } }); await flush(); await flush();

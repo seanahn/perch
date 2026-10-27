@@ -933,7 +933,8 @@ class PerchView {
     const was = c.get('codebaseIndex.enabled') === true;
     const target = i.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
     await c.update('codebaseIndex.enabled', !was, target);
-    vscode.window.showInformationMessage(`Perch: codebase search is ${was ? 'off' : 'on'}${!was && !this.searchUsable ? ', but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python' : ''}. Each tab takes it up from its next message.`);
+    const usable = was || await this.probeSearch();   // turned on: the Python check runs now, and the word waits for it
+    vscode.window.showInformationMessage(`Perch: codebase search is ${was ? 'off' : 'on'}${!was && !usable ? ', but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python' : ''}. Each tab takes it up from its next message.`);
   }
   /** Once a machine, as a tab starts with codebase search: keywords need nothing; meaning is an install. */
   async offerSearch() {
