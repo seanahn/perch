@@ -78,6 +78,24 @@ try:
     assert 'scripts/untracked_tool.sh' in files, 'untracked but not ignored: in'
     assert 'secret.env' not in files and 'package-lock.json' not in files and 'logo.png' not in files, files
 
+    # ---- a folder that is no repository but holds some (a home directory opened as the workspace): each repository by
+    # git's view and its own .codebaseignore; no hidden file or directory at all
+    home = os.path.join(TMP, 'home')
+    inner = repo('home/inner')
+    write(inner, '.codebaseignore', 'docs/\n')
+    write(home, 'notes.txt', 'plain notes\n')
+    write(home, '.bash_history', 'export TOKEN=abc\n')
+    write(home, '.cache/x.txt', 'cached\n')
+    write(home, 'plain/sub/.hidden', 'x\n')
+    write(home, 'plain/sub/readme.md', 'readme\n')
+    got = indexer.list_files(home, indexer.Ignore(home))
+    assert 'notes.txt' in got and 'plain/sub/readme.md' in got and 'inner/src/gateway.py' in got, got
+    assert 'inner/scripts/untracked_tool.sh' in got, 'untracked but not ignored, by git\'s view of that repository'
+    for bad in ('.bash_history', '.cache/x.txt', 'plain/sub/.hidden', 'inner/secret.env', 'inner/package-lock.json', 'inner/docs/notes/101-relay.md', 'inner/logo.png'):
+        assert bad not in got, bad + ' must be out'
+    write(inner, '.codebaseignore', '*\n')
+    assert not any(p.startswith('inner/') for p in indexer.list_files(home, indexer.Ignore(home))), 'a repository that says no'
+
     # ---- building, and bringing up to date
     ix = indexer.Index(root)
     assert ix.dir.startswith(os.environ['CODEINDEX_CACHE']) and oct(os.stat(ix.dir).st_mode & 0o777) == '0o700', 'private, outside the tree'

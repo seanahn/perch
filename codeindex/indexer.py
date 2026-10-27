@@ -80,17 +80,38 @@ class Ignore:
         return False
 
 
-def list_files(root, ignore):
-    """The tree's files, relative: git's view where it is a repository (tracked, and untracked but not ignored), else a walk."""
+def git_files(root):
+    """A repository's files as git lists them, relative to root: tracked, and untracked but not ignored. None where
+    root is in no repository."""
     try:
         out = subprocess.run(['git', '-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
                              capture_output=True, check=True, timeout=60).stdout.decode('utf-8', 'replace')
-        names = sorted({p for p in out.split('\0') if p})
     except (OSError, subprocess.SubprocessError):
+        return None
+    return sorted({p for p in out.split('\0') if p})
+
+
+def list_files(root, ignore):
+    """The tree's files, relative. In a repository, git's view (tracked, and untracked but not ignored). Elsewhere (a home
+    directory holding repositories, say) a walk that takes each repository inside by git's view and its own
+    .codebaseignore, and leaves every hidden file and directory out: there is no .gitignore to go by, and a hidden file
+    at a home's root is a shell's history or a tool's credentials."""
+    names = git_files(root)
+    if names is None:
         names = []
         for d, dirs, files in os.walk(root):
-            dirs[:] = [x for x in dirs if x not in SKIP_DIRS and not x.startswith('.')]   # no .gitignore to go by: no hidden tree either
-            names += [os.path.relpath(os.path.join(d, f), root).replace(os.sep, '/') for f in files]
+            rel = os.path.relpath(d, root).replace(os.sep, '/')
+            rel = '' if rel == '.' else rel + '/'
+            if d != root and os.path.exists(os.path.join(d, '.git')):   # a repository inside: by its own view and its own ignore file
+                inner = git_files(d)
+                if inner is not None:
+                    ig = Ignore(d)
+                    if not ig.off:
+                        names += [rel + p for p in inner if not ig.skip(p)]
+                    dirs[:] = []
+                    continue
+            dirs[:] = [x for x in dirs if x not in SKIP_DIRS and not x.startswith('.')]
+            names += [rel + f for f in files if not f.startswith('.')]
             if len(names) > MAX_FILES:
                 break
     return [p for p in names if not ignore.skip(p)][:MAX_FILES]

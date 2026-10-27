@@ -214,6 +214,16 @@ third-party embedding API without an explicit security decision.
   padded to 512 tokens took bge-small to 1.6 GB. A server holding MiniLM and its vectors stays at
   about 250 MB.
 
+**MiniLM, the model D runs.** MiniLM is a small transformer from Microsoft (2020), distilled from a
+larger BERT-style model. The one used here is `all-MiniLM-L6-v2`, the sentence-transformers version
+trained to turn a text into one embedding: a vector of 384 numbers, close to the vectors of texts
+that mean the same. Six layers and about 22M parameters, some 90 MB on disk, fast on a CPU without a
+GPU. It reads about 256 tokens of a section and ignores the rest, which is why sections are kept
+small. It was trained mostly on English prose, not code: it matches comments, docs and identifiers
+split into words well enough, but understands code less well than a code-trained model would. It is
+the common default for local semantic search because it is small, free and quick, not because it is
+the best at code.
+
 **How to judge, cheapest first.**
 
 1. Retrieval alone, with no model: run the Phase 0 questions straight against B, C and D, and score
@@ -382,7 +392,13 @@ repository; and a way for Codex to reach for the tool unprompted.
 
 ## What is indexed
 
-`.gitignore`, plus a `.codebaseignore`, plus a default list: virtual environments (`.venv*`),
+In a repository, git's own view of its files: tracked, and untracked but not ignored. A folder that
+is no repository but holds some (a home directory opened as the workspace, as on a pod) is walked:
+each repository inside is taken by git's view and its own `.codebaseignore`, and every hidden file
+and directory is left out, there being no `.gitignore` to go by and a hidden file at a home's root
+being a shell's history or a tool's credentials. (Found on 2026-10-27: a pod's home as the
+workspace, 46,000 files indexed with `.bash_history` among them, each repository's ignore files
+unread.) Then `.gitignore`, plus a `.codebaseignore`, plus a default list: virtual environments (`.venv*`),
 `node_modules`, lockfiles, `.git`, build output, and any large generated or vendored tree. A library
 of thousands of scanner templates, say, drowns every search unless it is left out; it is indexed
 only on request, when that is the work. Notes and docs are indexed: much of "how does X work?" is

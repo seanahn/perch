@@ -564,8 +564,10 @@ The design and the measurements are in
   a CPU, in the background: until then the tool says how far it has got
   and the agent goes on with grep.
 - **What is left out:** whatever git ignores, lockfiles, binaries, files
-  over 256 KB, and the patterns in a `.codebaseignore` at the repository
-  root (`dir/` for a directory, else a path pattern such as `*.min.js`).
+  over 256 KB, secrets by name, every hidden file and directory of a
+  folder that is no repository (a home directory opened as the workspace:
+  the repositories inside it are each taken by git's own view), and the
+  patterns in a `.codebaseignore` at the repository root (`dir/` for a directory, else a path pattern such as `*.min.js`).
   A `.codebaseignore` that is just `*` turns search off for that
   repository; the tool stays, and says so.
 - **Codex may need telling.** Claude reaches for the tool by itself;
