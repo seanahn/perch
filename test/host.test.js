@@ -2238,6 +2238,38 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the index's state, for the panel the footer's "index" opens: read from the indexes' files by the server, for the
+  // folders with search on; the tab says whether there is one to offer, and follows the setting
+  {
+    const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: true }, workspaceFolders: ['/w/fennets', '/w/tools'] }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    assert.strictEqual(v.tab(c).index, true, 'search on for a folder: the footer offers the index');
+    const answers = () => v.got.filter((g) => g.type === 'indexStatus');
+    const ask = async () => { const n = answers().length; v.fire({ type: 'indexStatus', sid: c }); for (let i = 0; i < 400 && answers().length === n; i++) await new Promise((r) => setTimeout(r, 5)); return answers().pop(); };
+    let a = await ask();
+    assert.deepStrictEqual([a.on, a.meaning, a.folders.map((f) => [f.name, f.files, f.vectors]), m.ibox.statusAsked.pop()], [true, false, [['fennets', 10, 0], ['tools', 10, 0]], ['/w/fennets', '/w/tools']], 'read for the folders that are on; nothing is built');
+    assert(typeof a.at === 'number' && a.sid === c);
+    m.ibox.failStatus = 'boom'; a = await ask();
+    assert.deepStrictEqual([a.on, a.error], [true, 'The indexes could not be read: boom']);
+    m.ibox.failStatus = null;
+    m.changeConfig({ 'codebaseIndex.enabled': false }); await flush(); await flush();
+    assert.strictEqual(v.tab(c).index, false, 'turned off: the tab says so, and the footer hides the button');
+    a = await ask();
+    assert.deepStrictEqual([a.on, /off for this workspace/.test(a.why)], [false, true]);
+    m.perch.dispose();
+  }
+  // search on, but no Python here can run it: the panel says that instead of a table
+  {
+    const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: false }, workspaceFolders: ['/w/fennets'] }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    const answers = () => v.got.filter((g) => g.type === 'indexStatus');
+    v.fire({ type: 'indexStatus', sid: c }); for (let i = 0; i < 400 && !answers().length; i++) await new Promise((r) => setTimeout(r, 5));
+    assert.deepStrictEqual([v.tab(c).index, /no Python here can run it/.test(answers().pop().why)], [true, true]);
+    m.perch.dispose();
+  }
+
   // ---- the real Codex agent: the search server as --config overrides beside Bedrock's, never written to config.toml.
   // (Claude's: the SDK's mcpServers, always loaded so the tool is in the first request's prefix; checked by a live run.)
   {

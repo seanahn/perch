@@ -82,6 +82,17 @@ class CodeIndex {
     return { command: installed ? this.venvPython : this.python, args: [this.server, ...list], env };
   }
 
+  /**
+   * What the indexes of these folders hold, from their files, for the panel the footer opens: the server's --status, on
+   * the Python the server runs on, so whether search by meaning is there is told right. No build is started.
+   * @returns {Promise<{ meaning: boolean, folders: object[] }>}
+   */
+  async status(roots) {
+    const list = Array.isArray(roots) ? roots : [roots];
+    const out = await this.run(this.isInstalled() ? this.venvPython : this.python, [this.server, '--status', ...list], null, { CODEINDEX_MODELS: this.modelsDir });
+    return JSON.parse(String(out).trim().split('\n').pop());
+  }
+
   hasPip() { return this.run(this.venvPython, ['-c', 'import pip']).then(() => true, () => false); }
 
   /** An environment made without pip: ensurepip first, then pip's own installer from PyPI's bootstrap site. */

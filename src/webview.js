@@ -84,6 +84,9 @@ ${glyphCss}
   .mx .mxh button:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   .mx th { cursor: pointer; user-select: none; }
   .mx th:hover { color: var(--vscode-foreground); }
+  .ix th { cursor: default; }
+  .ix th:hover { color: inherit; }
+  .ix .hint { margin-top: 4px; }
   .subs.mx th.n, .subs.mx td.n { text-align: right; }
   .mx tr.main td, .mx tr.total td { font-weight: 600; }
   .mx tr.total td { border-top: 1px solid var(--vscode-panel-border); }
@@ -316,7 +319,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -449,9 +452,10 @@ ${glyphCss}
     work.append(el('span', 'sp'), what, took);
     const subs = el('div', 'subs'); subs.hidden = true;   // the running turn's sub-agents as a table, opened from the count at the foot
     const mx = el('div', 'subs mx'); mx.hidden = true;    // the whole session's usage, thread by thread, opened from the footer
-    root.append(log, work, subs, mx); $panes.append(root);
+    const ix = el('div', 'subs mx ix'); ix.hidden = true;  // the codebase search index, folder by folder, opened from the footer
+    root.append(log, work, subs, mx, ix); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -520,6 +524,58 @@ ${glyphCss}
     syncUsageButton(); pin(p);
   }
   function syncUsageButton() { const t = cur(), p = t ? panes.get(t.id) : null; $msubs.setAttribute('aria-pressed', p && p.mxOpen ? 'true' : 'false'); }
+
+  // ---- the codebase search index, folder by folder, opened from the footer's "index": read again every few seconds
+  // while open, so a build in progress shows its counts growing, and at the end of each turn
+  const INDEX_POLL_MS = 5000;
+  function askIndex(sid) { vscode.postMessage({ type: 'indexStatus', sid }); }
+  function toggleIndex(sid, open) {
+    const p = panes.get(sid); if (!p) return;
+    p.ixOpen = open === undefined ? !p.ixOpen : open;
+    p.ix.hidden = !p.ixOpen;
+    if (p.ixTimer) { clearInterval(p.ixTimer); p.ixTimer = null; }
+    if (p.ixOpen) { askIndex(sid); drawIndex(p); p.ixTimer = setInterval(() => askIndex(sid), INDEX_POLL_MS); }
+    syncIndexButton(); pin(p);
+  }
+  function syncIndexButton() { const t = cur(), p = t ? panes.get(t.id) : null; $mindex.setAttribute('aria-pressed', p && p.ixOpen ? 'true' : 'false'); }
+  const INDEX_COLS = [['name', 'folder'], ['files', 'files'], ['sections', 'sections'], ['vectors', 'with vectors'], ['search', 'search'], ['state', 'state']];
+  function indexSearch(u, f) { return f.off ? '—' : u.meaning && f.sections && f.vectors >= 0.9 * f.sections ? 'meaning' : 'keywords'; }
+  function indexState(u, f) {
+    if (f.off) return 'off: .codebaseignore is *';
+    if (!f.built) return 'not built yet';
+    if (f.updating) return 'indexing files';
+    if (f.embedding) return 'making vectors';
+    // no lock held and short of the server's own rule for search by meaning (90% of the sections; a section with nothing to embed never gets a vector): waiting for a tab's server to take it up
+    if (u.meaning && f.sections && f.vectors < 0.9 * f.sections) return 'vectors ' + f.vectors.toLocaleString() + ' of ' + f.sections.toLocaleString();
+    return 'up to date';
+  }
+  function drawIndex(p) {
+    const box = p.ix, u = p.ixData; box.textContent = '';
+    const head = el('div', 'mxh'), what = el('span', 'what'), again = el('button', 'again', 'refresh'), close = el('button', 'x', '×');
+    again.title = 'Read the indexes again'; close.title = 'Close';
+    again.addEventListener('click', () => askIndex(p.sid)); close.addEventListener('click', () => toggleIndex(p.sid, false));
+    head.append(what, again, close); box.append(head);
+    if (!u) { what.textContent = 'Reading the indexes…'; return; }
+    if (u.error || u.why) { what.textContent = u.error || u.why; return; }
+    const fs = u.folders || [], sum = (k) => fs.reduce((n, f) => n + (f[k] || 0), 0), files = sum('files'), sections = sum('sections'), vectors = sum('vectors');
+    const live = fs.filter((f) => !f.off && f.sections);   // by meaning as a whole once every folder that is searched is (the server's own rule, 90% of a folder's sections)
+    const mode = !u.meaning ? 'by keywords' : live.length && live.every((f) => f.vectors >= 0.9 * f.sections) ? 'by meaning' : 'by keywords, vectors being made';
+    what.textContent = 'Codebase search ' + mode + ' · ' + fs.length + (fs.length === 1 ? ' folder' : ' folders') + ' · ' + files.toLocaleString() + ' files'
+      + (u.meaning && sections ? ' · ' + Math.round((100 * vectors) / sections) + '% with vectors' : '') + (u.at ? ' · as of ' + new Date(u.at).toLocaleTimeString() : '');
+    what.title = 'Each folder of the workspace with codebase search on, from its own index under ~/.cache/codebase-index/. Keywords are indexed within seconds; '
+      + 'vectors, which search by meaning needs, take minutes the first time on a CPU and are made in the background, folder by folder. '
+      + (u.meaning ? 'Search by meaning is installed.' : 'Search by meaning is not installed: Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.');
+    const table = el('table'), hr = el('tr');
+    for (const [k, label] of INDEX_COLS) hr.append(el('th', k === 'name' || k === 'search' || k === 'state' ? '' : 'n', label));
+    table.append(hr);
+    for (const f of fs) {
+      const tr = el('tr'), name = el('td', null, f.name); name.title = f.root + (f.ignore && f.ignore.length ? ' · left out by .codebaseignore: ' + f.ignore.join(', ') : '');
+      tr.append(name, el('td', 'n', f.files.toLocaleString()), el('td', 'n', f.sections.toLocaleString()), el('td', 'n', u.meaning ? f.vectors.toLocaleString() : '—'), el('td', null, indexSearch(u, f)), el('td', null, indexState(u, f)));
+      table.append(tr);
+    }
+    box.append(table);
+    if (!u.meaning) box.append(el('div', 'hint', 'Search by meaning is not installed: keywords only. Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.'));
+  }
   const usageWhen = (ms) => (typeof ms === 'number' ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
   function usageWho(r) {
     if (r.total) return r.name;
@@ -621,8 +677,8 @@ ${glyphCss}
     if (prev && panes.has(prev)) panes.get(prev).draft = $input.value;
     tabs = next; active = nextActive;
     const ids = new Set(tabs.map((t) => t.id));
-    for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); voice.delete(id); }
-    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; syncWork(t.id); }
+    for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); voice.delete(id); if (p.ixTimer) clearInterval(p.ixTimer); }
+    for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; syncWork(t.id); if (!t.index && p.ixOpen) toggleIndex(t.id, false); }
     $empty.hidden = tabs.length > 0 || single;
     renderTabs();
     const p = panes.get(active);
@@ -998,6 +1054,7 @@ ${glyphCss}
           d.append(' · ', count, box);
         }
         if (p.mxOpen) askUsage(sid);                     // the session's usage table, open: what the turn added
+        if (p.ixOpen) askIndex(sid);                     // the index panel, open: what the turn's searches brought up to date
         break; }
       case 'note': { endLive(p); const d = addLinked(p, 'status' + (m.level === 'warn' ? ' warn' : ''), m.text);   // warn: Claude Code moved the session to another model, say
         if (m.vendor) { const t = el('span', 'sw'); t.append(...d.childNodes); d.classList.add('switch'); d.append(badge(m.vendor), t); }   // the tab went on with another vendor here (note 202)
@@ -1091,7 +1148,9 @@ ${glyphCss}
   }
 
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
-  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan'), $msubs = $('m-subs');
+  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan'), $msubs = $('m-subs'), $mindex = $('m-index');
+  $mindex.title = 'The codebase search index of this workspace, folder by folder: files, sections, how many have vectors, whether search is by keywords or by meaning, and whether it is being built';
+  $mindex.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleIndex(t.id); });
   $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
   $msubs.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleUsage(t.id); });
   const meters = { claude: null, codex: null };
@@ -1108,6 +1167,7 @@ ${glyphCss}
     $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
     $msubs.hidden = !t.thread; syncUsageButton();   // a tab whose session is on record: its usage, thread by thread
+    $mindex.hidden = !t.index; syncIndexButton();   // codebase search on for the workspace: the index, folder by folder
     // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
     onGateway = claude && !!t.gateway;
     if (onGateway) {
@@ -1185,6 +1245,7 @@ ${glyphCss}
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
+    else if (m.type === 'indexStatus') { const p = panes.get(m.sid); if (p) { p.ixData = m; if (p.ixOpen) drawIndex(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
   });
   $send.innerHTML = SVG.up;

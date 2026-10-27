@@ -953,6 +953,7 @@ class Session {
     return {
       id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
       thread: !!this.agentSessionId,   // a session on record: its usage, thread by thread, can be read from the agent's files
+      index: this.view.searchRoots().length > 0,   // codebase search is on for a folder of the workspace: the footer offers the index's state
       mode: this.mode, modes: MODES[this.kind],
       model: this.model, models: this.modelOptions(), actualModel: this.running(),
       off: this.offModel(),            // the session runs another model than the one meant: the pill names it
@@ -1126,6 +1127,7 @@ class PerchView {
       else { s.restart(); s.post({ kind: 'note', text: `${what} for this tab from the next message; the conversation continues, the prompt cache starts over.` }); }
     }
     if (search) this.offerSearch();
+    this.sendTabs();                                 // the footer's "index" shows while a folder has search on
   }
   /** Turn codebase search on or off where it is set: in the workspace's settings if they have it, else the user's. */
   async toggleSearch() {
@@ -1679,6 +1681,7 @@ class PerchView {
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       case 'subagentUsage': this.subagentUsage(s); return;
+      case 'indexStatus': this.indexStatus(s); return;
       default: return;
     }
   }
@@ -1717,6 +1720,22 @@ class PerchView {
       return out;
     };
     say({ main: priced(u.main), subagents: u.subagents.map(priced), prices: this.prices.loaded, backend: s.kind === 'claude' ? (s.backend || this.meter.backend()) : this.meter.codexBackend() });
+  }
+
+  /**
+   * The codebase search index of this workspace, folder by folder, for the panel the footer's "index" opens: read from
+   * the indexes' files by the server's --status (src/codeIndex.js), so a build in progress shows its counts growing.
+   * Nothing is built here.
+   */
+  async indexStatus(s) {
+    if (!s) return;
+    const say = (o) => { const f = this.surface(s); if (f && f.ready) f.webview.postMessage(Object.assign({ type: 'indexStatus', sid: s.id, at: Date.now() }, o)); };
+    const roots = this.searchRoots();
+    if (!roots.length) { say({ on: false, why: 'Codebase search is off for this workspace. Perch: Toggle Codebase Search turns it on, for every workspace or for this one.' }); return; }
+    if (!this.searchUsable) { await this.probeSearch(); }
+    if (!this.searchUsable) { say({ on: false, why: 'Codebase search is on, but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python.' }); return; }
+    try { say(Object.assign({ on: true }, await this.codeIndex.status(roots))); }
+    catch (err) { say({ on: true, error: 'The indexes could not be read: ' + String((err && err.message) || err) }); }
   }
 
   // ---- session management

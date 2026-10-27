@@ -293,6 +293,22 @@ try:
     r = server_many([root, root], call(1, 'codebase_status', {}))
     assert r[0]['result']['content'][0]['text'].startswith('Search: by keywords. 4 files'), 'the same folder twice is one folder: ' + r[0]['result']['content'][0]['text']
 
+    # ---- what the indexes hold, for the panel Perch's footer opens: --status reads their files, builds nothing, and says
+    # when another process holds a folder's lock
+    fresh = os.path.join(TMP, 'fresh'); os.makedirs(fresh)
+    lock = indexer.Lock(os.path.join(indexer.cache_dir(other2), 'update.lock')); assert lock.acquire()
+    p = subprocess.run([sys.executable, os.path.join(HERE, '..', 'codeindex', 'server.py'), '--status', root, other2, fresh], capture_output=True, text=True)
+    lock.release()
+    assert p.returncode == 0, p.stderr
+    st = json.loads(p.stdout.strip().split('\n')[-1])
+    one, three, nothing = st['folders']
+    assert st['meaning'] is False and [f['name'] for f in st['folders']] == ['one', 'three', 'fresh'], st
+    assert one['built'] and one['files'] == 4 and one['sections'] > 0 and one['vectors'] == 0 and isinstance(one['updated'], int) and not one['updating'] and not one['embedding'], one
+    assert three['built'] and three['updating'] and not three['embedding'] and three['ignore'] == [] and not three['off'], three
+    assert nothing == {'name': 'fresh', 'root': fresh, 'off': False, 'built': False, 'files': 0, 'sections': 0, 'vectors': 0, 'updated': None, 'updating': False, 'embedding': False, 'ignore': []}, nothing
+    assert not os.path.exists(indexer.cache_dir(fresh, create=False)), 'status builds nothing, not even the place for it'
+    assert S.status_json([root, root])['folders'][0]['name'] == root, 'two folders of one name: told apart by their paths'
+
     # ---- the move onto an installed environment: between two messages the server replaces itself with the environment's
     # Python (here a script that counts its runs, then runs this one), once, and nothing a client sent is lost
     if os.name == 'posix':

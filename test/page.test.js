@@ -840,7 +840,7 @@ window.close();
   tabs6();
   assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
   const kids = [...p6.$$('.pane')[0].children].map((n) => [n.className, n.hidden]);
-  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage until the footer opens it');
+  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true], ['subs mx ix', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage and the index until the footer opens them');
 
   tabs6({ busy: true, busySince: Date.now() - 75000 });
   assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');
@@ -1102,6 +1102,50 @@ window.close();
     btn.click();
     assert.deepStrictEqual([out8.pop(), box().querySelector('.mxh .what').textContent], [{ type: 'subagentUsage', sid: 'c' }, 'This session\'s file was not found under /h/sessions.'], 'opened again: the last answer while the new one is read');
     p8.w.close();
+  }
+  // ---- the codebase search index, folder by folder, opened from the footer's "index": there while the workspace has a
+  // folder with search on; read from the host when opened, at each turn's end, and every few seconds while open
+  {
+    const p9 = page(ICONS), out9 = p9.out;
+    const C = tab({ id: 'c', kind: 'claude', title: 'C', started: true });
+    const tabs9 = (c) => p9.host({ type: 'tabs', tabs: [with_(C, c)], active: 'c' });
+    tabs9({});
+    p9.host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: { vendor: 'Codex', plan: 'pro', backend: 'chatgpt', backendLabel: 'ChatGPT', level: 'ok', action: 'refresh', lines: [], segments: [] } });
+    const btn = p9.$('#m-index'), box = () => p9.$$('.pane')[0].querySelector('.ix'), what = () => box().querySelector('.mxh .what').textContent;
+    assert(!p9.shown(btn), 'search off for the workspace: nothing to show');
+    tabs9({ index: true });
+    assert.deepStrictEqual([p9.shown(btn), btn.textContent, btn.getAttribute('aria-pressed'), p9.shown(box())], [true, 'index', 'false', false]);
+    out9.length = 0; btn.click();
+    assert.deepStrictEqual([out9.pop(), p9.shown(box()), what(), btn.getAttribute('aria-pressed')], [{ type: 'indexStatus', sid: 'c' }, true, 'Reading the indexes…', 'true'], 'asked of the host, which reads the indexes');
+    const f = (name, files, sections, vectors, extra) => Object.assign({ name, root: '/w/' + name, off: false, built: true, files, sections, vectors, updated: 1, updating: false, embedding: false, ignore: [] }, extra);
+    const AT = Date.parse('2026-10-27T10:00:00Z');
+    p9.host({ type: 'indexStatus', sid: 'c', at: AT, on: true, meaning: true, folders: [f('fennets', 1908, 12000, 12000), f('tools', 300, 900, 450, { embedding: true }), f('lattice', 0, 0, 0, { built: false }), f('old', 5, 5, 0, { off: true, ignore: ['*'] }), f('half', 10, 100, 50), f('near', 20, 1000, 999)] });
+    const rows = () => [...box().querySelectorAll('tr')].slice(1).map((tr) => [...tr.children].map((td) => td.textContent));
+    assert.deepStrictEqual(rows(), [
+      ['fennets', '1,908', '12,000', '12,000', 'meaning', 'up to date'],
+      ['tools', '300', '900', '450', 'keywords', 'making vectors'],
+      ['lattice', '0', '0', '0', 'keywords', 'not built yet'],
+      ['old', '5', '5', '0', '—', 'off: .codebaseignore is *'],
+      ['half', '10', '100', '50', 'keywords', 'vectors 50 of 100'],
+      ['near', '20', '1,000', '999', 'meaning', 'up to date'],
+    ], 'each folder: its counts, how it is searched, and what is happening to it; one section short is not a build in progress');
+    assert.strictEqual(what(), 'Codebase search by keywords, vectors being made · 6 folders · 2,243 files · 96% with vectors · as of ' + new Date(AT).toLocaleTimeString(), 'by meaning as a whole only once every searched folder is');
+    assert.deepStrictEqual([box().querySelector('.hint'), box().querySelector('tr td').title], [null, '/w/fennets'], 'search by meaning installed: no hint to install it; a row names its path');
+    p9.host({ type: 'indexStatus', sid: 'c', at: AT, on: true, meaning: false, folders: [f('fennets', 1908, 12000, 0), f('tools', 300, 900, 0, { updating: true })] });
+    assert.deepStrictEqual([what(), rows(), /not installed/.test(box().querySelector('.hint').textContent)], ['Codebase search by keywords · 2 folders · 2,208 files · as of ' + new Date(AT).toLocaleTimeString(), [['fennets', '1,908', '12,000', '—', 'keywords', 'up to date'], ['tools', '300', '900', '—', 'keywords', 'indexing files']], true], 'keywords only: no vector counts, and how to add search by meaning');
+    out9.length = 0; p9.host({ type: 'event', sid: 'c', ev: { kind: 'result', ok: true, duration_ms: 5 } });
+    assert.deepStrictEqual(out9.pop(), { type: 'indexStatus', sid: 'c' }, 'a turn ended while open: what its searches brought up to date');
+    p9.host({ type: 'indexStatus', sid: 'c', at: AT, on: false, why: 'Codebase search is off for this workspace.' });
+    assert.deepStrictEqual([what(), box().querySelector('table')], ['Codebase search is off for this workspace.', null]);
+    box().querySelector('.mxh .x').click();
+    assert.deepStrictEqual([p9.shown(box()), btn.getAttribute('aria-pressed')], [false, 'false']);
+    out9.length = 0; p9.host({ type: 'event', sid: 'c', ev: { kind: 'result', ok: true, duration_ms: 5 } });
+    assert.deepStrictEqual(out9.filter((o) => o.type === 'indexStatus'), [], 'closed: not asked');
+    btn.click();
+    assert.deepStrictEqual([out9.pop(), what()], [{ type: 'indexStatus', sid: 'c' }, 'Codebase search is off for this workspace.'], 'opened again: the last answer while the new one is read');
+    tabs9({ index: false });
+    assert.deepStrictEqual([p9.shown(btn), p9.shown(box()), btn.getAttribute('aria-pressed')], [false, false, 'false'], 'search turned off: the panel closes with the button');
+    p9.w.close();
   }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });

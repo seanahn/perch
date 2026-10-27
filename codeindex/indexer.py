@@ -43,11 +43,12 @@ SKIP_EXT = {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.webp', '.
 warnings.filterwarnings('ignore', category=SyntaxWarning)   # a repository's own odd escapes are not ours to report
 
 
-def cache_dir(root):
-    """Where a tree's index lives: outside it, private to the user, one per tree."""
+def cache_dir(root, create=True):
+    """Where a tree's index lives: outside it, private to the user, one per tree. Made on the way, unless only asked after."""
     base = os.environ.get('CODEINDEX_CACHE') or os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'codebase-index')
     d = os.path.join(base, hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16])
-    os.makedirs(d, mode=0o700, exist_ok=True)
+    if create:
+        os.makedirs(d, mode=0o700, exist_ok=True)
     return d
 
 

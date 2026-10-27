@@ -630,6 +630,13 @@ The design and the measurements are in
   codebase -- python3 <it>` gives the CLIs the same tool outside Perch.
 - `perch.codebaseIndex.python` names the Python to run it on, if not
   `python3`.
+- **Its state, in the footer.** Under a tab, the **index** button next
+  to **sub-agents** opens a table of the workspace's folders with search
+  on: files and sections indexed, how many sections have vectors,
+  whether each is searched by keywords or by meaning, and whether it is
+  being built. It is read from the indexes' files every few seconds
+  while the panel is open, so a first build shows its counts growing;
+  it only reads, and never starts a build.
 
 Whether it pays depends on the repository, which is why it is off until
 you turn it on. On a well-documented one of 1,500 files, Claude and Codex

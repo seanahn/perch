@@ -122,6 +122,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     probe() { return Promise.resolve(!!ibox.usable); }
     isInstalled() { return !!ibox.installed; }
     mcpServer(roots) { const list = Array.isArray(roots) ? roots : [roots]; return { command: ibox.installed ? '/home/u/.local/share/perch/codeindex/venv/bin/python' : this.python, args: ['/ext/fennets.perch/codeindex/server.py', ...list], env: { CODEINDEX_MODELS: '/home/u/.local/share/perch/codeindex/models' } }; }
+    async status(roots) { const list = Array.isArray(roots) ? roots : [roots]; (ibox.statusAsked = ibox.statusAsked || []).push(list); if (ibox.failStatus) throw new Error(ibox.failStatus); return ibox.status || { meaning: !!ibox.installed, folders: list.map((r) => ({ name: require('path').basename(r), root: r, off: false, built: true, files: 10, sections: 40, vectors: ibox.installed ? 40 : 0, updated: 1, updating: false, embedding: false, ignore: [] })) }; }
     async install(onStep) { ibox.installs++; onStep('Creating a private Python environment', 5); if (ibox.failInstall) throw new Error(ibox.failInstall); onStep('Ready', 100); ibox.installed = true; return { ready: true }; }
   }                 // mutable, so a test can change a setting and fire the change event
   const cats = Object.assign({}, CATALOGS, catalogs);     // pass { claude: null } to simulate an agent that cannot list models

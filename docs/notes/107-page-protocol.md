@@ -18,6 +18,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
 | `subagentUsage` | `sid` | Read a session's usage, thread by thread, Codex's or Claude's (the footer's **sub-agents**); asked again at a turn's end while the table is open |
+| `indexStatus` | `sid` | Read the codebase search index's state, folder by folder (the footer's **index**, shown while the tab's `index` is true: a folder of the workspace has search on); asked again at a turn's end and every 5 s while the panel is open |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
 
@@ -28,6 +29,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
 | `event` | `sid`, `ev` | One event for one session |
 | `meter` | `meter`, `codex` | Claude usage, and ChatGPT plan usage |
+| `indexStatus` | `sid`, `at`, `on`, and `meaning`, `folders`, or `why`, `error` | The answer, read from the indexes' files by `server.py --status` (nothing is built): `meaning` says whether search by meaning is installed on the Python the server runs on; each folder its `name`, `root`, `files`, `sections`, `vectors`, `built`, `updating`, `embedding`, `off`, `ignore`, `updated`; `why` when search is off or no Python can run it, `error` when the read failed |
 | `subagentUsage` | `sid`, `at`, and `main`, `subagents`, `prices`, `backend`, or `error` | The answer: each thread's model, effort, turns, tokens, and `cost` at list prices (null, with `unpriced` naming the model, when the table has no price for one it ran on); a sub-agent's `name`, `thread`, `state`, `first`, `last`, and `missing` when its file is not found |
 | `commands` | `kind`, `list` | Slash commands |
 

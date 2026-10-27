@@ -3,6 +3,7 @@
 
 usage: server.py [root ...]     the trees to search, each with an index of its own; the current directory if none
        server.py --index [root ...] build or bring the indexes up to date once, and say what is there
+       server.py --status [root ...] what the indexes hold, as JSON, for Perch's footer; nothing is built
        server.py --download-only    fetch the embedding model and say whether it loads, for Perch's installer
 
 Plain JSON-RPC, one message a line. The handshake is answered at once and the index is built or brought up to date
@@ -292,6 +293,31 @@ def serve(roots):
             upgrade(server)
 
 
+def status_json(roots):
+    """What the indexes of these trees hold, from their files alone, for the panel Perch's footer opens and reads again
+    every few seconds while open: per folder the counts, and whether another process is indexing or embedding it now
+    (its lock held); whether search by meaning is installed on this Python, by its packages being there (no import: an
+    import of fastembed takes a second, too much for a poll). Nothing is built or brought up to date here."""
+    import importlib.util
+    folders = [Folder(os.path.abspath(r)) for r in roots]
+    names = [f.name for f in folders]
+    out = {'meaning': all(importlib.util.find_spec(m) is not None for m in ('fastembed', 'numpy')), 'folders': []}
+    for f in folders:
+        d = indexer.cache_dir(f.root, create=False)
+        e = {'name': f.root if names.count(f.name) > 1 else f.name, 'root': f.root, 'off': f.off(), 'built': os.path.exists(os.path.join(d, 'index.db')),
+             'files': 0, 'sections': 0, 'vectors': 0, 'updated': None, 'updating': False, 'embedding': False, 'ignore': indexer.Ignore(f.root).patterns}
+        if e['built']:
+            e.update(indexer.Index(f.root, cache=d).counts())
+            for key, name in (('updating', 'update.lock'), ('embedding', 'embed.lock')):
+                lock = indexer.Lock(os.path.join(d, name))
+                if lock.acquire():
+                    lock.release()
+                else:
+                    e[key] = True
+        out['folders'].append(e)
+    return out
+
+
 def download_only():
     """Fetch the embedding model and check it loads: one JSON line, {"ready": true} or {"ready": false, "error": ...}."""
     try:
@@ -308,6 +334,7 @@ def download_only():
 
 USAGE = """usage: server.py [root ...]       serve codebase_search over stdio MCP for these trees, an index each (default: the current directory)
        server.py --index [root ...]  build or bring the indexes up to date once, and say what is there
+       server.py --status [root ...] what the indexes hold, as JSON; nothing is built
        server.py --download-only  fetch the embedding model and say whether it loads
 
 Outside Perch:  claude mcp add -s user codebase -- python3 /path/to/perch/codeindex/server.py
@@ -327,6 +354,9 @@ def main(argv=None):
     roots = [os.path.abspath(a) for a in args if not a.startswith('-')] or [os.getcwd()]
     if '--index' in args:
         print(json.dumps([indexer.main(r) for r in roots] if len(roots) > 1 else indexer.main(roots[0]), indent=1))
+        return 0
+    if '--status' in args:
+        print(json.dumps(status_json(roots)))
         return 0
     serve(roots)
     return 0

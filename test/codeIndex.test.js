@@ -32,6 +32,7 @@ function make(o = {}) {
       return o.fail === 'model' ? cp.spawn(process.execPath, ['-e', 'process.stdout.write(JSON.stringify({ready:false,error:"no route to huggingface.co"})+"\\n"); process.exit(1)'], opts)
         : ok(opts, JSON.stringify({ ready: true, model: 'sentence-transformers/all-MiniLM-L6-v2' }) + '\n');
     }
+    if (args.includes('--status')) return ok(opts, 'a log line first\n' + JSON.stringify({ meaning: false, folders: [{ name: 'repo', root: args[args.length - 1] }] }) + '\n');
     return fail(opts, 'unexpected ' + args.join(' '));
   } });
   return { ix, home, calls };
@@ -48,6 +49,17 @@ function make(o = {}) {
     assert.deepStrictEqual(s.env, { CODEINDEX_MODELS: ix.modelsDir, CODEINDEX_PYTHON: ix.venvPython, CODEINDEX_MARKER: ix.markerPath }, 'and where the environment will be, for the server to move onto it');
     assert.strictEqual(ix.isInstalled(), false);
     assert.deepStrictEqual(ix.mcpServer(['/w/a', '/w/b']).args, [path.join(ROOT, 'codeindex', 'server.py'), '/w/a', '/w/b'], 'a multi-root workspace: every folder, an index each');
+  }
+
+  // ---- what the indexes hold, for the panel the footer opens: the server's --status, on the Python the server runs on
+  {
+    const { ix, calls } = make();
+    const s = await ix.status(['/w/a', '/w/b']);
+    assert.deepStrictEqual([s.meaning, s.folders, calls.pop()], [false, [{ name: 'repo', root: '/w/b' }], ['python3', 'codeindex/server.py', '--status', '/w/a', '/w/b']], 'the last line is the answer; a log line before it is not');
+    assert.strictEqual((await ix.status('/w/a')).folders[0].root, '/w/a', 'one folder, as a string');
+    await ix.install(() => {});
+    await ix.status('/w/a');
+    assert.strictEqual(calls.pop()[0], path.join('venv', 'bin', 'python'), 'search by meaning installed: on that environment\'s Python, where the packages are');
   }
 
   // ---- whether this machine's Python can run it: asked once
