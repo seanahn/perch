@@ -31,7 +31,8 @@ SEARCH = {
         'does not answer the question. When you know an exact name, use grep instead.'),
     'inputSchema': {'type': 'object', 'properties': {
         'query': {'type': 'string', 'description': 'What you are looking for, in plain words'},
-        'top_k': {'type': 'integer', 'description': 'How many files to return (default 5)', 'minimum': 1, 'maximum': 20}},
+        'folder': {'type': 'string', 'description': 'Search one workspace folder only, by its name as the Explorer shows it (codebase_status lists them). Default: every folder'},
+        'top_k': {'type': 'integer', 'description': 'How many files to return (default 5; 8 when the workspace has more than two folders)', 'minimum': 1, 'maximum': 20}},
         'required': ['query']},
     'annotations': {'readOnlyHint': True},
 }
@@ -142,8 +143,17 @@ class Server:
     def _path(self, f, h):
         return os.path.join(f.root, h['path']) if self.many else h['path']   # several folders: paths the agent can open from anywhere
 
-    def search(self, query, k):
-        on = [f for f in self.folders if not f.off()]
+    def default_k(self):
+        return 8 if len(self.folders) > 2 else 5     # many folders compete: five is thin
+
+    def search(self, query, k, folder=None):
+        chosen = self.folders
+        if folder:
+            want = folder.strip().rstrip('/')
+            chosen = [f for f in self.folders if want.lower() in (f.name.lower(), f.root.lower(), os.path.basename(f.root.rstrip(os.sep)).lower())]
+            if not chosen:
+                return f"No workspace folder is called {folder!r}. The folders: {', '.join(f.name for f in self.folders)}."
+        on = [f for f in chosen if not f.off()]
         if not on:
             return ("Search is off for this workspace: every folder's .codebaseignore is '*'. Use grep." if self.many
                     else "Search is off for this repository: its .codebaseignore is '*'. Use grep.")
@@ -174,7 +184,7 @@ class Server:
         how = ('by meaning' if meaning else
                'by keywords; search by meaning is still being built' if self.embedder.available() else
                'by keywords; search by meaning is not installed')
-        where = f' in {len(found)} folders' if self.many else ''
+        where = (f', in {found[0][0].name}' if folder else f' in {len(found)} folders') if self.many else ''
         broken = f"; no index for {', '.join(f.name for f in failed)}" if failed else ''
         lines = [f"{self._path(f, h)}:{h['start']}-{h['end']}  {h['name'][:60]}  ({h['score']})" for _, f, h in rows]
         return f"Files by relevance, {how} ({files} files indexed{where}{broken}):\n" + '\n'.join(lines)
@@ -265,7 +275,8 @@ def serve(roots):
                     if not q:
                         reply(id_, text('codebase_search needs a query.', True))
                     else:
-                        reply(id_, text(server.search(q, max(1, min(20, int(a.get('top_k') or 5))))))
+                        k = max(1, min(20, int(a.get('top_k') or server.default_k())))
+                        reply(id_, text(server.search(q, k, str(a.get('folder') or '').strip() or None)))
                 elif p.get('name') == 'codebase_status':
                     reply(id_, text(server.status()))
                 else:

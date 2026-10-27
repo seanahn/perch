@@ -242,6 +242,16 @@ try:
     r = server_many([root, other2], call(1, 'codebase_search', {'query': 'package install guard blocks', 'top_k': 2}), call(2, 'codebase_status', {}))
     assert os.path.join(other2, 'docs/firewall.md') not in r[0]['result']['content'][0]['text'], 'a folder that says no is left out'
     assert '- three: off (.codebaseignore is *)' in r[1]['result']['content'][0]['text']
+    # one folder by name, and a name that is no folder; the default number of hits grows with the folders
+    os.remove(os.path.join(other2, '.codebaseignore'))
+    r = server_many([root, other2],
+                    call(1, 'codebase_search', {'query': 'gateway setup', 'folder': 'three', 'top_k': 5}),
+                    call(2, 'codebase_search', {'query': 'gateway setup', 'folder': 'nowhere'}))
+    t = r[0]['result']['content'][0]['text']
+    assert ', in three' in t.split('\n')[0] and all(l.startswith(other2) for l in t.split('\n')[1:]), 'that folder only\n' + t
+    assert r[1]['result']['content'][0]['text'] == "No workspace folder is called 'nowhere'. The folders: one, three.", r[1]
+    import server as S
+    assert [S.Server.default_k(type('F', (), {'folders': [0] * n})()) for n in (1, 2, 3, 12)] == [5, 5, 8, 8]
     r = server_many([root, root], call(1, 'codebase_status', {}))
     assert r[0]['result']['content'][0]['text'].startswith('Search: by keywords. 4 files'), 'the same folder twice is one folder: ' + r[0]['result']['content'][0]['text']
 

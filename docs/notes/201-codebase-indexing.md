@@ -257,7 +257,11 @@ follows the evidence there is.
   since a tab's process works in the first folder only; search by meaning merges them by score,
   keywords a folder at a time by rank, BM25 scores not comparing across indexes. One embedding
   model serves all the folders of a server. A window with no folder gets no server: never the
-  home directory.
+  home directory. Many folders compete: measured on a twelve-folder workspace, three answers in
+  the c3securitytools folder's own top ten fell out of the top five, mostly to another folder's
+  skill documents matching generic words. So the tool takes an optional `folder`, one workspace
+  folder by its Explorer name (`codebase_status` lists them), and returns 8 hits instead of 5
+  when the workspace has more than two folders.
 - **From each tab's next process, not mid-conversation.** The tool list sits at the front of the
   cached prompt, so a change re-caches the conversation once. A Claude tab picks it up after its
   current turn, as on a backend switch; a Codex tab, which runs each turn as a process, from its

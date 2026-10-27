@@ -553,7 +553,8 @@ The design and the measurements are in
 - **Every folder of the workspace,** in the Explorer's order, each with
   an index of its own; a folder's own `.vscode/settings.json` can turn it
   off or on for that folder alone, and with several folders the results
-  carry full paths.
+  carry full paths. The tool takes a `folder` to search one of them by
+  name, and returns 8 hits instead of 5 when there are more than two.
 - **The index stays on the machine with the code.** It is kept in
   `~/.cache/codebase-index/`, outside the repository, private to you, and
   brought up to date from the files that changed. Under Remote-SSH it is
