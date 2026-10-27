@@ -18,7 +18,9 @@ The page and the host exchange plain JSON with `postMessage`.
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
 | `subagentUsage` | `sid` | Read a session's usage, thread by thread, Codex's or Claude's (the footer's **sub-agents**); asked again at a turn's end while the table is open |
-| `indexStatus` | `sid` | Read the codebase search index's state, folder by folder (the footer's **index**, shown while the tab's `index` is true: a folder of the workspace has search on); asked again at a turn's end and every 5 s while the panel is open |
+| `indexStatus` | `sid` | Read codebase search's state: every folder of the workspace with its setting and its index (the footer's **index**, shown while the tab's `index` is true: a folder is open); asked again at a turn's end and every 5 s while the panel is open |
+| `searchToggle` | `sid` | Turn codebase search on or off for the workspace: the setting where it is set (the workspace's settings if they have it, else the user's), without the command's message; answered with `indexStatus` |
+| `searchFolder` | `sid`, `root`, `on` | Turn codebase search on or off for one folder, in its own settings (`.vscode/settings.json`, the WorkspaceFolder target); answered with `indexStatus` |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
 
@@ -29,7 +31,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
 | `event` | `sid`, `ev` | One event for one session |
 | `meter` | `meter`, `codex` | Claude usage, and ChatGPT plan usage |
-| `indexStatus` | `sid`, `at`, `on`, and `meaning`, `folders`, or `why`, `error` | The answer, read from the indexes' files by `server.py --status` (nothing is built): `meaning` says whether search by meaning is installed on the Python the server runs on; each folder its `name`, `root`, `files`, `sections`, `vectors`, `built`, `updating`, `embedding`, `off`, `ignore`, `updated`; `why` when search is off or no Python can run it, `error` when the read failed |
+| `indexStatus` | `sid`, `at`, `on`, `usable`, `folders`, and `meaning`, or `why`, `error` | The answer: `on` is the workspace's setting, `usable` whether a Python here can run the search; every folder its `name`, `root` and `on` (its own setting as it resolves) and, read from the indexes' files by `server.py --status` (nothing is built), `files`, `sections`, `vectors`, `built`, `updating`, `embedding`, `off`, `ignore`, `updated`; `meaning` says whether search by meaning is installed on the Python the server runs on; `why` when no folder is open or no Python can run it, `error` when the read failed |
 | `subagentUsage` | `sid`, `at`, and `main`, `subagents`, `prices`, `backend`, or `error` | The answer: each thread's model, effort, turns, tokens, and `cost` at list prices (null, with `unpriced` naming the model, when the table has no price for one it ran on); a sub-agent's `name`, `thread`, `state`, `first`, `last`, and `missing` when its file is not found |
 | `commands` | `kind`, `list` | Slash commands |
 

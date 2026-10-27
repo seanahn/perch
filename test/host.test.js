@@ -2238,35 +2238,54 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
-  // ---- the index's state, for the panel the footer's "index" opens: read from the indexes' files by the server, for the
-  // folders with search on; the tab says whether there is one to offer, and follows the setting
+  // ---- the index's state, for the panel the footer's "index" opens, and its switches: every folder of the workspace with
+  // its setting, read from the indexes' files by the server on or off; the workspace's switch writes the setting where it
+  // is set, a folder's its own .vscode/settings.json, and the panel is answered with the new state either way
   {
     const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: true }, workspaceFolders: ['/w/fennets', '/w/tools'] }); await flush(); await flush();
+    m.ui.folderConfig['/w/tools'] = { 'codebaseIndex.enabled': false };
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
-    assert.strictEqual(v.tab(c).index, true, 'search on for a folder: the footer offers the index');
+    assert.strictEqual(v.tab(c).index, true, 'a folder is open: the footer offers the index');
     const answers = () => v.got.filter((g) => g.type === 'indexStatus');
-    const ask = async () => { const n = answers().length; v.fire({ type: 'indexStatus', sid: c }); for (let i = 0; i < 400 && answers().length === n; i++) await new Promise((r) => setTimeout(r, 5)); return answers().pop(); };
+    const next = async (fire) => { const n = answers().length; fire(); for (let i = 0; i < 400 && answers().length === n; i++) await new Promise((r) => setTimeout(r, 5)); return answers().pop(); };
+    const ask = () => next(() => v.fire({ type: 'indexStatus', sid: c }));
     let a = await ask();
-    assert.deepStrictEqual([a.on, a.meaning, a.folders.map((f) => [f.name, f.files, f.vectors]), m.ibox.statusAsked.pop()], [true, false, [['fennets', 10, 0], ['tools', 10, 0]], ['/w/fennets', '/w/tools']], 'read for the folders that are on; nothing is built');
+    assert.deepStrictEqual([a.on, a.usable, a.meaning, a.folders.map((f) => [f.name, f.on, f.files]), m.ibox.statusAsked.pop()], [true, true, false, [['fennets', true, 10], ['tools', false, 10]], ['/w/fennets', '/w/tools']], 'every folder read, on or off, each with its setting');
     assert(typeof a.at === 'number' && a.sid === c);
-    m.ibox.failStatus = 'boom'; a = await ask();
-    assert.deepStrictEqual([a.on, a.error], [true, 'The indexes could not be read: boom']);
-    m.ibox.failStatus = null;
-    m.changeConfig({ 'codebaseIndex.enabled': false }); await flush(); await flush();
-    assert.strictEqual(v.tab(c).index, false, 'turned off: the tab says so, and the footer hides the button');
-    a = await ask();
-    assert.deepStrictEqual([a.on, /off for this workspace/.test(a.why)], [false, true]);
+    m.ui.answers.push('Not Now');   // search by meaning, offered as search comes on: declined
+    a = await next(() => v.fire({ type: 'searchFolder', sid: c, root: '/w/tools', on: true }));
+    assert.deepStrictEqual([m.ui.configUpdates.pop(), a.folders.map((f) => f.on)], [['codebaseIndex.enabled', true, 3, '/w/tools'], [true, true]], 'a folder\'s switch: its own settings, and the panel answered');
+    a = await next(() => v.fire({ type: 'searchToggle', sid: c }));
+    assert.deepStrictEqual([m.ui.configUpdates.pop(), a.on, a.folders.map((f) => f.on), m.ui.infos.filter((i) => /codebase search is (on|off)/.test(i)).length], [['codebaseIndex.enabled', false, 1], false, [false, true], 0], 'the workspace\'s switch: where the setting is set, without the command\'s message; a folder with its own setting keeps it');
+    assert.strictEqual(v.tab(c).index, true, 'still offered: the folders are still there');
+    const writes = m.ui.configUpdates.length;
+    a = await next(() => v.fire({ type: 'searchFolder', sid: c, root: '/w/nowhere', on: true }));
+    assert.deepStrictEqual([m.ui.configUpdates.length, a.folders.length], [writes, 2], 'a folder that is not in the workspace: nothing written, the panel answered all the same');
+    m.ibox.failStatus = 'boom'; a = await ask(); m.ibox.failStatus = null;
+    assert.deepStrictEqual([a.on, a.error, a.folders.map((f) => [f.name, f.on, f.files])], [false, 'The indexes could not be read: boom', [['fennets', false, undefined], ['tools', true, undefined]]], 'a read that fails: the folders and their switches all the same');
     m.perch.dispose();
   }
-  // search on, but no Python here can run it: the panel says that instead of a table
+  // search on, but no Python here can run it: the panel says so over the folders and their switches
   {
     const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: false }, workspaceFolders: ['/w/fennets'] }); await flush(); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
     const answers = () => v.got.filter((g) => g.type === 'indexStatus');
     v.fire({ type: 'indexStatus', sid: c }); for (let i = 0; i < 400 && !answers().length; i++) await new Promise((r) => setTimeout(r, 5));
-    assert.deepStrictEqual([v.tab(c).index, /no Python here can run it/.test(answers().pop().why)], [true, true]);
+    const a = answers().pop();
+    assert.deepStrictEqual([v.tab(c).index, a.on, a.usable, /No Python here can run codebase search/.test(a.why), a.folders.map((f) => [f.name, f.on, f.files])], [true, true, false, true, [['fennets', true, undefined]]]);
+    m.perch.dispose();
+  }
+  // a window with no folder: nothing to index, so no button; asked anyway, it says so
+  {
+    const m = install(undefined, { codeIndex: { usable: true }, workspaceFolders: [] }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    const answers = () => v.got.filter((g) => g.type === 'indexStatus');
+    v.fire({ type: 'indexStatus', sid: c }); for (let i = 0; i < 400 && !answers().length; i++) await new Promise((r) => setTimeout(r, 5));
+    const a = answers().pop();
+    assert.deepStrictEqual([v.tab(c).index, a.folders, /No folder is open/.test(a.why)], [false, [], true]);
     m.perch.dispose();
   }
 

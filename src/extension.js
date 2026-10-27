@@ -953,7 +953,7 @@ class Session {
     return {
       id: this.id, kind: this.kind, title: this.title, busy: this.busy, busySince: this.busy ? this.busySince || 0 : 0, attention: this.attention, started: !!this.agent,
       thread: !!this.agentSessionId,   // a session on record: its usage, thread by thread, can be read from the agent's files
-      index: this.view.searchRoots().length > 0,   // codebase search is on for a folder of the workspace: the footer offers the index's state
+      index: (vscode.workspace.workspaceFolders || []).length > 0,   // a folder is open: the footer offers the index's state and its switches
       mode: this.mode, modes: MODES[this.kind],
       model: this.model, models: this.modelOptions(), actualModel: this.running(),
       off: this.offModel(),            // the session runs another model than the one meant: the pill names it
@@ -1087,18 +1087,25 @@ class PerchView {
     return this.searchProbed;
   }
   /**
-   * The workspace's folders codebase search covers: those with the setting on, read per folder (the setting's scope is
-   * resource: a folder's own .vscode/settings.json decides for it, else the workspace's, else the user's). In order.
+   * Every folder of the workspace, in order, each with whether codebase search is on for it: the setting, read per folder
+   * (its scope is resource: a folder's own .vscode/settings.json decides for it, else the workspace's, else the user's).
+   * Two folders of one name are told apart by their paths, as the server does.
    */
-  searchRoots() {
-    const roots = [];
+  searchFolders() {
+    const out = [];
     for (const f of vscode.workspace.workspaceFolders || []) {
+      if (out.some((o) => o.root === f.uri.fsPath)) continue;
       let on;
       try { on = vscode.workspace.getConfiguration('perch', f.uri).get('codebaseIndex.enabled') === true; } catch (_) { on = cfg('codebaseIndex.enabled') === true; }
-      if (on && !roots.includes(f.uri.fsPath)) roots.push(f.uri.fsPath);
+      out.push({ name: require('path').basename(f.uri.fsPath) || f.uri.fsPath, root: f.uri.fsPath, on });
     }
-    return roots;
+    for (const o of out) if (out.filter((x) => x.name === o.name).length > 1) o.name = o.root;
+    return out;
   }
+  /** The workspace's folders codebase search covers: those with the setting on, in order. */
+  searchRoots() { return this.searchFolders().filter((f) => f.on).map((f) => f.root); }
+  /** Whether codebase search is on for the workspace as a whole: the setting as the window sees it, no folder asked. */
+  searchOn() { return cfg('codebaseIndex.enabled') === true; }
   /** The search server for a tab's next process, or null: no folder on (the default), or no Python here that can run it. */
   codeSearch() {
     const roots = this.searchRoots();
@@ -1129,14 +1136,30 @@ class PerchView {
     if (search) this.offerSearch();
     this.sendTabs();                                 // the footer's "index" shows while a folder has search on
   }
-  /** Turn codebase search on or off where it is set: in the workspace's settings if they have it, else the user's. */
-  async toggleSearch() {
+  /**
+   * Turn codebase search on or off where it is set: in the workspace's settings if they have it, else the user's. A
+   * folder with a setting of its own keeps it. Quiet from the footer's panel, which shows the new state itself.
+   */
+  async toggleSearch(quiet) {
     const c = vscode.workspace.getConfiguration('perch'), i = (c.inspect && c.inspect('codebaseIndex.enabled')) || {};
     const was = c.get('codebaseIndex.enabled') === true;
     const target = i.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
     await c.update('codebaseIndex.enabled', !was, target);
     const usable = was || await this.probeSearch();   // turned on: the Python check runs now, and the word waits for it
-    vscode.window.showInformationMessage(`Perch: codebase search is ${was ? 'off' : 'on'}${!was && !usable ? ', but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python' : ''}. Each tab takes it up from its next message.`);
+    if (!quiet) vscode.window.showInformationMessage(`Perch: codebase search is ${was ? 'off' : 'on'}${!was && !usable ? ', but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python' : ''}. Each tab takes it up from its next message.`);
+    return !was;
+  }
+  /**
+   * Turn codebase search on or off for one folder of the workspace, in that folder's own settings (.vscode/settings.json,
+   * the WorkspaceFolder target), from the footer's panel, which is then answered with the new state.
+   */
+  async searchFolder(s, root, on) {
+    const f = (vscode.workspace.workspaceFolders || []).find((w) => w.uri.fsPath === root);
+    if (f) {
+      try { await vscode.workspace.getConfiguration('perch', f.uri).update('codebaseIndex.enabled', !!on, vscode.ConfigurationTarget.WorkspaceFolder); }
+      catch (err) { vscode.window.showErrorMessage(`Perch: the setting for ${require('path').basename(root)} could not be written: ${String((err && err.message) || err)}`); }
+    }
+    this.indexStatus(s);
   }
   /** Once a machine, as a tab starts with codebase search: keywords need nothing; meaning is an install. */
   async offerSearch() {
@@ -1682,6 +1705,8 @@ class PerchView {
       case 'history': this.pickSession(); return;
       case 'subagentUsage': this.subagentUsage(s); return;
       case 'indexStatus': this.indexStatus(s); return;
+      case 'searchToggle': this.toggleSearch(true).then(() => this.indexStatus(s), () => this.indexStatus(s)); return;
+      case 'searchFolder': this.searchFolder(s, msg.root, msg.on); return;
       default: return;
     }
   }
@@ -1723,19 +1748,23 @@ class PerchView {
   }
 
   /**
-   * The codebase search index of this workspace, folder by folder, for the panel the footer's "index" opens: read from
-   * the indexes' files by the server's --status (src/codeIndex.js), so a build in progress shows its counts growing.
-   * Nothing is built here.
+   * The codebase search index of this workspace, folder by folder, for the panel the footer's "index" opens: every folder
+   * with its setting (the panel's switches), and what its index holds, read from the indexes' files by the server's
+   * --status (src/codeIndex.js), on or off (an index built before a folder was turned off is still there), so a build in
+   * progress shows its counts growing. Nothing is built here.
    */
   async indexStatus(s) {
     if (!s) return;
     const say = (o) => { const f = this.surface(s); if (f && f.ready) f.webview.postMessage(Object.assign({ type: 'indexStatus', sid: s.id, at: Date.now() }, o)); };
-    const roots = this.searchRoots();
-    if (!roots.length) { say({ on: false, why: 'Codebase search is off for this workspace. Perch: Toggle Codebase Search turns it on, for every workspace or for this one.' }); return; }
-    if (!this.searchUsable) { await this.probeSearch(); }
-    if (!this.searchUsable) { say({ on: false, why: 'Codebase search is on, but no Python here can run it (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python.' }); return; }
-    try { say(Object.assign({ on: true }, await this.codeIndex.status(roots))); }
-    catch (err) { say({ on: true, error: 'The indexes could not be read: ' + String((err && err.message) || err) }); }
+    const folders = this.searchFolders(), base = { on: this.searchOn(), folders };
+    if (!folders.length) { say(Object.assign(base, { why: 'No folder is open in this window: nothing to search.' })); return; }
+    if (!this.searchUsable) await this.probeSearch();
+    base.usable = this.searchUsable;
+    if (!this.searchUsable) { say(Object.assign(base, { why: 'No Python here can run codebase search (3.8 or newer, with SQLite FTS5): set perch.codebaseIndex.python.' })); return; }
+    try {
+      const st = await this.codeIndex.status(folders.map((f) => f.root)), by = new Map((st.folders || []).map((f) => [f.root, f]));
+      say(Object.assign(base, { meaning: st.meaning, folders: folders.map((f) => Object.assign({}, by.get(f.root) || {}, f)) }));
+    } catch (err) { say(Object.assign(base, { error: 'The indexes could not be read: ' + String((err && err.message) || err) })); }
   }
 
   // ---- session management

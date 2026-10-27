@@ -87,6 +87,11 @@ ${glyphCss}
   .ix th { cursor: default; }
   .ix th:hover { color: inherit; }
   .ix .hint { margin-top: 4px; }
+  .ix button.sw { padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; cursor: pointer; }
+  .ix button.sw[aria-pressed="true"] { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  .ix button.sw:hover { color: var(--vscode-foreground); }
+  .ix button.sw:disabled { opacity: .5; cursor: default; }
+  .ix tr.off td { color: var(--vscode-disabledForeground, inherit); }
   .subs.mx th.n, .subs.mx td.n { text-align: right; }
   .mx tr.main td, .mx tr.total td { font-weight: 600; }
   .mx tr.total td { border-top: 1px solid var(--vscode-panel-border); }
@@ -538,16 +543,25 @@ ${glyphCss}
     syncIndexButton(); pin(p);
   }
   function syncIndexButton() { const t = cur(), p = t ? panes.get(t.id) : null; $mindex.setAttribute('aria-pressed', p && p.ixOpen ? 'true' : 'false'); }
-  const INDEX_COLS = [['name', 'folder'], ['files', 'files'], ['sections', 'sections'], ['vectors', 'with vectors'], ['search', 'search'], ['state', 'state']];
-  function indexSearch(u, f) { return f.off ? '—' : u.meaning && f.sections && f.vectors >= 0.9 * f.sections ? 'meaning' : 'keywords'; }
+  const INDEX_COLS = [['name', 'folder'], ['on', 'setting'], ['files', 'files'], ['sections', 'sections'], ['vectors', 'with vectors'], ['search', 'search'], ['state', 'state']];
+  const num = (v) => (typeof v === 'number' ? v.toLocaleString() : '—');
+  function indexSearch(u, f) { return !f.on || f.off || f.built === undefined ? '—' : u.meaning && f.sections && f.vectors >= 0.9 * f.sections ? 'meaning' : 'keywords'; }
   function indexState(u, f) {
+    if (!f.on) return 'off';
+    if (f.built === undefined) return '';
     if (f.off) return 'off: .codebaseignore is *';
     if (!f.built) return 'not built yet';
     if (f.updating) return 'indexing files';
     if (f.embedding) return 'making vectors';
     // no lock held and short of the server's own rule for search by meaning (90% of the sections; a section with nothing to embed never gets a vector): waiting for a tab's server to take it up
-    if (u.meaning && f.sections && f.vectors < 0.9 * f.sections) return 'vectors ' + f.vectors.toLocaleString() + ' of ' + f.sections.toLocaleString();
+    if (u.meaning && f.sections && f.vectors < 0.9 * f.sections) return 'vectors ' + num(f.vectors) + ' of ' + num(f.sections);
     return 'up to date';
+  }
+  // a switch: the setting as it is, and a click that asks the host to flip it; the answer redraws the panel
+  function indexSwitch(on, title, msg) {
+    const b = el('button', 'sw', on ? 'on' : 'off'); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.title = title;
+    b.addEventListener('click', () => { b.disabled = true; vscode.postMessage(msg); });
+    return b;
   }
   function drawIndex(p) {
     const box = p.ix, u = p.ixData; box.textContent = '';
@@ -556,25 +570,30 @@ ${glyphCss}
     again.addEventListener('click', () => askIndex(p.sid)); close.addEventListener('click', () => toggleIndex(p.sid, false));
     head.append(what, again, close); box.append(head);
     if (!u) { what.textContent = 'Reading the indexes…'; return; }
-    if (u.error || u.why) { what.textContent = u.error || u.why; return; }
-    const fs = u.folders || [], sum = (k) => fs.reduce((n, f) => n + (f[k] || 0), 0), files = sum('files'), sections = sum('sections'), vectors = sum('vectors');
-    const live = fs.filter((f) => !f.off && f.sections);   // by meaning as a whole once every folder that is searched is (the server's own rule, 90% of a folder's sections)
+    const fs = u.folders || [];
+    if (!fs.length) { what.textContent = u.why || u.error || 'No folder is open in this window.'; return; }
+    // the workspace's switch: the setting where it is set (the workspace's settings if they have it, else the user's); a folder with a setting of its own keeps it
+    head.insertBefore(indexSwitch(u.on, 'Codebase search is ' + (u.on ? 'on' : 'off') + ' for this workspace: click to turn it ' + (u.on ? 'off' : 'on') + ', in the workspace\\'s settings if they have it, else yours. A folder with a setting of its own keeps it. Each tab takes a change up from its next message.', { type: 'searchToggle', sid: p.sid }), again);
+    const on = fs.filter((f) => f.on), sum = (k) => on.reduce((n, f) => n + (f[k] || 0), 0), files = sum('files'), sections = sum('sections'), vectors = sum('vectors');
+    const live = on.filter((f) => !f.off && f.sections);   // by meaning as a whole once every folder that is searched is (the server's own rule, 90% of a folder's sections)
     const mode = !u.meaning ? 'by keywords' : live.length && live.every((f) => f.vectors >= 0.9 * f.sections) ? 'by meaning' : 'by keywords, vectors being made';
-    what.textContent = 'Codebase search ' + mode + ' · ' + fs.length + (fs.length === 1 ? ' folder' : ' folders') + ' · ' + files.toLocaleString() + ' files'
-      + (u.meaning && sections ? ' · ' + Math.round((100 * vectors) / sections) + '% with vectors' : '') + (u.at ? ' · as of ' + new Date(u.at).toLocaleTimeString() : '');
-    what.title = 'Each folder of the workspace with codebase search on, from its own index under ~/.cache/codebase-index/. Keywords are indexed within seconds; '
+    what.textContent = 'Codebase search is ' + (u.on ? 'on' : 'off') + ' for this workspace · ' + (on.length === fs.length ? fs.length + (fs.length === 1 ? ' folder' : ' folders') : on.length + ' of ' + fs.length + ' folders on')
+      + (u.why || u.error ? ' · ' + (u.why || u.error) : on.length ? ' · ' + mode + ' · ' + num(files) + ' files' + (u.meaning && sections ? ' · ' + Math.round((100 * vectors) / sections) + '% with vectors' : '') : '')
+      + (u.at ? ' · as of ' + new Date(u.at).toLocaleTimeString() : '');
+    what.title = 'Each folder of the workspace, with its own setting and its own index under ~/.cache/codebase-index/. Keywords are indexed within seconds; '
       + 'vectors, which search by meaning needs, take minutes the first time on a CPU and are made in the background, folder by folder. '
-      + (u.meaning ? 'Search by meaning is installed.' : 'Search by meaning is not installed: Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.');
+      + (u.meaning ? 'Search by meaning is installed.' : u.meaning === false ? 'Search by meaning is not installed: Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.' : '');
     const table = el('table'), hr = el('tr');
-    for (const [k, label] of INDEX_COLS) hr.append(el('th', k === 'name' || k === 'search' || k === 'state' ? '' : 'n', label));
+    for (const [k, label] of INDEX_COLS) hr.append(el('th', k === 'files' || k === 'sections' || k === 'vectors' ? 'n' : '', label));
     table.append(hr);
     for (const f of fs) {
-      const tr = el('tr'), name = el('td', null, f.name); name.title = f.root + (f.ignore && f.ignore.length ? ' · left out by .codebaseignore: ' + f.ignore.join(', ') : '');
-      tr.append(name, el('td', 'n', f.files.toLocaleString()), el('td', 'n', f.sections.toLocaleString()), el('td', 'n', u.meaning ? f.vectors.toLocaleString() : '—'), el('td', null, indexSearch(u, f)), el('td', null, indexState(u, f)));
+      const tr = el('tr', f.on ? '' : 'off'), name = el('td', null, f.name); name.title = f.root + (f.ignore && f.ignore.length ? ' · left out by .codebaseignore: ' + f.ignore.join(', ') : '');
+      const sw = el('td'); sw.append(indexSwitch(f.on, 'Codebase search is ' + (f.on ? 'on' : 'off') + ' for ' + f.name + ': click to turn it ' + (f.on ? 'off' : 'on') + ', in the folder\\'s own settings (.vscode/settings.json)', { type: 'searchFolder', sid: p.sid, root: f.root, on: !f.on }));
+      tr.append(name, sw, el('td', 'n', num(f.files)), el('td', 'n', num(f.sections)), el('td', 'n', u.meaning ? num(f.vectors) : '—'), el('td', null, indexSearch(u, f)), el('td', null, indexState(u, f)));
       table.append(tr);
     }
     box.append(table);
-    if (!u.meaning) box.append(el('div', 'hint', 'Search by meaning is not installed: keywords only. Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.'));
+    if (u.meaning === false && on.length) box.append(el('div', 'hint', 'Search by meaning is not installed: keywords only. Perch: Install Codebase Search by Meaning adds it, about 300 MB, once.'));
   }
   const usageWhen = (ms) => (typeof ms === 'number' ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
   function usageWho(r) {
@@ -1149,7 +1168,7 @@ ${glyphCss}
 
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
   const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan'), $msubs = $('m-subs'), $mindex = $('m-index');
-  $mindex.title = 'The codebase search index of this workspace, folder by folder: files, sections, how many have vectors, whether search is by keywords or by meaning, and whether it is being built';
+  $mindex.title = 'Codebase search for this workspace: on or off, for the workspace and for each folder, and each folder\\'s index: files, sections, how many have vectors, whether search is by keywords or by meaning, and whether it is being built';
   $mindex.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleIndex(t.id); });
   $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
   $msubs.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleUsage(t.id); });

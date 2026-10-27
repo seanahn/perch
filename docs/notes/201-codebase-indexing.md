@@ -338,11 +338,15 @@ with them for those minutes. A second tab's server, starting while the first bui
 index's lock held, waits for the keyword index rather than searching an empty one, and then shares
 it; it never builds a second copy. `codebase_status` says where each folder stands.
 
-The same for the user: the footer's **index** button, beside **sub-agents**, opens a table of the
-folders with search on (files, sections, sections with vectors, keywords or meaning, and whether the
-folder is being indexed or embedded: its lock held), read from the indexes' files by
-`server.py --status` when opened, at each turn's end, and every 5 s while open, so a first build
-shows its counts growing. It only reads; a build starts with a tab's server, never from the panel.
+The same for the user, with the switches: the footer's **index** button, beside **sub-agents**,
+opens a table of the workspace's folders, each with its setting (a switch that writes the folder's
+own `.vscode/settings.json`, the WorkspaceFolder target) and its index (files, sections, sections
+with vectors, keywords or meaning, and whether the folder is being indexed or embedded: its lock
+held); a switch in the header turns search on or off for the workspace, as the command does, where
+the setting is set. The table is read from the indexes' files by `server.py --status` when opened,
+at each turn's end, and every 5 s while open, so a first build shows its counts growing. It only
+reads; a build starts with a tab's server, never from the panel. A change reaches a tab at its next
+message, as from the command.
 
 **A file changed later.** There is no file watcher: the server looks for changes when it is asked
 something, at most every 30 s. The first search past that window does the check inline before
