@@ -251,7 +251,25 @@ assert(shown($('#m-codex')) && !shown($('#m-claude')), 'the ChatGPT glyph; no Cl
 assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
 assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus. Click to open your usage page.']);
 $('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
-$('#m-codex').click(); assert.deepStrictEqual([out.pop(), $('#m-codex').title], [{ type: 'openExternal', url: 'https://chatgpt.com/' }, 'Open chatgpt.com'], 'the vendor mark opens the vendor site');
+// the vendor mark: go on with the other vendor, or open the vendor's site (note 202)
+const SW = { kind: 'claude', models: [{ value: '', label: 'default · Opus 5.5' }, { value: 'claude-fable-5-1', label: 'Fable 5.1' }] };
+assert.strictEqual($('#m-codex').title, 'Continue on Claude, or open chatgpt.com');
+$('#m-codex').click();
+assert.deepStrictEqual(menuItems().map((i) => [i.label, i.dis]), [['Open chatgpt.com', false]], 'a busy tab with no models offered: only the site');
+assert(/Once this turn has ended/.test($('#menu').textContent)); $('#m-codex').click();
+host({ type: 'tabs', tabs: [A, with_(B, { switchTo: SW })], active: 'b' });
+$('#m-codex').click();
+assert(/Continue on Claude/i.test($('#menu .h').textContent) && $('#menu .h .k.claude'), 'headed by the other vendor, with its mark');
+assert.deepStrictEqual(menuItems().map((i) => [i.label, i.dis]), [['default · Opus 5.5', false], ['Fable 5.1', false], ['Open chatgpt.com', false]]);
+pickItem('Fable 5.1'); assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'b', kind: 'claude', model: 'claude-fable-5-1' });
+// a longer list, as Codex's is: each row sends its own model
+host({ type: 'tabs', tabs: [A, with_(B, { switchTo: { kind: 'codex', models: [{ value: '', label: 'default · GPT-5.6-Sol' }, { value: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }, { value: 'gpt-6-astra', label: 'GPT-6-Astra' }, { value: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }] } })], active: 'b' });
+for (const [label, value] of [['GPT-6-Astra', 'gpt-6-astra'], ['GPT-6.1-Sol', 'gpt-6.1-sol'], ['default · GPT-5.6-Sol', '']]) { $('#m-codex').click(); assert.strictEqual(menuItems().find((i) => i.label === label).hint, value, 'each row shows its model id beside the name'); pickItem(label); assert.strictEqual(out.pop().model, value, label); }
+$('#m-codex').click(); assert($('#menu').classList.contains('vendor'), 'the vendor menu is marked, for its roomier rows'); $('#m-codex').click();
+host({ type: 'tabs', tabs: [A, with_(B, { switchTo: SW })], active: 'b' });
+$('#m-codex').click(); pickItem('Open chatgpt.com'); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/' }, 'the site is still a click away');
+host({ type: 'tabs', tabs: [A, with_(B, { busy: true, switchTo: SW })], active: 'b' });
+$('#m-codex').click(); assert.deepStrictEqual(menuItems().map((i) => i.dis), [true, true, false], 'while the tab works, it cannot switch'); $('#m-codex').click();
 // under a Codex tab the backend button shows the Codex backend, and a click asks the host to switch it
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { bedrock: { endpoint: 'runtime', region: 'us-west-2', profile: 'dev' }, backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
 assert.deepStrictEqual([shown($('#m-backend')), $('#m-backend').textContent, $('#m-backend').title], [true, 'ChatGPT', 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.']);
@@ -262,7 +280,7 @@ $('#m-backend').click();
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
 assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: CODEX });
-$('#m-claude').click(); assert.deepStrictEqual([out.pop(), $('#m-claude').title], [{ type: 'openExternal', url: 'https://claude.ai/' }, 'Open claude.ai']);
+assert.strictEqual($('#m-claude').title, 'Continue on Codex, or open claude.ai');
 assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
 $('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
 host({ type: 'meter', meter: null, codex: Object.assign({}, CODEX, { plan: '', level: 'none', text: '\u2014', segments: [], fetchedAt: null, lines: ['Codex usage unavailable: no Codex session on this machine has reported usage yet.'] }) });
@@ -573,6 +591,19 @@ ev('a', { kind: 'note', level: 'warn', text: 'Opus 5.5\'s safeguards flagged thi
   assert.deepStrictEqual([n.className, n.querySelector('a') && n.querySelector('a').href], ['msg status warn', 'https://support.claude.com/en/articles/8106465']); }
 ev('a', { kind: 'note', text: 'an ordinary note' });
 assert.strictEqual($$('#panes .pane .status').pop().className, 'msg status', 'an ordinary note is not marked');
+// a tab that has been on both vendors: the way it went in its tooltip, the other's colour beside its mark (note 202)
+host({ type: 'tabs', tabs: [with_(A, { path: ['claude', 'codex', 'claude'] }), B], active: 'a' });
+{ const d = $$('#tabs .tab')[0];
+  assert(/^Claude 1 · Claude → Codex → Claude · double-click to rename$/.test(d.title), d.title);
+  assert(d.querySelector('.kw .k.claude') && d.querySelector('.kw .vdot.codex'), 'its mark, and Codex\'s dot');
+  assert(!$$('#tabs .tab')[1].querySelector('.vdot'), 'a tab on one vendor has none'); }
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
+// the tab went on with the other vendor here: a divider, with that vendor's mark (note 202)
+ev('a', { kind: 'note', vendor: 'codex', text: 'Continued on Codex with GPT-6-Luna · read 2 messages of the conversation above (about 1K tokens)' });
+{ const n = $$('#panes .pane .status').pop();
+  assert.strictEqual(n.className, 'msg status switch');
+  assert(n.firstChild.classList.contains('k') && n.firstChild.classList.contains('codex'), 'the vendor\'s mark first');
+  assert(/^Continued on Codex with GPT-6-Luna/.test(n.textContent)); }
 // with the gateway's own figure, that is the cost shown, and Claude Code's estimate moves to the tooltip
 ev('a', { kind: 'result', ok: true, duration_ms: 800, usage: { input: 10, cache_read: 0, output: 3 }, cost: 0.3, costTurn: 0.045, gatewayCost: 0.002096, gatewayCostSoFar: 0.0123, gatewayEstimate: 0.0021, gatewayEstimateSoFar: 0.013, via: [{ model: 'global.openai.gpt-6-luna', short: 'gpt-6-luna', n: 1 }] });
 { const r = $$('#panes .pane .result').pop();

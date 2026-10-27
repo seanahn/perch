@@ -2685,5 +2685,171 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 
+  // ---- a model saved by its id, the 1M form among them, is named as the catalog names it, with its efforts
+  {
+    const m = install({ 'perch.sessions.v1': { active: 'z', counters: { claude: 1, codex: 0 }, sessions: [{ id: 'z', kind: 'claude', title: 'prompt analysis', titled: true, model: 'claude-fable-resolved[1m]', effort: 'max', location: 'sidebar' }] } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const t = v.lastTabs().tabs[0];
+    assert.strictEqual(t.model, 'claude-fable-resolved[1m]', 'the choice is kept as it was made');
+    assert.deepStrictEqual(t.models.find((o) => o.value === t.model), { value: 'claude-fable-resolved[1m]', label: 'Fable 5.1 (1M)', title: 'For your toughest challenges' });
+    assert.strictEqual(t.effort, 'max', 'its effort is one Fable takes');
+    assert(t.efforts.some((o) => o.value === 'max'));
+    m.perch.dispose();
+  }
+
+  // ---- Claude's models are those of the backend the tabs run on, from the latest load only; a model saved under another
+  // backend's name is launched by this one's (seen 2026-10-27: a subscription tab sent Bedrock's us.anthropic.claude-fable-5-1)
+  {
+    const m = install({ 'perch.sessions.v1': { active: 'f', counters: { claude: 2, codex: 0 }, sessions: [
+      { id: 'f', kind: 'claude', title: 'bedrock id', titled: true, model: 'us.anthropic.claude-fable-resolved', location: 'sidebar' },
+      { id: 'g', kind: 'claude', title: 'bedrock 1m', titled: true, model: 'us.anthropic.claude-fable-resolved[1m]', location: 'sidebar' }] } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
+    assert.strictEqual(knobs.claudeLoads[knobs.claudeLoads.length - 1].settings.env.CLAUDE_CODE_USE_BEDROCK, '0', 'loaded for the subscription, said outright');
+    v.fire({ type: 'send', sid: 'f', text: 'hi' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.model, 'fable', 'launched by the subscription\'s name for it');
+    assert.strictEqual(m.perch.get('f').model, 'fable', 'and kept so');
+    v.fire({ type: 'send', sid: 'g', text: 'hi' }); await flush();
+    assert.strictEqual(created[created.length - 1].o.model, 'fable[1m]', 'its 1M context kept');
+    m.perch.dispose();
+
+    // a slow load begun before a newer one does not replace it
+    const SUB = CATALOGS.claude, BEDROCK = { defaultModel: SUB.defaultModel, models: [{ value: 'us.anthropic.claude-fable-resolved', label: 'Fable', resolved: '', description: '', efforts: [], defaultEffort: '' }] };
+    const waits = [];
+    const n = install(undefined, { catalogs: { claude: () => new Promise((r) => waits.push(r)) } }); await flush();
+    const nv = fakeView(); n.registered['perch.main'].resolveWebviewView(nv.view); nv.fire({ type: 'ready' }); await flush();
+    n.perch.loadCatalogs(true); await flush();
+    assert.strictEqual(waits.length, 2);
+    waits[1](SUB); await flush(); await flush();
+    waits[0](BEDROCK); await flush(); await flush();
+    assert.strictEqual(n.perch.catalog.claude, SUB, 'the newer catalog stays');
+    n.perch.dispose();
+  }
+
+  // ---- a tab goes on with the other vendor, and back (note 202)
+  {
+    const was = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'perch-noclaude-'));   // no real session files
+    try {
+      const m = install(undefined, { past: { transcripts: {} } }); await flush();
+      const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+      v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+      const asked0 = m.ui.details.length;
+      m.picks.push((i) => i.value === '');
+      await m.commands['perch.continueInCodex'](); await flush();
+      assert.strictEqual(v.lastTabs().tabs[0].kind, 'codex', 'a tab with no turn yet switches with nothing to carry');
+      assert.strictEqual(m.ui.details.length, asked0, 'no confirmation');
+      assert(!v.events(c).filter((e) => e.vendor === 'codex').pop().actions, 'nothing to preview');
+      m.ui.answers.length = 0;
+      const back0 = m.perch.get(c); back0.switchVendor('claude'); assert.strictEqual(back0.kind, 'claude');
+
+      v.fire({ type: 'send', sid: c, text: 'fix the flush bug' }); await flush();
+      const s = m.perch.get(c), a = created[created.length - 1], id1 = s.agentSessionId;
+      m.store.transcripts[id1] = { events: [{ kind: 'user', text: 'fix the flush bug' }, { kind: 'tool_use', id: 't', name: 'Read', input: { file_path: process.cwd() + '/src/a.js' } }, { kind: 'tool_result', id: 't', text: 'BODY' }, { kind: 'text', text: 'answer to fix the flush bug' }], earlier: 0 };
+      // the same vendor: nothing to do
+      const infos = m.ui.infos.length;
+      await m.commands['perch.continueInClaude']();
+      assert(/is on Claude already/.test(m.ui.infos[infos]));
+
+      // to Codex: its model chosen, what it will read said, the switch made
+      m.picks.push((i) => i.value === 'gpt-6-luna');
+      await m.commands['perch.continueInCodex'](); await flush();
+      assert.strictEqual(s.kind, 'codex'); assert.strictEqual(s.model, 'gpt-6-luna'); assert.strictEqual(s.mode, 'workspace-write', 'Codex\'s own mode, not one carried over');
+      assert.strictEqual(s.agentSessionId, null, 'a new Codex conversation'); assert(a.disposed, 'the Claude process ends');
+      let t = v.lastTabs().tabs[0];
+      assert.strictEqual(t.kind, 'codex'); assert.deepStrictEqual(t.modes, ['read-only', 'workspace-write', 'danger-full-access']);
+      const divider = v.events(c).filter((e) => e.kind === 'note' && e.vendor === 'codex').pop();
+      assert(divider && /^Continued on Codex with GPT-6-Luna · read 2 messages of the conversation above/.test(divider.text), divider && divider.text);
+      assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions[0].handoff.messages, 2, 'saved with the tab until it is sent');
+      // the divider's Preview opens what will go, in an editor
+      assert.deepStrictEqual(divider.actions, [{ id: 'handoffPreview', label: 'Preview' }]);
+      const opened = m.ui.opened.length;
+      v.fire({ type: 'noteAction', sid: c, action: 'handoffPreview' }); await flush(); await flush();
+      assert.strictEqual(m.ui.opened.length, opened + 1, 'shown in an editor');
+      // another model chosen before anything is said: the divider names it
+      v.fire({ type: 'setModel', sid: c, value: 'gpt-6-sol' }); await flush();
+      assert(/^Continued on Codex with GPT-6-Sol · read 2 messages/.test(v.events(c).filter((e) => e.kind === 'note' && e.vendor === 'codex').pop().text));
+      v.fire({ type: 'setModel', sid: c, value: 'gpt-6-luna' }); await flush();
+
+      // a reload before anything is sent: the divider keeps its Preview, and the conversation still goes with the next message
+      {
+        const r0 = install(m.memento._dump(), { past: { transcripts: m.store.transcripts } }); await flush();
+        const rv0 = fakeView(); r0.registered['perch.main'].resolveWebviewView(rv0.view); rv0.fire({ type: 'ready' }); await flush(); await flush(); await flush();
+        const d0 = rv0.events(c).filter((e) => e.vendor === 'codex').pop();
+        assert(d0 && /^Continued on Codex/.test(d0.text) && d0.actions && d0.actions[0].id === 'handoffPreview', 'Preview after a reload');
+        assert(r0.perch.get(c).handoff, 'still waiting to go');
+        r0.perch.dispose();
+      }
+      // the first message carries the conversation; the transcript shows the words
+      v.fire({ type: 'send', sid: c, text: 'review it' }); await flush();
+      const b = created[created.length - 1];
+      assert(!b.claude && b.o.model === 'gpt-6-luna');
+      assert(b.sent[0].startsWith('Earlier in this tab the user worked with Claude'), b.sent[0].slice(0, 80));
+      assert(b.sent[0].includes('--- user\nfix the flush bug') && b.sent[0].includes('    · Read src/a.js') && !b.sent[0].includes('BODY'));
+      assert(b.sent[0].endsWith('--- end of the earlier conversation\n\nreview it'));
+      assert.strictEqual(v.events(c).filter((e) => e.kind === 'user').pop().text, 'review it');
+      v.fire({ type: 'send', sid: c, text: 'and more' }); await flush();
+      assert.strictEqual(String(b.sent[1]), 'and more', 'once only');
+      const id2 = s.agentSessionId;
+      m.store.transcripts[id2] = { events: [{ kind: 'user', text: String(b.sent[0]) }, { kind: 'text', text: 'answer to review it' }, { kind: 'user', text: 'and more' }, { kind: 'text', text: 'answer to and more' }], earlier: 0 };
+
+      // and back to Claude: its own conversation goes on, handed only what Codex said
+      // this time from the footer's menu, which offers Claude's models and names the one chosen
+      const sw = v.lastTabs().tabs[0].switchTo;
+      assert.strictEqual(sw.kind, 'claude'); assert.deepStrictEqual(sw.models.slice(0, 2), [{ value: '', label: 'default · Opus 5.5' }, { value: 'opus', label: 'Opus 5.5' }]);
+      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '' }); await flush(); await flush(); await flush();
+      // what the page asked and what was done are in the Perch output channel, so a switch that lands wrong can be read back
+      assert(m.ui.traces.some((l) => / the page asks: tab \w{8} "fix the flush bug" codex → claude, model ""$/.test(l)), m.ui.traces.join('\n'));
+      assert(m.ui.traces.some((l) => / switched tab \w{8} "fix the flush bug": codex → claude, model "", resuming /.test(l)), m.ui.traces.join('\n'));
+      assert.strictEqual(s.kind, 'claude'); assert.strictEqual(s.agentSessionId, id1, 'the earlier Claude session resumes'); assert.strictEqual(s.mode, 'default');
+      assert(b.disposed);
+      v.fire({ type: 'send', sid: c, text: 'thanks' }); await flush();
+      const c2 = created[created.length - 1];
+      assert.strictEqual(c2.o.resume, id1);
+      assert(c2.sent[0].startsWith('Earlier in this tab the user worked with Codex (GPT-6-Luna)'), c2.sent[0].slice(0, 80));
+      assert(c2.sent[0].includes('review it') && c2.sent[0].includes('answer to and more'));
+      assert(!c2.sent[0].includes('fix the flush bug'), 'Claude is not handed back its own conversation');
+      t = v.lastTabs().tabs[0]; assert.strictEqual(t.kind, 'claude');
+      assert.deepStrictEqual(t.path, ['claude', 'codex', 'claude'], 'the way the tab went, for its tooltip and mark');
+      // the sessions list: each record says the way its tab went, and opens that tab, not a second one
+      m.store.sessions = [{ kind: 'claude', id: id1, title: 'fix the flush bug', updatedAt: Date.now() }, { kind: 'codex', id: id2, title: 'review it', updatedAt: Date.now() - 60000 }];
+      const list = await m.commands['perch.sessions']();
+      assert.deepStrictEqual(list.items.filter((i) => i.past).map((i) => i.description), ['Claude → Codex → Claude · now · open', 'Claude → Codex → Claude · 1m · open']);
+      const tabsBefore = m.perch.sessions.length;
+      list.choose((i) => i.past && i.past.id === id2); await flush();
+      assert.strictEqual(m.perch.sessions.length, tabsBefore, 'Codex\'s record of a switched tab opens that tab');
+      // a name given to the tab goes to both records
+      s.title = 'flush bug, reviewed'; s.named = true; s.unsaved = true;
+      await m.perch.saveName(s);
+      assert.deepStrictEqual(m.store.renamed.slice(-2).map((r) => r.slice(0, 3)), [['claude', id1, 'flush bug, reviewed'], ['codex', id2, 'flush bug, reviewed']]);
+      assert.deepStrictEqual(m.memento._dump()['perch.sessions.v1'].sessions[0].periods.map((p) => [p.kind, p.resume]), [['claude', id1], ['codex', id2], ['claude', id1]]);
+
+      // a round trip with nothing said leaves no stretch behind, resumed or not: the periods, and so the reload, stay as they were
+      // (the records are read with real file I/O: a few ticks are not enough, so the switch is waited for)
+      v.fire({ type: 'switchVendor', sid: c, kind: 'codex', model: '' }); await wait(60);
+      assert.strictEqual(s.kind, 'codex'); assert.strictEqual(s.agentSessionId, id2);
+      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '' }); await wait(60);
+      assert.strictEqual(s.kind, 'claude'); assert.strictEqual(s.agentSessionId, id1);
+      assert.deepStrictEqual(s.periods.map((p) => [p.kind, p.resume, p.said]), [['claude', id1, true], ['codex', id2, true], ['claude', id1, true]], 'no empty stretches kept');
+      m.store.renamed.length = 0;
+
+      // a reload reads both records back, in the order the tab went
+      m.store.transcripts[id1].events.push({ kind: 'user', text: String(c2.sent[0]) }, { kind: 'text', text: 'answer to thanks' });
+      m.perch.dispose();
+      const r = install(m.memento._dump(), { past: { transcripts: m.store.transcripts } }); await flush();
+      const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush(); await flush(); await flush();
+      const said = rv.events(c).filter((e) => ['user', 'text', 'note'].includes(e.kind)).map((e) => (e.kind === 'note' ? (e.vendor ? '|' + e.vendor : null) : e.text)).filter(Boolean);
+      const from = said.lastIndexOf('fix the flush bug');
+      assert.deepStrictEqual(said.slice(from), ['fix the flush bug', 'answer to fix the flush bug', '|codex', 'review it', 'answer to review it', 'and more', 'answer to and more', '|claude', 'thanks', 'answer to thanks']);
+      assert.strictEqual(rv.lastTabs().tabs[0].kind, 'claude');
+      assert(rv.events(c).some((e) => e.vendor === 'codex' && / · sent from Claude on your Claude subscription to Codex on your ChatGPT login/.test(e.text) && !e.level), 'both ends named; a vendor\'s service to a vendor\'s service is not marked');
+      // from an account of the user's own (here the gateway) to a vendor's service: said, and marked
+      const rs = r.perch.get(c); rs.gateway = true;
+      await r.perch.continueIn('codex', { sid: c, model: '' }); await flush();
+      const out = rv.events(c).filter((e) => e.vendor === 'codex').pop();
+      assert(/ · sent from Claude on the LLM gateway to Codex on your ChatGPT login/.test(out.text) && out.level === 'warn', out.text);
+      r.perch.dispose();
+    } finally { if (was === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = was; }
+  }
+
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

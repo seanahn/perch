@@ -1,7 +1,8 @@
 # perch
 
 Claude Code and Codex as tabs in VS Code, in the editor area or the sidebar.
-Any number of sessions, with usage and backend switching built in.
+Any number of sessions, with usage and backend switching built in; a tab
+can change vendor in the middle of a task.
 
 ## Why: the vendors' own agents, so their caching
 
@@ -225,7 +226,50 @@ Tabs do not share history. **Hand off** (`Perch: Hand Off Last Answer to
 Another Tab…`, in the `…` menu of the title bar and in the command
 palette) pastes the active tab's
 last answer into another tab's input box, or into a new tab. That is the
-only bridge, on purpose: shared context would defeat each agent's caching.
+only bridge between tabs, on purpose: shared context would defeat each
+agent's caching. One tab can change vendor, though: the next section.
+
+## Switching between Claude and Codex in a tab
+
+A tab can go on with the other vendor: Claude does the work, GPT-6 Astra
+reviews it and opens the PR, in the same tab. Click the vendor's mark at
+the left of the footer (the Claude spark, the ChatGPT blossom) and choose
+a model under **Continue on Codex** or **Continue on Claude**; `Perch:
+Continue This Tab in Codex…` and `…in Claude…` do the same from the
+command palette and the title bar's `…` menu. The switch is immediate,
+and nothing is sent until you send. Only an idle tab switches.
+
+Neither vendor can resume the other's session (the records are each
+vendor's own, and the reasoning in them is sealed to the provider that
+made it), so the new agent is handed the conversation as text, ahead of
+your next message: every message of yours and every reply, in full; each
+tool call as one line (`Read src/a.js`, `Bash: make test → failed`),
+without its output; no thinking. Tool output is three quarters to nine
+tenths of a working session, so this is about a tenth of its tokens. A
+task-sized conversation goes whole; a long one sends its latest turns,
+and Claude's latest compaction summary, inline, up to about 40K tokens,
+and writes the whole of it to a file under `~/.cache/perch/handoff/`,
+readable by you alone, which the message names. A divider in the
+transcript, with the new vendor's mark, says how much goes and from
+where to where (`sent from Claude on your Claude subscription to Codex
+on your ChatGPT login`), as a warning when the conversation leaves an
+account of your own, Bedrock or a gateway, for a vendor's service; its
+**Preview** opens the exact text, until the first message has taken it.
+
+The composer, the footer, and the editor tab's icon follow the vendor the
+tab is on. Each vendor keeps its own model, effort, and mode: a vendor
+the tab has not used starts on its defaults, one it used before gets back
+what it had, and a permission mode is never carried across. Switching
+back resumes the vendor's earlier session and hands it only what the
+other said since, so Claude's prompt cache is still warm if the detour
+was short. After a window reload the tab reads both records back, in the
+order it went, dividers included. A tab that has been on both shows the
+other vendor's dot beside its mark in the sidebar and the way it went in
+its tooltip and in the sessions list (`Claude → Codex → Claude`), where
+any of its records opens it; a name you give it goes to every record.
+Each switch is logged in the Perch output channel (View › Output ›
+Perch). The design and the measurements are in
+[note 202](docs/notes/202-switching-vendors-in-a-tab.md).
 
 ## Install
 
@@ -524,6 +568,11 @@ with the new choice. Codex itself notes in the transcript when a thread
 recorded with one model is carried on with another. The sandbox menu also
 shows the approval policy.
 
+A model chosen by its id rather than from the list, Bedrock's
+`us.anthropic.claude-fable-5-1` or a `[1m]` form, is named as the
+catalog names the same model (`Fable 5.1 (1M)`), offers that model's
+efforts, and is sent under the name the tab's backend knows it by.
+
 Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,
 `perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
@@ -712,9 +761,11 @@ Verified end to end on 2026-09-30, dictating messages into a tab, on
 this machine (GPU) and over Remote-SSH to a CPU-only container.
 
 A web address in an error or a note is a link. The vendor's mark at the
-left of the footer opens the vendor's site, claude.ai or chatgpt.com; the
-plan badge under a Codex tab (Plus, Pro) opens your ChatGPT usage page,
-where limits and credits are managed.
+left of the footer opens a menu: continue the tab on the other vendor
+(see [Switching](#switching-between-claude-and-codex-in-a-tab)), or
+open the vendor's site, claude.ai or chatgpt.com; the plan badge under a
+Codex tab (Plus, Pro) opens your ChatGPT usage page, where limits and
+credits are managed.
 
 ## Cost
 
@@ -764,6 +815,7 @@ Installed from a `.vsix` file, Perch does not fetch it: build it with
 - `src/codexMeter.js` — ChatGPT plan usage, read from Codex's session files
 - `src/markdown.js` — an answer's Markdown, drawn as DOM nodes; written into the page as source
 - `src/sessionStore.js` — past sessions and their names, read from and written to the agents' own records
+- `src/handoff.js` — a tab's conversation as text the other vendor's agent can read, for a switch; no VS Code dependency
 - `src/meterHost.js` — polling, the backend switch, login
 - `src/voice.js`, `src/voiceHost.js` — the speech-to-text engine, and dictation
 - `voice/server.py` — Whisper behind JSON lines
@@ -775,6 +827,7 @@ Installed from a `.vsix` file, Perch does not fetch it: build it with
 - `test/codexMeter.test.js` — Codex usage, against throwaway session directories
 - `test/markdown.test.js` — what each construct becomes, and that nothing written becomes markup
 - `test/sessionStore.test.js` — listing and naming, against throwaway directories and a fake Agent SDK
+- `test/handoff.test.js` — the handoff text, against made-up transcripts and a throwaway Claude config directory
 - `test/models.test.js` — catalog parsing, no model calls
 - `test/voice.test.js` — the engine, against a stand-in server
 - `test/codeIndex.test.js` — codebase search's install and server choice, against a stand-in Python

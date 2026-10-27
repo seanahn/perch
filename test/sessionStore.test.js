@@ -364,5 +364,22 @@ function rollout(home, day, id, lines, mtime) {
     assert.deepStrictEqual([v.subagents.find((s) => s.name === 'beta').missing, reads], [true, ['rollout-2026-10-12T12-00-00-root-1.jsonl', 'rollout-2026-10-12T12-00-00-kid-a.jsonl', 'rollout-2026-10-12T12-00-00-kid-b.jsonl', 'rollout-2026-10-11T12-00-00-kid-deep.jsonl']],
       'a file that cannot be read is as one not found; each file read once, and only the files of the session\'s threads');
   }
+  // ---- Codex's code mode: a script's commands shown as commands, each with its output
+  {
+    const line = (o) => JSON.stringify({ type: 'response_item', payload: o });
+    const text = [
+      line({ type: 'custom_tool_call', name: 'exec', call_id: 'c1', input: 'const r = await Promise.allSettled([\n tools.exec_command({cmd:"pwd","max_output_tokens":4000}),\n tools.exec_command({cmd:"git status --short","workdir":"/w"})\n]); for (let i=0;i<r.length;i++) text({i,...r[i]});' }),
+      line({ type: 'custom_tool_call_output', call_id: 'c1', output: [{ type: 'input_text', text: 'Script completed\nWall time 0.2 seconds\nOutput:\n' }, { type: 'input_text', text: '{"i":1,"status":"fulfilled","value":{"exit_code":1,"output":"fatal: not a repo"}}' }, { type: 'input_text', text: '{"i":0,"status":"fulfilled","value":{"exit_code":0,"output":"/w"}}' }] }),
+      line({ type: 'custom_tool_call', name: 'exec', call_id: 'c2', input: 'text(await tools.exec_command({cmd:"echo \\"hi\\""}));' }),
+      line({ type: 'custom_tool_call_output', call_id: 'c2', output: 'Script completed\nOutput:\n{"chunk_id":"x","exit_code":0,"output":"hi"}' }),
+    ].join('\n');
+    const ev = S.codexEvents(text).map((e) => [e.kind, e.id, e.name || '', e.input ? e.input.command : e.text, e.isError === undefined ? '' : e.isError]);
+    assert.deepStrictEqual(ev, [
+      ['tool_use', 'c1#0', 'shell', 'pwd', ''], ['tool_use', 'c1#1', 'shell', 'git status --short', ''],
+      ['tool_result', 'c1#0', '', '/w', false], ['tool_result', 'c1#1', '', 'fatal: not a repo', true],
+      ['tool_use', 'c2#0', 'shell', 'echo "hi"', ''], ['tool_result', 'c2#0', '', 'hi', false],
+    ]);
+  }
+
 console.log('SESSIONS OK');
 })().catch((e) => { console.error('SESSIONS FAILED:', e.stack || e.message); process.exit(1); });

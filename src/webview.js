@@ -144,6 +144,11 @@ ${glyphCss}
   .status { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: center; }
   .status .done { margin-top: 4px; color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
   .status.warn { color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow)); }
+  .status.switch { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; }
+  .status.switch .sw { flex: 0 1 auto; min-width: 0; }
+  .status.switch .btns { flex: none; margin: 0; }
+  .status.switch .btns button { white-space: nowrap; }
+  .status.switch::before, .status.switch::after { content: ''; flex: 1; min-width: 16px; border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, #8884)); }
   .status.sub { text-align: left; padding-left: 4px; }
   .status.sub::before { content: '\\2937\\00a0'; }
   .status.sub .who { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
@@ -254,9 +259,14 @@ ${glyphCss}
   /* menus open upward from the tool that owns them */
   #menu { position: fixed; z-index: 10; min-width: 190px; max-width: min(340px, calc(100vw - 16px)); overflow-y: auto; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; }
   #menu .h { padding: 5px 8px 3px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
+  .kw { position: relative; display: inline-flex; flex: none; }
+  .kw .vdot { position: absolute; right: -3px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+  .vdot.claude { background: #D97757; } .vdot.codex { background: #10a37f; }
+  #menu .h .k { width: 11px; height: 11px; vertical-align: -2px; margin-right: 2px; }
   #menu .note { padding: 5px 8px; color: var(--vscode-descriptionForeground); white-space: normal; }
   #menu .it { display: grid; grid-template-columns: 14px 1fr auto; column-gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
   #menu .it:hover, #menu .it.cur { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); }
+  #menu.vendor .it { padding: 6px 8px; }
   #menu .it.dis { opacity: .45; cursor: default; pointer-events: none; }
   #menu .it .ck { color: var(--accent, currentColor); }
   #menu .it .hint { color: var(--vscode-descriptionForeground); font-size: 11px; }
@@ -419,6 +429,7 @@ ${glyphCss}
   const cur = () => tabs.find((t) => t.id === active) || null;
 
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
+  const VNAME = { claude: 'Claude', codex: 'Codex' };
   function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
   function badge(kind) {
     const i = ICONS[kind];
@@ -582,8 +593,12 @@ ${glyphCss}
     $tabs.querySelectorAll('.tab').forEach((n) => n.remove());
     for (const t of tabs) {
       const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (t.attention ? ' attn' : ''));
-      d.title = t.title + ' · ' + t.kind + (t.gateway ? ' · LLM gateway' : '') + ' · double-click to rename';
-      const k = badge(t.kind), tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
+      // a tab that has been on both vendors says so: the way it went in the tooltip, the other's colour beside its mark (note 202)
+      const went = Array.isArray(t.path) && t.path.length > 1 ? t.path.map((v) => VNAME[v] || v).join(' → ') : t.kind;
+      d.title = t.title + ' · ' + went + (t.gateway ? ' · LLM gateway' : '') + ' · double-click to rename';
+      const k = el('span', 'kw'); k.append(badge(t.kind));
+      if (went !== t.kind) { const other = t.kind === 'claude' ? 'codex' : 'claude'; const dot = el('span', 'vdot ' + other); k.append(dot); }
+      const tt = el('span', 't', t.title), b = el('span', 'b'), x = el('span', 'x', '×');
       x.title = 'Close tab';
       x.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'close', sid: t.id }); });
       d.addEventListener('click', () => { if (t.id !== active) vscode.postMessage({ type: 'activate', sid: t.id }); });
@@ -982,6 +997,7 @@ ${glyphCss}
         if (p.mxOpen) askUsage(sid);                     // the session's usage table, open: what the turn added
         break; }
       case 'note': { endLive(p); const d = addLinked(p, 'status' + (m.level === 'warn' ? ' warn' : ''), m.text);   // warn: Claude Code moved the session to another model, say
+        if (m.vendor) { const t = el('span', 'sw'); t.append(...d.childNodes); d.classList.add('switch'); d.append(badge(m.vendor), t); }   // the tab went on with another vendor here (note 202)
         if (m.nid) d.dataset.nid = m.nid;                 // a note the host can mark done later (a login made)
         if (m.done) d.append(el('div', 'done', m.done));   // replayed after it was
         // what can be done about it stays with the note: a notification is gone in seconds
@@ -1139,10 +1155,25 @@ ${glyphCss}
     });
   });
   $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
-  // the vendor's mark opens the vendor's site
-  $mClaude.title = 'Open claude.ai'; $mCodex.title = 'Open chatgpt.com';
-  $mClaude.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://claude.ai/' }));
-  $mCodex.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/' }));
+  // the vendor's mark: go on in this tab with the other vendor (note 202), or open the vendor's site
+  const SITE = { claude: ['claude.ai', 'https://claude.ai/'], codex: ['chatgpt.com', 'https://chatgpt.com/'] };
+  function vendorMenu(anchor) {
+    const t = cur(); if (!t) return;
+    openMenu('vendor', anchor, (m) => {
+      const to = t.switchTo || { kind: t.kind === 'claude' ? 'codex' : 'claude', models: [] }, busy = !!(t.busy || t.attention);
+      m.style.setProperty('--accent', to.kind === 'claude' ? '#D97757' : '#10a37f');
+      const h = el('div', 'h'); h.append(badge(to.kind), document.createTextNode(' Continue on ' + VNAME[to.kind])); m.append(h);
+      m.append(el('div', 'note', busy ? 'Once this turn has ended.' : 'This tab goes on with ' + VNAME[to.kind] + ', which reads the conversation so far with your next message.'));
+      m.classList.add('vendor');
+      for (const o of to.models) m.append(item(o.label, { hint: o.value, disabled: busy, pick: () => vscode.postMessage({ type: 'switchVendor', sid: t.id, kind: to.kind, model: o.value }) }));
+      const site = SITE[t.kind];
+      m.append(el('div', 'h', VNAME[t.kind]));
+      m.append(item('Open ' + site[0], { pick: () => vscode.postMessage({ type: 'openExternal', url: site[1] }) }));
+    });
+  }
+  $mClaude.title = 'Continue on Codex, or open claude.ai'; $mCodex.title = 'Continue on Claude, or open chatgpt.com';
+  $mClaude.addEventListener('click', (e) => { e.stopPropagation(); vendorMenu($mClaude); });
+  $mCodex.addEventListener('click', (e) => { e.stopPropagation(); vendorMenu($mCodex); });
   $mu.addEventListener('click', () => { if (onGateway) return; vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }); });
 
   window.addEventListener('message', (e) => {

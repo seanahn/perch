@@ -41,6 +41,31 @@ Its agent uses that as a retrieval tool, beside grep. It is not Lucene: Lucene i
 Claude Code and Codex do not do this today. They grep and walk the tree at run time. That is why
 Cursor feels as if it already knows the repo, and a Perch tab like a smart intern with `rg`.
 
+**What the installed Cursor says of its own model** (read from Cursor 3.12.17, the desktop app and
+the Remote-SSH server, 2026-10-27). Cursor runs no embedding model on the user's machine: neither
+install carries a model file (no ONNX, safetensors or tokenizer) and neither mentions MiniLM,
+sentence-transformers or ONNX Runtime. Its protocol names the models it has used, the enum
+`aiserver.v1.EmbeddingModel` in `out/vs/code/electron-utility/alwaysLocalSingleton/alwaysLocalSingletonMain.js`:
+
+| | Value | What it is |
+| --- | --- | --- |
+| 1 | `VOYAGE_CODE_2` | Voyage AI's hosted code-embedding model |
+| 2 | `TEXT_EMBEDDINGS_LARGE_3` | OpenAI `text-embedding-3-large` |
+| 3, 5, 6 | `QWEN_1_5B_CUSTOM`, `QWEN_1_5B_0618_CUSTOM`, `QWEN_1_5B_0618_FP8_MM_CUSTOM` | Cursor's own: a 1.5-billion-parameter Qwen fine-tune, a June version, an FP8 build |
+| 4 | `MOCK_CHUNKER_ERROR` | a test value |
+
+The numbering is the history: Voyage, then OpenAI, then the model of their own that their blog
+says they trained on agent sessions. Which one serves a user is the server's choice; the client
+carries only the enum. Nothing of the index is on the user's disk: a workspace's
+`anysphere.cursor-retrieval` store holds the list of embeddable files and a folder description,
+8 KB for one of this user's workspaces. Chunks go up; the vectors stay on Cursor's side.
+
+Against this design's MiniLM, 22 million parameters, 384 dimensions, general English, on the
+user's CPU, Cursor's current model is some 70 times the size, trained on code and on its own agents'
+sessions, run on their GPUs. That is the quality gap the measurements show, and it is not closed by
+a base-sized local model (tried: no better than MiniLM here); a model of Cursor's class on a CPU
+would be minutes per thousand files, and sending the code out is the line this design draws.
+
 ## The shape: an MCP server, local-first
 
 ```

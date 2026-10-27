@@ -14,6 +14,10 @@ const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage } = require('./sessionStore');
+const Handoff = require('./handoff');
+
+const VENDOR = { claude: 'Claude', codex: 'Codex' };
+const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
 
 const MODES = {
   claude: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
@@ -66,6 +70,7 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+const MAX_PAST_SHOWN = 1000;   // entries of a switched tab's earlier transcript shown, as sessionStore shows of one record
 const MAX_KEPT_BYTES = 1500000;    // thumbnails saved with a tab, all messages together: about fifty screenshots at 320 px
 // what both agents take as an image. The size is of the base64 text, which is what the services measure.
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
@@ -233,7 +238,7 @@ function collabInfo(a) {
 }
 
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate }) {
+  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate, periods, left, handoff }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -270,13 +275,151 @@ class Session {
     this.prefill = '';               // text waiting for a page that is not ready yet
     this.reconcile();
     this.agentSessionId = resume || null;
+    // the vendors this tab has been on, in order, each with its agent's session (note 202); the last is the current one.
+    // A tab that has never switched has one.
+    this.periods = Array.isArray(periods) && periods.length && periods[periods.length - 1].kind === kind
+      ? periods.filter((p) => p && (p.kind === 'claude' || p.kind === 'codex')).map((p) => Object.assign({ kind: p.kind, resume: p.resume || null, said: p.said !== false }, typeof p.note === 'string' ? { note: p.note } : {}, p.warn ? { warn: true } : {}))
+      : [{ kind, resume: this.agentSessionId, said: !!this.agentSessionId }];   // said: something was said in it, or it opened on a record that has words
+    this.periods[this.periods.length - 1].resume = this.agentSessionId;
+    this.left = left && typeof left === 'object' ? left : {};       // a vendor this tab left: its settings and its session, for a switch back
+    this.handoff = handoff && typeof handoff.text === 'string' ? handoff : null;   // the earlier conversation, sent ahead of the first message after a switch
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
     this.busy = false;
     this.attention = false;          // a prompt is waiting while the tab is not active
     this.lastStatus = this.idleStatus();
-    if (resume) { this.history.push(this.resumed = { kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` }); this.loadPast(resume); }
+    if (this.periods.length > 1) { this.history.push(this.resumed = { kind: 'note', text: 'earlier transcript is not shown yet, the agents still have it' }); this.loadPeriods(); }
+    else if (resume) { this.history.push(this.resumed = { kind: 'note', text: `resumed ${kind} session ${String(resume).slice(0, 8)} · earlier transcript is not shown, the agent still has it` }); this.loadPast(resume); }
+  }
+
+  /**
+   * Where this tab's agent runs, for a switch to say where the conversation goes: the service by name, and the account it is
+   * billed to when that is the user's own rather than the vendor's ('aws' for Bedrock, 'gateway'), else ''.
+   */
+  where() {
+    const m = this.view.meter;
+    if (this.kind === 'claude') {
+      if (this.gateway) return { kind: 'claude', name: 'the LLM gateway', account: 'gateway' };
+      return m && m.backend() === 'api' ? { kind: 'claude', name: 'API / Bedrock', account: 'aws' } : { kind: 'claude', name: 'your Claude subscription', account: '' };
+    }
+    const b = m ? m.codexBackend() : 'chatgpt';
+    return b === 'bedrock' ? { kind: 'codex', name: 'Amazon Bedrock', account: 'aws' } : b === 'api' ? { kind: 'codex', name: 'an OpenAI API key', account: '' } : { kind: 'codex', name: 'your ChatGPT login', account: '' };
+  }
+
+  /** What this tab's switch to a vendor says in its transcript: the divider. */
+  switchNote(p) {
+    const h = p.handoff;
+    return { kind: 'note', vendor: p.kind, ...(p.live && h ? { actions: [{ id: 'handoffPreview', label: 'Preview' }] } : {}), ...(h && h.leaves ? { level: 'warn' } : {}), text: `Continued on ${VENDOR[p.kind]}${p.model ? ' with ' + p.model : ''}` + (h ? ` · read ${h.messages} message${h.messages === 1 ? '' : 's'} of the conversation above (about ${Math.max(1, Math.round(h.tokens / 1000))}K tokens)${h.fits ? '' : `, all ${h.total} in a file`}` : '') + (h && h.route ? ` · ${h.route}` : '') + (p.resumed ? ` · its own conversation from before goes on` : '') };
+  }
+
+  /**
+   * A tab that has been on both vendors: its transcript is read back from each agent's own record, in the order the tab
+   * went, each record cut where the tab came back to it (Handoff.stretches), with the divider at each switch.
+   */
+  async loadPeriods() {
+    const records = new Map();
+    try {
+      for (const p of this.periods) {
+        const key = p.kind + ':' + p.resume;
+        if (!p.resume || records.has(key)) continue;
+        const past = await loadTranscript(p.kind, p.resume, { dir: cwd(), limit: Infinity });
+        records.set(key, Handoff.stretches(past.events));
+      }
+    } catch (_) { return; }   // the note stays: the agents have the transcript, the page does not
+    const at = this.history.indexOf(this.resumed);
+    if (this.disposed || at < 0) return;
+    const events = [];
+    this.periods.forEach((p, i) => {
+      // the last switch's conversation not sent yet: its divider keeps its Preview through a reload
+      const waiting = i === this.periods.length - 1 && this.handoff && !this.handoffSent;
+      if (i) events.push(Object.assign(this.switchNote(Object.assign({}, p, waiting ? { live: true, handoff: this.handoff } : {})), p.note ? { text: p.note } : {}, p.warn ? { level: 'warn' } : {}));
+      const list = p.resume && p.said ? records.get(p.kind + ':' + p.resume) : null;   // a stretch with nothing said yet has nothing on record
+      if (list && list.length) events.push(...list.shift());
+    });
+    const earlier = Math.max(0, events.length - MAX_PAST_SHOWN);
+    const shown = earlier ? [{ kind: 'note', text: `${earlier} earlier entries are not shown, the agents still have them` }, ...events.slice(earlier)] : events;
+    this.history.splice(at, 1, ...shown);
+    this.resumed = null;
+    if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
+    this.view.replay(this);
+  }
+
+  /**
+   * What the other vendor would be handed, were this tab to switch now: this vendor's part of the conversation since the
+   * tab last came to it. Null when there is nothing to hand over (no turn yet).
+   */
+  async prepareHandoff() {
+    if (!this.agentSessionId) return null;
+    const events = await Handoff.loadDiscussion(this.kind, this.agentSessionId, { dir: cwd() });
+    const parts = Handoff.stretches(events), mine = parts[parts.length - 1];
+    if (!mine || !mine.length) return null;
+    const n = this.periods.length, file = Handoff.handoffFile(this.id, n);
+    const cat = this.catalog(), model = this.running() ? modelLabel(cat, this.running()) || this.running() : this.model ? modelLabel(cat, this.model) || this.model : '';
+    const r = Handoff.handoffText(mine, { agent: VENDOR[this.kind], model, cwd: cwd(), file });
+    if (!r.messages) return null;
+    return Object.assign(r, { file });
+  }
+
+  /**
+   * Go on in this tab with the other vendor (note 202). The conversation cannot move, so the new agent is given this one's
+   * words ahead of the user's next message: a new conversation, or the one this tab had with that vendor before, which
+   * goes on. Settings are the vendor's own: those the tab had on it before, else its defaults; a mode is never carried
+   * across. Only an idle tab switches.
+   * @param {'claude'|'codex'} kind
+   * @param {{ model?: string, handoff?: object|null }} [o]  `handoff` as prepareHandoff made it
+   */
+  switchVendor(kind, { model, handoff } = {}) {
+    if ((kind !== 'claude' && kind !== 'codex') || kind === this.kind || this.busy || this.pending.size) return false;
+    if (handoff && !handoff.fits) Handoff.writeHandoff(handoff.file, handoff.full);
+    const from = this.where();
+    this.left[this.kind] = { model: this.model, effort: this.effort, mode: this.mode, gateway: this.gateway, costSoFar: this.costSoFar, resume: this.agentSessionId };
+    this.restart();
+    const back = this.left[kind] || null;
+    delete this.left[kind];
+    this.kind = kind;
+    this.agentSessionId = back && back.resume ? back.resume : null;
+    this.model = typeof model === 'string' ? model : back ? back.model : defaultModel(kind);
+    this.effort = back ? back.effort : defaultEffort(kind);
+    this.mode = back && MODES[kind].includes(back.mode) ? back.mode : kind === 'codex' && this.view.codexUnsandboxedHere() ? 'danger-full-access' : defaultMode(kind);
+    this.gateway = kind === 'claude' && !!(back && back.gateway);
+    this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
+    this.context = null; this.respondedAt = 0; this.collab.clear(); this.queue = []; this.shown = []; this.via = {}; this.lastVia = ''; this.viaQueue = [];
+    this.reconcile();
+    // where the conversation goes: from one company's service, or account, to another's. Said on the divider; marked when it
+    // leaves an account of the user's own (Bedrock, a gateway) for a vendor's service
+    const to = this.where();
+    this.handoff = handoff ? { text: handoff.text, messages: handoff.inlineMessages, total: handoff.messages, tokens: handoff.tokens, fits: handoff.fits, route: `sent from ${VENDOR[from.kind]} on ${from.name} to ${VENDOR[kind]} on ${to.name}`, leaves: from.account && from.account !== to.account } : null;
+    const cat = this.catalog(), label = this.model ? modelLabel(cat, this.model) || this.model : (cat && cat.defaultModel && cat.defaultModel.label) || '';
+    const divider = this.switchNote({ kind, model: label, handoff: this.handoff, resumed: !!this.agentSessionId, live: true });
+    // a stretch in which nothing was said leaves nothing to read back: it is dropped, whether or not it resumed a record
+    // (seen 2026-10-27: a tab switched back and forth without a word kept every empty stretch, and a reload then put the
+    // records' stretches under the wrong dividers)
+    if (this.periods.length && !this.periods[this.periods.length - 1].said) this.periods.pop();
+    const prev = this.periods[this.periods.length - 1];
+    if (!(prev && prev.kind === kind && prev.resume === this.agentSessionId)) this.periods.push(Object.assign({ kind, resume: this.agentSessionId, said: false, note: divider.text }, divider.level ? { warn: true } : {}));   // else back where it was: that stretch goes on
+    this.view.trace(`switched tab ${this.id.slice(0, 8)} "${this.title}": ${from.kind} → ${kind}, model ${JSON.stringify(this.model)}${this.agentSessionId ? ', resuming ' + String(this.agentSessionId).slice(0, 8) : ', a new conversation'}`);
+    this.post(divider);
+    this.post({ kind: 'note', text: `Mode: ${MODE_NAMES[this.mode] || this.mode}, ${VENDOR[kind]}'s own${back ? ', as this tab had it' : ''}. ` + (this.agentSessionId ? `Its earlier conversation is read from the prompt cache if that is still warm.` : `The prompt cache starts cold.`) + (this.handoff ? ' The conversation above goes with your next message.' : '') });
+    this.view.persist();
+    this.view.vendorChanged(this);
+    return true;
+  }
+
+  /**
+   * A model chosen after a switch and before anything was said on it: the divider names the model the tab goes on with,
+   * not the one first picked.
+   */
+  renameDivider() {
+    const p = this.periods[this.periods.length - 1];
+    if (this.periods.length < 2 || !p.note || this.agentSessionId || this.agent) return;
+    const h = [...this.history].reverse().find((e) => e.kind === 'note' && e.vendor === this.kind);
+    if (!h || h.text !== p.note) return;
+    const cat = this.catalog(), label = this.model ? modelLabel(cat, this.model) || this.model : (cat && cat.defaultModel && cat.defaultModel.label) || '';
+    const text = this.switchNote({ kind: this.kind, model: label, handoff: this.handoff, resumed: false }).text;
+    if (text === p.note) return;
+    h.text = p.note = text;
+    this.view.replay(this);
   }
 
   /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
@@ -300,9 +443,17 @@ class Session {
   // ---- what this tab may choose, given the agent's catalog and the selected model
   /** On the gateway the choices are the file's names (src/gateway.js), not Claude Code's catalog. */
   catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[this.kind] || null; }
+  /**
+   * The catalog's entry for a model the tab names: by its value, else by the model the id names, so a model given by its
+   * id (`claude-fable-5-1[1m]`: Fable 5.1 with the 1M context window, chosen in Claude Code or saved by an older Perch) is
+   * still that model, with its name and its efforts.
+   */
+  entryOf(v) { const cat = this.catalog(); return cat && v ? cat.models.find((m) => m.value === v) || modelEntry(cat, v) : null; }
+  /** A model's name in the menu and on the pill; the 1M context window said, when the id asks for it and the entry does not. */
+  nameOf(v) { const m = this.entryOf(v); if (!m) return v; return m.label + (/\[1m\]$/i.test(v) && !/\[1m\]$/i.test(m.value) && !/1m/i.test(m.label) ? ' (1M)' : ''); }
   selectedModel() {
     const cat = this.catalog(); if (!cat) return null;
-    if (this.model) return cat.models.find((m) => m.value === this.model) || null;
+    if (this.model) return this.entryOf(this.model);
     return modelEntry(cat, this.runningDefault()) || cat.defaultModel;   // on default, a running session's choices are its model's
   }
   allowedEfforts() {
@@ -338,7 +489,7 @@ class Session {
   wanted() {
     if (this.swap) return this.swap.from;
     if (!this.model) return '';
-    const cat = this.catalog(), m = cat && cat.models.find((x) => x.value === this.model);
+    const m = this.entryOf(this.model);
     return m ? m.resolved || m.value : '';
   }
   /**
@@ -369,7 +520,7 @@ class Session {
     const title = live && live !== (d && d.model) ? 'Claude Code says this session is running ' + live + (d && d.label ? '; new sessions start on ' + d.label : '') + '.'
       : d && d.description ? d.description : 'The model the agent picks by default';
     const opts = [{ value: '', label: 'default' + (name ? ' · ' + name : ''), title }];
-    for (const v of this.allowedModels().slice(1)) { const m = cat && cat.models.find((x) => x.value === v); opts.push({ value: v, label: m ? m.label : v, title: m ? m.description : 'not in the agent\'s model list' }); }
+    for (const v of this.allowedModels().slice(1)) { const m = this.entryOf(v); opts.push({ value: v, label: this.nameOf(v), title: m ? m.description : 'not in the agent\'s model list' }); }
     return opts;
   }
   effortOptions() {
@@ -431,6 +582,7 @@ class Session {
       case 'responded': this.respondedAt = ev.at; this.view.sendTabs(); return;
       case 'result': {
         if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); }
+        if (this.handoffSent) { this.handoff = null; this.handoffSent = false; this.view.persist(); }
         const via = Object.entries(this.via).map(([model, n]) => ({ model, short: shortModel(model), n }));
         if (via.length) ev.via = via;   // what answered this turn, for the line under the answer; kept with the transcript
         this.via = {};
@@ -482,10 +634,13 @@ class Session {
       }
       case 'dequeued': this.started(ev.qid); return;   // Claude: a turn has taken up a queued message
       case 'commands': this.view.setCommands(this.kind, ev.list); return;
-      case 'session': { const fresh = this.agentSessionId !== ev.id; this.agentSessionId = ev.id; this.view.persist(); if (fresh && this.kind === 'codex') this.view.sendTabs(); break; }   // a thread to read the usage of: the footer offers its table
+      case 'session': { const fresh = this.agentSessionId !== ev.id; this.agentSessionId = ev.id; this.periods[this.periods.length - 1].resume = ev.id; if (fresh && this.named && this.periods.length > 1) this.unsaved = true; /* a new record after a switch takes the tab's name too */ this.view.persist(); if (fresh && this.kind === 'codex') this.view.sendTabs(); break; }   // a thread to read the usage of: the footer offers its table
       case 'clear': this.history = []; this.resumed = null; break;
       case 'delta': case 'tool_start': case 'stderr': case 'mode': case 'fill': break;
-      case 'user':
+      case 'user': {
+        const period = this.periods[this.periods.length - 1];
+        if (period && !period.said) { period.said = true; this.view.persist(); }   // this stretch of the tab has words now: it is kept, and read back
+      }
         if (this.kind === 'codex' && !ev.queued) this.turnText = ev.text;   // the running turn's message: put back in the box if Codex's login is refused
         // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
         if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
@@ -515,6 +670,10 @@ class Session {
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
       const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
       const launchCat = this.catalog();
+      // a model saved under another backend's name (Bedrock's `us.anthropic.…` on the subscription, say) is given the name
+      // this backend has for it, its 1M context kept; the tab keeps the name it runs
+      const named = this.launchModel(launchCat);
+      if (named !== this.model) { this.model = named; this.view.persist(); }
       const search = this.view.codeSearch();
       this.search = search ? JSON.stringify(search.args) : '';   // what this process searches: a change restarts it
       this.agent = new ClaudeAgent({
@@ -608,7 +767,11 @@ class Session {
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
     const ctx = this.ide ? ideContext() : null;
-    const full = ctx ? text + ctx.block : text, shown = { text, tag: ctx ? ctx.tag : undefined };
+    // the first message after a switch carries the conversation before it (note 202); the transcript shows the words only
+    // it is let go once a turn has ended (result): a turn that never got going sends it again with the next message
+    const carried = this.handoff && !this.handoffSent ? this.handoff.text + '\n\n' : '';
+    if (carried) this.handoffSent = true;
+    const full = carried + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
@@ -757,6 +920,7 @@ class Session {
     // the new model may not accept the current effort. Default in a running Claude session is whatever Claude says it now
     // runs, so the effort is checked when it says (ran)
     const effortReset = !(value === '' && this.agent && this.kind === 'claude' && !this.gateway) && this.reconcile();
+    this.renameDivider();
     this.view.persist();
     if (!this.agent) return;
     this.agent.setModel(value); if (effortReset) this.agent.setEffort('');
@@ -770,7 +934,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.handoffSent = false; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -794,6 +958,8 @@ class Session {
       off: this.offModel(),            // the session runs another model than the one meant: the pill names it
       effort: this.effort, efforts: this.effortOptions(),
       approvals: this.kind === 'codex' ? String(cfg('codex.approvalPolicy') || '') : '',
+      switchTo: this.switchTo(),       // the other vendor's models, for the footer's menu (note 202)
+      path: this.path(),               // the vendors this tab has been on, in order, when more than one
       backend: this.agent ? this.backend : '',
       gateway: this.gateway,
       gatewayWarn: this.gateway && !this.view.gateway().ok,   // the file is missing or incomplete: the first message will say so
@@ -806,7 +972,24 @@ class Session {
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : '', this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate }; }
+  /** The vendors this tab has been on, in order, each run of one vendor once: ['claude', 'codex', 'claude']. Null for one. */
+  path() { const out = []; for (const p of this.periods) if (out[out.length - 1] !== p.kind) out.push(p.kind); return out.length > 1 ? out : null; }
+  /** The tab's model as the catalog of its backend names it: itself when listed, else the entry for the same model, if any. */
+  launchModel(cat) {
+    const m = this.model;
+    if (!m || this.gateway || !cat || !Array.isArray(cat.models) || cat.models.some((x) => x.value === m)) return m;
+    const e = modelEntry(cat, m);
+    if (!e) return m;
+    const wide = /\[1m\]$/i.test(m) && !/\[1m\]$/i.test(e.value);
+    return e.value + (wide ? '[1m]' : '');
+  }
+  /** The other vendor and its models, as the footer's menu offers them: default first, named as the catalog names it. */
+  switchTo() {
+    const kind = this.kind === 'claude' ? 'codex' : 'claude', cat = this.view.catalog[kind];
+    const d = cat && cat.defaultModel && cat.defaultModel.label;
+    return { kind, models: [{ value: '', label: 'default' + (d ? ' · ' + d : '') }, ...((cat && cat.models) || []).map((m) => ({ value: m.value, label: m.label }))] };
+  }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -826,6 +1009,7 @@ class Session {
 class PerchView {
   constructor(context) {
     this.context = context;
+    this.out = typeof vscode.window.createOutputChannel === 'function' ? vscode.window.createOutputChannel('Perch') : null;   // View › Output › Perch
     this.sidebar = { view: null, ready: false };
     this.panels = new Map();         // session id -> { panel, ready }
     this.sessions = [];
@@ -1238,11 +1422,17 @@ class PerchView {
       this.sendTabs();
     };
     try { apply('codex', loadCodexModels()); } catch (_) { /* keep the fallback lists */ }
+    // Claude's models are named by its backend: on Bedrock `us.anthropic.claude-fable-5-1`, "Fable"; on the subscription
+    // `claude-fable-5-1`, "Fable 5.1". So the catalog is loaded for the backend the window's tabs run on, said outright rather
+    // than left to whatever the environment holds; and only the latest load is kept, so a slower one started before a
+    // backend switch cannot put the other backend's names back (seen 2026-10-27: a subscription tab given Bedrock's id).
+    // When the machine pins a gateway for all Claude Code, the catalog is loaded off it, so non-gateway tabs list native
+    // models rather than the gateway's anthropic/… names. Gateway tabs use Gateway.gatewayModels instead.
+    const gen = this.catalogGen = (this.catalogGen || 0) + 1;
+    const api = !!(this.meter && this.meter.backend() === 'api');
     this.loading = Promise.resolve()
-      // When the machine pins a gateway for all Claude Code, load the catalog off it (the subscription), so non-gateway tabs
-      // list native models rather than the gateway's anthropic/… names. Gateway tabs use Gateway.gatewayModels instead.
-      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(false) : undefined }))
-      .then((cat) => apply('claude', cat))
+      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(api) : { env: { CLAUDE_CODE_USE_BEDROCK: api ? '1' : '0' } } }))
+      .then((cat) => { if (gen === this.catalogGen) apply('claude', cat); })
       .catch(() => { /* keep the fallback lists */ });
     return this.loading;
   }
@@ -1453,6 +1643,10 @@ class PerchView {
       case 'setModel': if (s) { s.setModel(msg.value); this.sendTabs(); } return;
       case 'attach': this.attach(msg.sid); return;
       case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
+      case 'switchVendor':           // the footer's vendor menu (note 202)
+        if (s) this.trace(`the page asks: tab ${s.id.slice(0, 8)} "${s.title}" ${s.kind} → ${msg.kind}, model ${JSON.stringify(msg.model)}`);
+        if (s && (msg.kind === 'claude' || msg.kind === 'codex')) this.continueIn(msg.kind, { sid: s.id, model: String(msg.model || '') });
+        return;
       case 'setBackend': this.setBackend(s, msg.value); return;
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
       case 'meterToggle': if (msg.vendor === 'codex') this.meter.toggleCodexBackend(); else this.meter.toggleBackend(); return;
@@ -1472,6 +1666,7 @@ class PerchView {
         else if (msg.action === 'gatewayLeave') { if (s && s.gateway) s.setGateway(false); }
         // the ways into Claude and Codex. A button may be an old note's: each acts only on what still applies
         else if (msg.action === 'claudeSettings') this.openSettingsFile();
+        else if (msg.action === 'handoffPreview') this.previewHandoff(s);   // what the next message carries after a switch (note 202)
         else if (msg.action === 'claudeSubscription') { if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeApi') { if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
@@ -1563,6 +1758,7 @@ class PerchView {
     const s = this.sessions[i];
     this.voice.closed(id);
     s.dispose();
+    try { Handoff.removeHandoffs(id); } catch (_) { /* nothing written */ }
     this.sessions.splice(i, 1);
     const e = this.panels.get(id);
     if (e) { this.panels.delete(id); e.panel.dispose(); }
@@ -1631,8 +1827,13 @@ class PerchView {
     if (!s.unsaved || !s.agentSessionId) return;
     s.unsaved = false;                 // tried once: a record that cannot be written is not retried after every turn
     this.persist();
-    try { await renameSession(s.kind, s.agentSessionId, s.title, { dir: cwd() }); }
-    catch (e) { vscode.window.showWarningMessage(`Perch: this tab keeps its name, but ${s.kind === 'claude' ? 'Claude Code' : 'Codex'}'s record of the session could not be given it. ${e.message}`); }
+    // a tab that has been on both vendors has a record with each, and its name is written to every one (note 202)
+    const records = []; for (const p of s.periods) if (p.resume && !records.some((r) => r.kind === p.kind && r.id === p.resume)) records.push({ kind: p.kind, id: p.resume });
+    if (!records.some((r) => r.kind === s.kind && r.id === s.agentSessionId)) records.push({ kind: s.kind, id: s.agentSessionId });
+    for (const r of records) {
+      try { await renameSession(r.kind, r.id, s.title, { dir: cwd() }); }
+      catch (e) { vscode.window.showWarningMessage(`Perch: this tab keeps its name, but ${r.kind === 'claude' ? 'Claude Code' : 'Codex'}'s record of the session could not be given it. ${e.message}`); }
+    }
   }
 
   askName(current) {
@@ -1675,8 +1876,11 @@ class PerchView {
   }
 
   /** Open a tab on a past session, or go to the tab that is already open on it: two agents must not write one record. */
+  /** The open tab a vendor's record belongs to: the one running it, else one that ran it before a switch (note 202). */
+  owner(kind, id) { return this.sessions.find((s) => s.kind === kind && s.agentSessionId === id) || this.sessions.find((s) => s.periods.some((p) => p.kind === kind && p.resume === id)) || null; }
+
   resumeSession(past) {
-    const open = this.sessions.find((s) => s.kind === past.kind && s.agentSessionId === past.id);
+    const open = this.owner(past.kind, past.id);   // a record a tab switched away from opens that tab, not a second one
     if (!open) return this.addSession(past.kind, { resume: past.id, title: past.title });
     this.activate(open.id);
     if (open.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
@@ -1697,10 +1901,10 @@ class PerchView {
     // a new tab is also a way in, so the list begins with one of each kind, whatever is typed
     const fresh = this.freshKinds().map((k) => ({ label: `$(add) New ${k.tab}`, fresh: k.kind, gateway: k.gateway, alwaysShow: true }));
     qp.items = fresh.concat(sessions.map((p) => {
-      const open = this.sessions.find((s) => s.kind === p.kind && s.agentSessionId === p.id);
-      if (open) this.adoptTitle(open, p);   // an open tab and its row say the same name: the record's, unless the user named the tab
+      const open = this.owner(p.kind, p.id), running = !!open && open.kind === p.kind && open.agentSessionId === p.id;
+      if (running) this.adoptTitle(open, p);   // an open tab and its row say the same name: the record's, unless the user named the tab
       const past = open && open.unsaved ? Object.assign({}, p, { title: open.title }) : p;
-      return { label: past.title, description: [p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename, del], past };
+      return { label: past.title, description: [open && open.path() ? open.path().map((k) => VENDOR[k]).join(' → ') : p.kind === 'claude' ? 'Claude' : 'Codex', ago(p.updatedAt), open ? 'open' : ''].filter(Boolean).join(' · '), iconPath: tabIcon(p.kind), buttons: [rename, del], past };
     }));
     const missing = failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ');
     if (!sessions.length) qp.placeholder = missing ? `The sessions of ${missing} could not be read` : 'No past sessions in this folder';
@@ -1749,6 +1953,45 @@ class PerchView {
   }
   moveAll(location) { for (const s of this.sessions.slice()) this.move(s.id, location); }
 
+  /** A tab went on with the other vendor: its editor tab's icon is that vendor's now, and the page's composer follows it. */
+  vendorChanged(s) {
+    const e = this.panels.get(s.id);
+    if (e) { const icon = tabIcon(s.kind); if (icon) e.panel.iconPath = icon; }
+    this.sendTabs();
+  }
+
+  /**
+   * Go on in the active tab with the other vendor (note 202): pick its model, see what it will read, then switch. The
+   * conversation so far goes to it with the next message, as text: nothing is sent until the user sends.
+   * @param {'claude'|'codex'} kind
+   */
+  async continueIn(kind, { sid, model } = {}) {
+    const s = sid ? this.get(sid) : this.active(), V = VENDOR[kind];
+    if (!s) { vscode.window.showInformationMessage('Perch: no tab is active.'); return; }
+    if (s.kind === kind) { vscode.window.showInformationMessage(`Perch: "${s.title}" is on ${V} already. Its model is chosen from the pill under the message box.`); return; }
+    if (s.busy || s.pending.size) { vscode.window.showInformationMessage(`Perch: "${s.title}" is working. Switch once its turn has ended.`); return; }
+    const cat = this.catalog[kind];
+    const items = [{ label: 'default' + (cat && cat.defaultModel && cat.defaultModel.label ? ' · ' + cat.defaultModel.label : ''), value: '' }, ...((cat && cat.models) || []).map((m) => ({ label: m.label, description: m.value, value: m.value }))];
+    // from the footer's menu the model is chosen there; from the command, here
+    const pick = typeof model === 'string' ? items.find((i) => i.value === model) || { label: model, value: model } : await vscode.window.showQuickPick(items, { placeHolder: `Continue "${s.title}" on ${V} with…` });
+    if (!pick) return;
+    let h;
+    try { h = await s.prepareHandoff(); } catch (err) { vscode.window.showErrorMessage('Perch: could not read this tab\'s conversation: ' + String((err && err.message) || err)); return; }
+    // no confirmation: nothing is sent until the user sends, and a switch straight back costs nothing (a stretch in which
+    // nothing was said is dropped). What goes is said on the divider, whose Preview shows it
+    if (s.busy || s.pending.size || s.kind === kind) return;   // it started working, or switched, while the conversation was read
+    s.switchVendor(kind, { model: pick.value, handoff: h });
+    this.activate(s.id);
+  }
+
+  /** The conversation a switched tab sends with its next message, as text, in an editor; after it has gone, a word that it has. */
+  async previewHandoff(s) {
+    if (!s) return;
+    if (!s.handoff) { vscode.window.showInformationMessage('Perch: the conversation went with the first message after the switch; the agent has it now.'); return; }
+    const doc = await vscode.workspace.openTextDocument({ content: s.handoff.text, language: 'markdown' });
+    await vscode.window.showTextDocument(doc, { preview: true });
+  }
+
   async handoff() {
     const from = this.active();
     const text = from ? from.lastAnswer() : '';
@@ -1767,6 +2010,9 @@ class PerchView {
     if (to.location === 'sidebar' && this.sidebar.view) this.sidebar.view.show(true);
   }
 
+  /** A line in the Perch output channel: what the page asked and what the host did, for the few things worth tracing. */
+  trace(line) { if (this.out) { try { this.out.appendLine(new Date().toISOString() + ' ' + line); } catch (_) { /* the channel is gone */ } } }
+
   dispose() {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
@@ -1774,6 +2020,7 @@ class PerchView {
     for (const s of this.sessions) s.dispose();
     this.meter.dispose();
     this.voice.dispose();
+    if (this.out) { try { this.out.dispose(); } catch (_) { /* already gone */ } }
   }
 }
 
@@ -1794,6 +2041,8 @@ function activate(context) {
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    vscode.commands.registerCommand('perch.continueInCodex', () => perch.continueIn('codex')),
+    vscode.commands.registerCommand('perch.continueInClaude', () => perch.continueIn('claude')),
     vscode.commands.registerCommand('perch.sessions', () => perch.pickSession()),
     vscode.commands.registerCommand('perch.renameTab', () => perch.renameTab()),
     vscode.commands.registerCommand('perch.moveToEditor', () => { const s = perch.active(); if (s) perch.move(s.id, 'editor'); }),

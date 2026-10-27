@@ -163,7 +163,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
+  const ui = { traces: [], pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -207,6 +207,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const vscodeStub = {
     workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: (section, uri) => section === 'workbench.editor' ? { get: (k) => ui.editorSettings[k] } : ({ get: (k) => { const fc = uri && uri.fsPath && ui.folderConfig[uri.fsPath]; if (fc && k in fc) return fc[k]; const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; }, inspect: (k) => ({ globalValue: cfgBox[k], workspaceValue: (ui.workspaceConfig || {})[k] }), update: async (k, v, target) => { ui.configUpdates.push([k, v, target]); Object.assign(cfgBox, { [k]: v }); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => ('perch.' + k).startsWith(sec) }); } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; }, onDidChangeWorkspaceFolders: (f) => { ui.listeners.folders.push(f); return { dispose() {} }; } },
     window: {
+      createOutputChannel: (name) => ({ name, appendLine: (l) => ui.traces.push(l), dispose() {} }),
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,
@@ -271,7 +272,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       },
       // the browser sign-in: what program was run, and the page it printed; box.codexLoginFails makes it fail to start
       startLogin: async (program) => { (box.codexLogins = box.codexLogins || []).push(program); if (box.codexLoginFails) throw new Error(box.codexLoginFails); return { url: 'https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback', child: { kill() { box.codexKilled = (box.codexKilled || 0) + 1; } } }; } });
-    if (req === './models') return { ...realModels, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async () => { loads.claude++; if (cats.claude instanceof Error) throw cats.claude; return cats.claude; } };
+    if (req === './models') return { ...realModels, loadCodexModels: () => { loads.codex++; if (cats.codex instanceof Error) throw cats.codex; return cats.codex; }, loadClaudeModels: async (o) => { loads.claude++; (knobs.claudeLoads = knobs.claudeLoads || []).push(o); const c = typeof cats.claude === 'function' ? await cats.claude(o) : cats.claude; if (c instanceof Error) throw c; return c; } };
     return origLoad.call(this, req, parent, isMain);
   };
   delete require.cache[require.resolve('../src/extension.js')];

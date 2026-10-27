@@ -516,10 +516,35 @@ async function sessionUsage(id, { home = path.join(os.homedir(), '.codex'), read
 }
 
 /** @param {string} text  a whole rollout file */
+/** The shell commands a Codex code-mode script runs (`tools.exec_command({cmd: "…"})`), in order. */
+function codeModeCommands(input) {
+  const out = [], re = /\btools\.exec_command\(\s*\{[^]*?"?cmd"?\s*:\s*"((?:[^"\\]|\\.)*)"/g; let m;
+  while ((m = re.exec(String(input || '')))) { try { out.push(JSON.parse('"' + m[1] + '"')); } catch (_) { out.push(m[1]); } }
+  return out;
+}
+/**
+ * What a code-mode script printed of its commands' results: each a JSON object with the command's `output` and
+ * `exit_code`, alone or, from `Promise.allSettled`, as `{i, status, value}`. In the commands' order; [] if none can be read.
+ */
+function codeModeResults(output) {
+  const parts = (Array.isArray(output) ? output.map((x) => (x && typeof x.text === 'string' ? x.text : '')) : [String(output || '')]).join('\n').split('\n');
+  const got = [];
+  for (const line of parts) {
+    const t = line.trim(); if (!t.startsWith('{')) continue;
+    let o; try { o = JSON.parse(t); } catch (_) { continue; }
+    const v = o && o.value && typeof o.value === 'object' ? o.value : o;
+    if (!v || (typeof v.output !== 'string' && v.exit_code === undefined && !o.reason)) continue;
+    const r = o.status === 'rejected' ? { text: String((o.reason && (o.reason.message || o.reason)) || 'failed'), isError: true } : { text: String(v.output || ''), isError: typeof v.exit_code === 'number' && v.exit_code !== 0 };
+    if (Number.isInteger(o.i)) got[o.i] = r; else got.push(r);
+  }
+  return got;
+}
+
 function codexEvents(text) {
   const out = [];
   const flat = (v) => (typeof v === 'string' ? v : Array.isArray(v) ? v.map((x) => (x && typeof x.text === 'string' ? x.text : '')).join('') : v && typeof v === 'object' ? String(v.content || v.output || JSON.stringify(v)) : '');
   const collabCalls = new Set();     // the ids of the collaboration calls: their outputs are not shown either
+  const codeCalls = new Map();       // code mode: a script's call id -> the ids its commands are shown under
   for (const line of String(text || '').split('\n')) {
     if (!line) continue;
     let o; try { o = JSON.parse(line); } catch (_) { continue; }
@@ -544,6 +569,15 @@ function codexEvents(text) {
     } else if (p.type === 'reasoning') {
       const said = (Array.isArray(p.summary) ? p.summary : []).map((x) => (x && x.text) || '').filter(Boolean).join('\n');
       if (said) out.push({ kind: 'thinking', text: said });                    // the reasoning itself is kept sealed; only a summary can be read
+    } else if (p.type === 'custom_tool_call' && p.name === 'exec' && codeModeCommands(p.input).length) {
+      // Codex's code mode: a script whose shell commands are its tool calls. Each is shown as the live transcript shows a
+      // command, and its output, read from what the script printed, under it
+      const id = p.call_id || p.id, cmds = codeModeCommands(p.input);
+      codeCalls.set(id, cmds.map((_, i) => id + '#' + i));
+      cmds.forEach((command, i) => out.push({ kind: 'tool_use', id: id + '#' + i, name: 'shell', input: { command } }));
+    } else if (p.type === 'custom_tool_call_output' && codeCalls.has(p.call_id || p.id)) {
+      const ids = codeCalls.get(p.call_id || p.id), got = codeModeResults(p.output);
+      ids.forEach((id, i) => { const r = got[i] || (i === 0 && !got.length ? { text: flat(p.output), isError: false } : null); if (r) out.push(Object.assign({ kind: 'tool_result', id, isError: r.isError }, cut(r.text, MAX_RESULT))); });
     } else if (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call') {
       let input = p.type === 'function_call' ? p.arguments : p.type === 'custom_tool_call' ? p.input : p.action;
       if (typeof input === 'string') { try { const j = JSON.parse(input); if (j && typeof j === 'object') input = j; } catch (_) { /* it is text */ } }
@@ -628,4 +662,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
