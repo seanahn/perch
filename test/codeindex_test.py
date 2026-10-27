@@ -205,6 +205,24 @@ try:
     assert 'Search is off for this repository' in r[0]['result']['content'][0]['text'], r
     os.remove(os.path.join(root, '.codebaseignore'))
 
+    # ---- a file changed between two searches of one server: the next search past the refresh window re-indexes it
+    # before answering, so the change is found by keywords at once (its vectors follow in the background)
+    p = subprocess.Popen([sys.executable, os.path.join(HERE, '..', 'codeindex', 'server.py'), root],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         env=dict(os.environ, CODEINDEX_PYTHON='', CODEINDEX_MARKER='', CODEINDEX_REFRESH_S='0'))
+
+    def ask(i, q):
+        p.stdin.write(json.dumps(call(i, 'codebase_search', {'query': q, 'top_k': 3})) + '\n')
+        p.stdin.flush()
+        return json.loads(p.stdout.readline())['result']['content'][0]['text']
+    assert 'src/gateway.py' not in ask(1, 'rotate the signing keys'), 'not there yet'
+    write(root, 'src/gateway.py', 'def gatewaySetup(url):\n    return url\n\n\ndef rotateSigningKeys():\n    # Rotate the signing keys.\n    return 2\n')
+    t = ask(2, 'rotate the signing keys')
+    assert 'src/gateway.py:5-7  rotateSigningKeys' in t, 'the change, in the very next search: ' + t
+    p.stdin.close()
+    p.wait(timeout=20)
+    assert p.returncode == 0, p.stderr.read()
+
     # ---- several folders at once: an index each, searched together, paths the agent can open from anywhere, a folder's
     # own .codebaseignore honoured, the status by folder
     other2 = repo('three')
@@ -214,7 +232,7 @@ try:
                     call(2, 'codebase_search', {'query': 'package install guard blocks', 'top_k': 2}),
                     call(3, 'codebase_status', {}))
     t1 = r[0]['result']['content'][0]['text']
-    assert 'in 2 folders' in t1 and os.path.join(root, 'src/gateway.py') + ':1-3' in t1, t1
+    assert 'in 2 folders' in t1 and os.path.join(root, 'src/gateway.py') + ':1-2' in t1, t1   # gatewaySetup, as the change above left it
     assert all(l.startswith('/') for l in t1.split('\n')[1:]), 'several folders: absolute paths\n' + t1
     t2 = r[1]['result']['content'][0]['text']
     assert os.path.join(other2, 'docs/firewall.md') in t2, t2

@@ -297,8 +297,54 @@ then vectors, and a search never fails for it; what changes is the text it retur
 Vectors are built on a background thread, so a search is not blocked by them; it shares the CPU
 with them for those minutes. A second tab's server, starting while the first builds, finds the
 index's lock held, waits for the keyword index rather than searching an empty one, and then shares
-it; it never builds a second copy. `codebase_status` says where each folder stands. After the first
-build, a search looks for changed files at most every 30 s and re-indexes only those.
+it; it never builds a second copy. `codebase_status` says where each folder stands.
+
+**A file changed later.** There is no file watcher: the server looks for changes when it is asked
+something, at most every 30 s. The first search past that window does the check inline before
+answering, a `stat` of every file (milliseconds for 1,900) and the re-indexing of the files whose
+size or modification time changed, so the change is in that very answer by keywords; the changed
+sections' vectors are made in the background, so by meaning it is there from the next search, a
+second or so later. Searches within the window answer from the index as it stands: a pointer into a
+changed file may be off by the edit, and the agent then reads the file itself, which is current.
+Codex, whose every turn is a new process, starts each turn with a full check. Embedding holds a
+lock of its own, so a keyword update never waits behind the minutes of a first build; two updaters
+(two tabs started at the same moment) take turns, the second waiting up to two seconds for the
+first.
+
+```
+Agent (Claude Code or Codex)   Search server (one per agent process)   Index (SQLite, ~/.cache/…)   Files
+        │                                   │                                    │                     │
+        │ process starts (a tab's first     │                                    │                     │
+        │ message); MCP initialize          │                                    │                     │
+        ├──────────────────────────────────▶│                                    │                     │
+        │◀──────────────────────────────────┤ the tools, at once                 │                     │
+        │                                   ├─ background, folder by folder:     │                     │
+        │                                   │   update(): stat every file ───────┼────────────────────▶│
+        │                                   │   changed files → sections ───────▶│                     │
+        │                                   │   embed_missing(): vectors ───────▶│  (minutes, CPU)     │
+        │                                   │                                    │                     │
+        │ codebase_search(q)                │  keyword index not built yet       │                     │
+        ├──────────────────────────────────▶│  waits ≤ 10 s                      │                     │
+        │◀──────────────────────────────────┤ "being built: 640 of 1,908 files.  │                     │
+        │                                   │  Use grep meanwhile."              │                     │
+        │                                   │                                    │                     │
+        │ codebase_search(q)                │  keywords built, vectors not       │                     │
+        ├──────────────────────────────────▶├─ keywords(q) ─────────────────────▶│                     │
+        │◀──────────────────────────────────┤ "by keywords; search by meaning    │                     │
+        │                                   │  is still being built" + the files │                     │
+        │                                   │                                    │                     │
+        │ edits a file ─────────────────────┼────────────────────────────────────┼────────────────────▶│
+        │                                   │                                    │                     │
+        │ codebase_search(q)                │  > 30 s since the last check       │                     │
+        ├──────────────────────────────────▶├─ update(), inline: stat all ───────┼────────────────────▶│
+        │                                   ├─ the changed file → sections ─────▶│                     │
+        │                                   ├─ background: its vectors ─────────▶│  (a second)         │
+        │                                   ├─ meaning(q), or keywords(q) ──────▶│                     │
+        │◀──────────────────────────────────┤ the files: current by keywords     │                     │
+        │                                   │  now, by meaning from the next     │                     │
+        │                                   │  search                            │                     │
+        │ Read(file) ───────────────────────┼────────────────────────────────────┼────────────────────▶│
+```
 
 ## What was built (2026-10-26)
 

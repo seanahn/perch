@@ -289,12 +289,15 @@ class Index:
     def _section_text(self, path, name, lines, s, e):
         return (f'{path} :: {name}\n' + '\n'.join(lines[s - 1:e]))[:MAX_CHARS]
 
-    def update(self):
+    def update(self, wait_s=0.0):
         """Bring the keyword index up to date with the tree. Returns what changed, or None when another process holds
-        the update, which then has it in hand."""
+        the update, which then has it in hand; `wait_s` is how long to wait for it first."""
         lock = Lock(os.path.join(self.dir, 'update.lock'))
-        if not lock.acquire():
-            return None
+        until = time.time() + wait_s
+        while not lock.acquire():
+            if time.time() >= until:
+                return None
+            time.sleep(0.05)
         try:
             self.ignore = Ignore(self.root)
             names = [] if self.ignore.off else list_files(self.root, self.ignore)
@@ -364,7 +367,7 @@ class Index:
         update. A section whose text is unchanged keeps its vector, wherever in the tree it has moved."""
         if not self.embedder or not self.embedder.available():
             return 0
-        lock = Lock(os.path.join(self.dir, 'update.lock'))
+        lock = Lock(os.path.join(self.dir, 'embed.lock'))   # its own: a keyword update never waits behind minutes of embedding
         if not lock.acquire():
             return None
         try:

@@ -19,7 +19,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import indexer  # noqa: E402
 
-REFRESH_S = 30            # a search looks for changed files at most this often
+REFRESH_S = float(os.environ.get('CODEINDEX_REFRESH_S', 30))   # a search looks for changed files at most this often
 IDLE_UNLOAD_S = 600       # the embedding model is let go after this long unused: each tab's process has its own server
 
 SEARCH = {
@@ -97,18 +97,23 @@ class Server:
         finally:
             self.ready.set()
 
-    def _refresh(self):
+    def _update(self):
+        """Every folder's keyword index brought up to date, now: a stat of each file, milliseconds, and the changed
+        files re-indexed."""
+        self.checked = time.time()
+        for f in self.folders:
+            if f.index and not f.error:
+                try:
+                    f.index.update(wait_s=2.0)   # another updater (a tab started at the same moment) is brief: wait for it
+                except Exception as e:
+                    f.error = str(e)
+
+    def _embed(self):
+        """Vectors for the sections that have none, in the background, one run at a time."""
         if not self.refreshing.acquire(blocking=False):
             return
         try:
-            self.checked = time.time()
             for f in self.folders:
-                if f.index and not f.error:
-                    try:
-                        f.index.update()
-                    except Exception as e:
-                        f.error = str(e)
-            for f in self.folders:                # keywords for every folder first, then meaning
                 if f.index and not f.error:
                     try:
                         f.index.embed_missing()
@@ -116,6 +121,10 @@ class Server:
                         f.error = str(e)
         finally:
             self.refreshing.release()
+
+    def _refresh(self):
+        self._update()
+        self._embed()
 
     def _idle(self):
         while True:
@@ -141,7 +150,8 @@ class Server:
         if not self.ready.wait(timeout=10):
             return self._waiting()
         if time.time() - self.checked > REFRESH_S:
-            threading.Thread(target=self._refresh, daemon=True).start()
+            self._update()                       # inline: a changed file is in this answer, by keywords
+            threading.Thread(target=self._embed, daemon=True).start()   # its vectors a moment later
         found, failed = [], []
         for f in on:
             if f.error or not f.index:
