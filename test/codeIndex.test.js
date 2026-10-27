@@ -10,6 +10,9 @@ const tmp = [];
 const mk = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-codeindex-js-')); tmp.push(d); return d; };
 process.on('exit', () => { for (const d of tmp) fs.rmSync(d, { recursive: true, force: true }); });
 
+// what Ubuntu 22.04's python3 -m venv prints, on stdout, exiting 1 with stderr empty, when python3-venv is not installed
+const UBUNTU_VENV = 'The virtual environment was not created successfully because ensurepip is not\navailable.  On Debian/Ubuntu systems, you need to install the python3-venv\npackage using the following command.\n\n    apt install python3.10-venv\n\nYou may need to use sudo with that command.  After installing the python3-venv\npackage, recreate your virtual environment.\n\nFailing command: /home/u/.local/share/perch/codeindex/venv/bin/python3\n\n';
+
 /** A CodeIndex whose Python is node, saying what each step would: o.fail names the step that fails. */
 function make(o = {}) {
   const home = mk(); const calls = [];
@@ -19,12 +22,17 @@ function make(o = {}) {
     const a = args.map((x) => (x.startsWith(home) ? x.slice(home.length + 1) : x.startsWith(ROOT) ? path.relative(ROOT, x) : x));
     calls.push([cmd.startsWith(home) ? cmd.slice(home.length + 1) : cmd, ...a]);
     if (args[0] === '-c' && args[1] === PROBE) return o.fail === 'probe' ? fail(opts, 'AssertionError') : ok(opts);
+    const noPip = o.fail === 'ensurepip' || o.fail === 'ensurepip-stdout';   // Debian says so on stderr, Ubuntu on stdout with nothing on stderr
     if (args[0] === '-m' && args[1] === 'venv') {
       fs.mkdirSync(path.dirname(ix.venvPython), { recursive: true }); fs.writeFileSync(ix.venvPython, '');   // laid out even when it fails, as Debian's does
-      return o.fail === 'ensurepip' && !args.includes('--without-pip') ? fail(opts, "Error: Command '[...] -m ensurepip --upgrade --default-pip' returned non-zero exit status 1.") : ok(opts);
+      if (noPip && !args.includes('--without-pip')) {
+        if (o.fail === 'ensurepip') return fail(opts, "Error: Command '[...] -m ensurepip --upgrade --default-pip' returned non-zero exit status 1.");
+        return cp.spawn(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(UBUNTU_VENV)}); process.exit(1)`], opts);
+      }
+      return ok(opts);
     }
-    if (args[0] === '-c' && args[1] === 'import pip') return o.fail === 'ensurepip' && !ix._pip ? fail(opts, "No module named 'pip'") : ok(opts);
-    if (args[0] === '-m' && args[1] === 'ensurepip') return o.fail === 'ensurepip' ? fail(opts, 'No module named ensurepip') : ok(opts);
+    if (args[0] === '-c' && args[1] === 'import pip') return noPip && !ix._pip ? fail(opts, "No module named 'pip'") : ok(opts);
+    if (args[0] === '-m' && args[1] === 'ensurepip') return noPip ? fail(opts, 'No module named ensurepip') : ok(opts);
     if (/get-pip\.py$/.test(args[0])) { ix._pip = true; return ok(opts); }
     if (args[0] === '-m' && args[1] === 'pip') return o.fail === 'pip' ? fail(opts, 'ERROR: No matching distribution found for fastembed') : ok(opts);
     if (args.includes('--download-only')) {
@@ -60,6 +68,21 @@ function make(o = {}) {
     await ix.install(() => {});
     await ix.status('/w/a');
     assert.strictEqual(calls.pop()[0], path.join('venv', 'bin', 'python'), 'search by meaning installed: on that environment\'s Python, where the packages are');
+  }
+
+  // ---- Ubuntu without python3-venv: venv lays the environment out, says why on stdout and exits 1 with nothing on stderr;
+  // the environment is taken without pip all the same, and pip brought in from PyPI's bootstrap
+  {
+    const { ix, calls } = make({ fail: 'ensurepip-stdout' });
+    await ix.install(() => {});
+    assert.deepStrictEqual([calls.some((c) => c[1] === '-m' && c[2] === 'venv' && c[3] === '--without-pip'), calls.some((c) => /get-pip\.py$/.test(c[1])), ix.isInstalled()], [true, true, true]);
+  }
+  // a command that fails saying nothing on stderr: its last words on stdout, not just the exit code; the whole on the error
+  {
+    const ix = new CodeIndex({ root: ROOT, home: mk(), python: 'python3' });
+    await assert.rejects(ix.run(process.execPath, ['-e', 'process.stdout.write("one\\ntwo\\n\\nthree\\nfour\\n"); process.exit(2)']), (e) => e.message === 'two three four' && /one\ntwo/.test(e.output));
+    await assert.rejects(ix.run(process.execPath, ['-e', 'process.stderr.write("bad\\n"); process.stdout.write("noise\\n"); process.exit(2)']), (e) => e.message === 'bad', 'stderr first, as before');
+    await assert.rejects(ix.run(process.execPath, ['-e', 'process.exit(3)']), (e) => /exited with 3$/.test(e.message), 'nothing said: the exit code');
   }
 
   // ---- whether this machine's Python can run it: asked once

@@ -59,7 +59,15 @@ class CodeIndex {
       p.stdout.on('data', (d) => { out += d; if (onLine) for (const l of String(d).split('\n')) if (l.trim()) onLine(l.trim()); });
       p.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
       p.on('error', (e) => reject(new Error(e.code === 'ENOENT' ? `${cmd} was not found` : `could not run ${cmd}: ${e.message}`)));
-      p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error((err.trim().split('\n').slice(-3).join(' ') || `${cmd} exited with ${code}`).slice(0, 600)))));
+      // what failed, in the command's last words: on stderr, or on stdout when stderr stayed empty (Ubuntu's venv tells of
+      // the missing ensurepip there); the whole of both on the error, for a caller that looks for a particular word
+      p.on('close', (code) => {
+        if (code === 0) { resolve(out); return; }
+        const last = (s) => s.split('\n').filter((l) => l.trim()).slice(-3).join(' ').trim();
+        const e = new Error((last(err) || last(out) || `${cmd} exited with ${code}`).slice(0, 600));
+        e.output = (err + '\n' + out).slice(-4000);
+        reject(e);
+      });
     });
   }
 
@@ -117,9 +125,9 @@ class CodeIndex {
     if (!fs.existsSync(this.venvPython)) {
       onStep('Creating a private Python environment', 5);
       // Debian and Ubuntu ship python3 without ensurepip until python3-venv is installed: venv then lays the
-      // environment out and exits 1. Take it without pip; pip is brought in below.
+      // environment out and exits 1, saying so on stdout (Ubuntu) or stderr (Debian). Take it without pip; pip is brought in below.
       try { await this.run(this.python, ['-m', 'venv', this.venv]); }
-      catch (e) { if (!/ensurepip/.test(e.message)) throw e; await this.run(this.python, ['-m', 'venv', '--without-pip', this.venv]); }
+      catch (e) { if (!/ensurepip|python3[.0-9]*-venv/.test(e.output || e.message)) throw e; await this.run(this.python, ['-m', 'venv', '--without-pip', this.venv]); }
     }
     onStep('Installing the embedding runtime', 15);
     if (!(await this.hasPip())) await this.bootstrapPip();
