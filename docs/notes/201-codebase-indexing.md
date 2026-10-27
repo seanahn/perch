@@ -275,6 +275,31 @@ follows the evidence there is.
   pipe with the same tools, so no tab restarts and no prompt changes. On Windows a tab takes it up
   with its next process.
 
+## When the index is built, and what a search gets meanwhile
+
+The server is started by the agent, as one of its MCP tools, when the agent's own process starts;
+Perch starts that process at a tab's first message. So nothing is indexed until some tab has an
+agent running: after a reload, a "hello" in any tab is what starts the build. (Perch building the
+index itself at activation, so the first tab finds it ready, is offered below under *Not yet*.)
+
+From the moment the server starts, it builds in the background, keywords for every folder first,
+then vectors, and a search never fails for it; what changes is the text it returns:
+
+1. **Keyword index not built yet** (the first seconds; about 3 s for 1,900 files): the call waits up
+   to 10 s for it. If it is still not there, the result says so, with the count ("The index of
+   c3securitytools is being built: 640 of 1,908 files. Use grep meanwhile."), and the agent greps.
+2. **Keywords done, vectors still building** (minutes, on a CPU): the call answers by keywords and
+   says so in its first line ("by keywords; search by meaning is still being built"). In a
+   multi-folder search a folder whose vectors are finished already answers by meaning; folders are
+   merged by rank until all are done.
+3. **All vectors done**: "by meaning", merged by score.
+
+Vectors are built on a background thread, so a search is not blocked by them; it shares the CPU
+with them for those minutes. A second tab's server, starting while the first builds, finds the
+index's lock held, waits for the keyword index rather than searching an empty one, and then shares
+it; it never builds a second copy. `codebase_status` says where each folder stands. After the first
+build, a search looks for changed files at most every 30 s and re-indexes only those.
+
 ## What was built (2026-10-26)
 
 - `codeindex/indexer.py`: sections (Python by `ast`, Markdown by headings, else windows of 60 lines),
@@ -299,9 +324,11 @@ follows the evidence there is.
 - Measured on Perch's own repository (75 files, 448 sections): the keyword index in 0.2 s, its vectors
   in 6.2 s, a search by meaning in 0.4 s with the model to load and instantly after.
 
-Not yet: one shared server per machine (point 7 above: each tab's process has its own, the model
-loaded on its first search and let go when idle), vectors shared between clones of one repository,
-and a way for Codex to reach for the tool unprompted.
+Not yet: Perch building the index itself at activation (`server.py --index <folders>` in the
+background when the setting is on, and again on a change), so the first tab finds it ready and no
+"hello" is needed; one shared server per machine (point 7 above: each tab's process has its own,
+the model loaded on its first search and let go when idle); vectors shared between clones of one
+repository; and a way for Codex to reach for the tool unprompted.
 
 ## What is indexed
 
