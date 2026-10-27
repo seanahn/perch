@@ -250,6 +250,14 @@ follows the evidence there is.
   file is written: not `~/.claude/settings.json`, not `~/.codex/config.toml`. Off leaves no trace.
   Where the machine's Python cannot run the server (older than 3.8, or SQLite without FTS5), there is
   no tool at all, rather than one that fails.
+- **Per folder.** The setting's scope is `resource`: Perch reads it for each folder of the workspace,
+  a folder's own `.vscode/settings.json` first, and hands the server every folder that is on, in the
+  Explorer's order, an index each (`server.py root1 root2 …`). A folder added or removed reaches a
+  tab from its next process, like the setting. With several folders the results carry full paths,
+  since a tab's process works in the first folder only; search by meaning merges them by score,
+  keywords a folder at a time by rank, BM25 scores not comparing across indexes. One embedding
+  model serves all the folders of a server. A window with no folder gets no server: never the
+  home directory.
 - **From each tab's next process, not mid-conversation.** The tool list sits at the front of the
   cached prompt, so a change re-caches the conversation once. A Claude tab picks it up after its
   current turn, as on a backend switch; a Codex tab, which runs each turn as a process, from its

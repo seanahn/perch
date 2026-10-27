@@ -2190,6 +2190,36 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(m.ibox.made.map((i) => i.python), ['python3', '/opt/py312/bin/python3']);
     m.perch.dispose();
   }
+  // a multi-root workspace: every folder with the setting on, read per folder (a folder's own settings decide for it),
+  // in the workspace's order; a folder added or removed reaches each tab from its next process
+  {
+    const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: true }, workspaceFolders: ['/w/fennets', '/w/lattice', '/w/tools'] }); await flush(); await flush();
+    m.ui.folderConfig['/w/lattice'] = { 'codebaseIndex.enabled': false };
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    m.ui.answers.push('Not Now');
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush(); await flush();
+    const a = created[created.length - 1];
+    assert.deepStrictEqual(a.o.search.args, ['/ext/fennets.perch/codeindex/server.py', '/w/fennets', '/w/tools'], 'the folders that are on, in order; lattice says no for itself');
+    m.vscode.workspace.workspaceFolders.push({ uri: { fsPath: '/w/burrow' } });
+    for (const f of m.ui.listeners.folders) f({ added: [], removed: [] });
+    await flush(); await flush();
+    assert.strictEqual(a.disposed, true, 'a folder added: the idle Claude tab restarts');
+    assert(v.events(c).some((e) => e.kind === 'note' && /^Codebase search covers fennets, tools, burrow for this tab from the next message/.test(e.text)), v.events(c).filter((e) => e.kind === 'note').map((e) => e.text).join(' | '));
+    v.fire({ type: 'send', sid: c, text: 'again' }); await flush();
+    assert.deepStrictEqual(created[created.length - 1].o.search.args.slice(1), ['/w/fennets', '/w/tools', '/w/burrow']);
+    m.perch.dispose();
+  }
+  // a window with no folder: nothing to search, so no server (never the home directory)
+  {
+    const m = install(undefined, { config: { 'codebaseIndex.enabled': true }, codeIndex: { usable: true }, workspaceFolders: [] }); await flush(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'hi' }); await flush(); await flush();
+    assert.strictEqual(created[created.length - 1].o.search, undefined);
+    m.perch.dispose();
+  }
+
   // the toggle, first thing in a window: the Python check has not run yet (it waits for the setting), and the message waits for it
   {
     const m = install(undefined, { codeIndex: { usable: true } }); await flush(); await flush();

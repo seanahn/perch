@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """codebase_search for Claude Code and Codex, over stdio MCP (design: docs/notes/201-codebase-indexing.md).
 
-usage: server.py [root]         the tree to search; the current directory if not given
-       server.py --index [root]     build or bring the index up to date once, and say what is there
+usage: server.py [root ...]     the trees to search, each with an index of its own; the current directory if none
+       server.py --index [root ...] build or bring the indexes up to date once, and say what is there
        server.py --download-only    fetch the embedding model and say whether it loads, for Perch's installer
 
 Plain JSON-RPC, one message a line. The handshake is answered at once and the index is built or brought up to date
@@ -45,12 +45,37 @@ INSTRUCTIONS = ('codebase_search finds files in this repository by meaning. Use 
                 'something does without naming its files or identifiers; use grep for exact names.')
 
 
-class Server:
+class Folder:
+    """One root of the workspace: its index, and whether it could be built."""
+
     def __init__(self, root):
         self.root = root
+        self.name = os.path.basename(root.rstrip(os.sep)) or root
         self.index = None
         self.error = None
-        self.ready = threading.Event()        # the keyword index has been built once
+
+    def off(self):
+        return indexer.Ignore(self.root).off
+
+
+class Server:
+    """The folders of a workspace, searched together: one index each (its own .codebaseignore, its own place under
+    ~/.cache/codebase-index/), one embedding model between them."""
+
+    def __init__(self, roots):
+        seen, self.folders = set(), []
+        for r in roots:
+            key = os.path.realpath(r)
+            if key not in seen:
+                seen.add(key)
+                self.folders.append(Folder(r))
+        names = [f.name for f in self.folders]
+        for f in self.folders:                   # two folders of one name: told apart by their paths
+            if names.count(f.name) > 1:
+                f.name = f.root
+        self.many = len(self.folders) > 1
+        self.embedder = indexer.Embedder()
+        self.ready = threading.Event()          # every folder's keyword index has been built once, or failed
         self.refreshing = threading.Lock()
         self.checked = 0.0
         threading.Thread(target=self._start, daemon=True).start()
@@ -58,14 +83,17 @@ class Server:
 
     def _start(self):
         try:
-            self.index = indexer.Index(self.root, embedder=indexer.Embedder())
-            # another process may be building this index (two tabs started together): wait for it rather than search
-            # what little is there yet
-            while self.index.update() is None and not self.index.counts()['files']:
-                time.sleep(1)
+            for f in self.folders:
+                try:
+                    f.index = indexer.Index(f.root, embedder=self.embedder)
+                    # another process may be building this index (two tabs started together): wait for it rather than
+                    # search what little is there yet
+                    while f.index.update() is None and not f.index.counts()['files']:
+                        time.sleep(1)
+                except Exception as e:            # an index that cannot be made is said in results, not by a dead server
+                    f.error = str(e)
+            self.ready.set()
             self._refresh()
-        except Exception as e:            # an index that cannot be made is said in results, not by a dead server
-            self.error = str(e)
         finally:
             self.ready.set()
 
@@ -74,52 +102,93 @@ class Server:
             return
         try:
             self.checked = time.time()
-            self.index.update()
-            self.ready.set()
-            self.index.embed_missing()
+            for f in self.folders:
+                if f.index and not f.error:
+                    try:
+                        f.index.update()
+                    except Exception as e:
+                        f.error = str(e)
+            for f in self.folders:                # keywords for every folder first, then meaning
+                if f.index and not f.error:
+                    try:
+                        f.index.embed_missing()
+                    except Exception as e:
+                        f.error = str(e)
         finally:
             self.refreshing.release()
 
     def _idle(self):
         while True:
             time.sleep(60)
-            if self.index and self.index.embedder:
-                self.index.embedder.unload(IDLE_UNLOAD_S)
+            self.embedder.unload(IDLE_UNLOAD_S)
 
     def _waiting(self):
-        p = self.index.progress if self.index else {}
-        if p.get('total'):
-            return f"The index is being built: {p['done']} of {p['total']} {'files' if p.get('phase') == 'keywords' else 'sections'}. Use grep meanwhile."
+        for f in self.folders:
+            p = f.index.progress if f.index else {}
+            if p.get('total'):
+                where = f' of {f.name}' if self.many else ''
+                return f"The index{where} is being built: {p['done']} of {p['total']} {'files' if p.get('phase') == 'keywords' else 'sections'}. Use grep meanwhile."
         return 'The index is being built. Use grep meanwhile.'
 
+    def _path(self, f, h):
+        return os.path.join(f.root, h['path']) if self.many else h['path']   # several folders: paths the agent can open from anywhere
+
     def search(self, query, k):
-        if indexer.Ignore(self.root).off:
-            return "Search is off for this repository: its .codebaseignore is '*'. Use grep."
+        on = [f for f in self.folders if not f.off()]
+        if not on:
+            return ("Search is off for this workspace: every folder's .codebaseignore is '*'. Use grep." if self.many
+                    else "Search is off for this repository: its .codebaseignore is '*'. Use grep.")
         if not self.ready.wait(timeout=10):
             return self._waiting()
-        if self.error or not self.index:
-            return f'The index could not be built: {self.error}. Use grep.'
         if time.time() - self.checked > REFRESH_S:
             threading.Thread(target=self._refresh, daemon=True).start()
-        mode, hits = self.index.search(query, k)
-        if not hits:
+        found, failed = [], []
+        for f in on:
+            if f.error or not f.index:
+                failed.append(f)
+                continue
+            mode, hits = f.index.search(query, k)
+            found.append((f, mode, hits))
+        if not found:
+            return f'The index could not be built: {failed[0].error}. Use grep.'
+        meaning = all(mode == 'meaning' for _, mode, _ in found)
+        if meaning:                              # cosine scores compare across folders
+            rows = sorted(((h['score'], f, h) for f, _, hits in found for h in hits), key=lambda r: -r[0])
+        else:                                    # BM25 scores do not: by rank, a folder at a time
+            lists = [[(h['score'], fo, h) for h in hits] for fo, _, hits in found]
+            rows = [l[i] for i in range(k) for l in lists if i < len(l)]
+        rows = rows[:k]
+        if not rows:
             return 'Nothing matched. Try other words, or grep for a name.'
-        c = self.index.counts()
-        how = ('by meaning' if mode == 'meaning' else
-               'by keywords; search by meaning is still being built' if self.index.embedder.available() else
+        files = sum(f.index.counts()['files'] for f, _, _ in found)
+        how = ('by meaning' if meaning else
+               'by keywords; search by meaning is still being built' if self.embedder.available() else
                'by keywords; search by meaning is not installed')
-        lines = [f"{h['path']}:{h['start']}-{h['end']}  {h['name'][:60]}  ({h['score']})" for h in hits]
-        return f"Files by relevance, {how} ({c['files']} files indexed):\n" + '\n'.join(lines)
+        where = f' in {len(found)} folders' if self.many else ''
+        broken = f"; no index for {', '.join(f.name for f in failed)}" if failed else ''
+        lines = [f"{self._path(f, h)}:{h['start']}-{h['end']}  {h['name'][:60]}  ({h['score']})" for _, f, h in rows]
+        return f"Files by relevance, {how} ({files} files indexed{where}{broken}):\n" + '\n'.join(lines)
+
+    def _line(self, f):
+        if f.error:
+            return f'index failed: {f.error}'
+        if not f.index:
+            return 'being built'
+        s = indexer.summary(f.index)
+        mode = 'off (.codebaseignore is *)' if s['off'] else ('by meaning' if s['meaning'] and s['sections'] and s['vectors'] >= 0.9 * s['sections'] else 'by keywords')
+        return (f"{mode}. {s['files']} files, {s['sections']} sections, {s['vectors']} with vectors. "
+                f"Left out by .codebaseignore: {', '.join(s['ignore']) or 'nothing'}")
 
     def status(self):
-        if not self.index:
-            return self._waiting() if not self.error else f'The index could not be built: {self.error}'
-        s = indexer.summary(self.index)
-        mode = 'off (.codebaseignore is *)' if s['off'] else ('by meaning' if s['meaning'] and s['sections'] and s['vectors'] >= 0.9 * s['sections'] else 'by keywords')
-        return (f"Search: {mode}. {s['files']} files, {s['sections']} sections, {s['vectors']} with vectors"
-                f"{'' if s['meaning'] else ' (the embedding runtime is not installed)'}. "
-                f"Left out by .codebaseignore: {', '.join(s['ignore']) or 'nothing'}; also lockfiles, binaries, files over 256 KB "
-                f"and what git ignores. Index: {s['index']}.")
+        self.ready.wait(timeout=10)             # the keyword indexes take a second: say what is there, not that nothing is yet
+        tail = (f"{'' if self.embedder.available() else ' The embedding runtime is not installed.'} Also left out: lockfiles, binaries, "
+                f"files over 256 KB and what git ignores. Indexes under {os.path.dirname(indexer.cache_dir(self.folders[0].root))}.")
+        if not self.many:
+            f = self.folders[0]
+            if f.error or not f.index:
+                return self._waiting() if not f.error else f'The index could not be built: {f.error}'
+            return f'Search: {self._line(f)};' + tail.replace(' Also left out:', ' also') + ''
+        return 'Search by folder:\n' + '\n'.join(f'- {f.name}: {self._line(f)}' for f in self.folders) + '\n' + tail.strip()
 
 
 def reply(id_, result=None, error=None):
@@ -154,14 +223,14 @@ def upgrade(server):
     if os.name != 'posix' or not py or not marker or not os.path.exists(marker) or not os.path.exists(py):
         return
     # once: the environment's python is a symlink to the machine's, so the two cannot be told apart by path
-    if os.environ.get('CODEINDEX_UPGRADED') or (server.index and server.index.embedder and server.index.embedder.available()):
+    if os.environ.get('CODEINDEX_UPGRADED') or server.embedder.available():
         return
     sys.stdout.flush()
     os.execve(py, [py, os.path.abspath(__file__)] + sys.argv[1:], dict(os.environ, CODEINDEX_UPGRADED='1'))
 
 
-def serve(root):
-    server = Server(root)
+def serve(roots):
+    server = Server(roots)
     checked = 0.0
     for line, more in lines():
         try:
@@ -216,8 +285,8 @@ def download_only():
         return 1
 
 
-USAGE = """usage: server.py [root]           serve codebase_search over stdio MCP for the tree at root (default: the current directory)
-       server.py --index [root]   build or bring the index up to date once, and say what is there
+USAGE = """usage: server.py [root ...]       serve codebase_search over stdio MCP for these trees, an index each (default: the current directory)
+       server.py --index [root ...]  build or bring the indexes up to date once, and say what is there
        server.py --download-only  fetch the embedding model and say whether it loads
 
 Outside Perch:  claude mcp add -s user codebase -- python3 /path/to/perch/codeindex/server.py
@@ -234,12 +303,11 @@ def main(argv=None):
         return 0
     if '--download-only' in args:
         return download_only()
-    rest = [a for a in args if not a.startswith('-')]
-    root = os.path.abspath(rest[0] if rest else os.getcwd())
+    roots = [os.path.abspath(a) for a in args if not a.startswith('-')] or [os.getcwd()]
     if '--index' in args:
-        print(json.dumps(indexer.main(root), indent=1))
+        print(json.dumps([indexer.main(r) for r in roots] if len(roots) > 1 else indexer.main(roots[0]), indent=1))
         return 0
-    serve(root)
+    serve(roots)
     return 0
 
 

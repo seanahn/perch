@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -370,7 +370,8 @@
         "perch.codebaseIndex.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Give Claude and Codex tabs a `codebase_search` tool: search this workspace by keywords, and by meaning once that is installed (`Perch: Install Codebase Search by Meaning`). Off by default: on a well-documented repository the agents found their answers as fast by grep, and the tool cost them steps; turn it on, here or for one workspace, where the names in the code are not what you would ask for. The index is kept in `~/.cache/codebase-index/`, on the machine the workspace is on. A change applies to each tab from its next message."
+          "markdownDescription": "Give Claude and Codex tabs a `codebase_search` tool: search the workspace by keywords, and by meaning once that is installed (`Perch: Install Codebase Search by Meaning`). Off by default: on a well-documented repository the agents found their answers as fast by grep, and the tool cost them steps; turn it on, for every workspace or for one, where the names in the code are not what you would ask for. Every folder of a multi-root workspace is covered, an index each; a folder's own `.vscode/settings.json` decides for that folder. Indexes are kept in `~/.cache/codebase-index/`, on the machine the workspace is on. A change applies to each tab from its next message.",
+          "scope": "resource"
         },
         "perch.codebaseIndex.python": {
           "type": "string",

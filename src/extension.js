@@ -246,7 +246,7 @@ class Session {
     this.effort = typeof effort === 'string' ? effort : defaultEffort(kind);  // '' = the model's default effort
     this.actualModel = '';           // what the agent reported it is really running
     this.swap = null;                // claude only: Claude Code moved this session to another model after a refusal: { from, to, category }
-    this.search = false;             // the agent's process has codebase search (codeindex/): the setting it started under
+    this.search = '';                // the folders the agent's process searches (codeindex/), as it was given them; '' for none
     this.backend = '';               // claude only: the backend this tab's agent started on
     this.gateway = kind === 'claude' && !!gateway;   // claude only: this tab runs through the gateway (src/gateway.js), whatever the window's backend
     this.via = {};                   // gateway only: the models that answered this turn's requests, by name, with how many each
@@ -516,7 +516,7 @@ class Session {
       const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
       const launchCat = this.catalog();
       const search = this.view.codeSearch();
-      this.search = !!search;          // whether this process has codebase search: a change in the setting restarts it
+      this.search = search ? JSON.stringify(search.args) : '';   // what this process searches: a change restarts it
       this.agent = new ClaudeAgent({
         search: search || undefined,
         cwd: cwd(), emit, resume,
@@ -533,7 +533,7 @@ class Session {
       });
     } else {
       const search = this.view.codeSearch();
-      this.search = !!search;
+      this.search = search ? JSON.stringify(search.args) : '';
       this.agent = new CodexAgent({
         search: search || undefined,
         cwd: cwd(), emit, resume,
@@ -770,7 +770,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = false; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -852,7 +852,7 @@ class PerchView {
     // answer simply goes without
     this.searchUsable = false; this.searchProbed = null;
     this.codeIndex = new CodeIndex({ root: this.root, python: cfg('codebaseIndex.python') || undefined });
-    if (cfg('codebaseIndex.enabled') === true) this.probeSearch();
+    if (this.searchRoots().length) this.probeSearch();
     this.restore();
   }
 
@@ -901,14 +901,29 @@ class PerchView {
     if (!this.searchProbed) this.searchProbed = this.codeIndex.probe().then((ok) => { this.searchUsable = ok; return ok; });
     return this.searchProbed;
   }
-  /** The search server for a tab's next process, or null: off (the default), or no Python here that can run it. */
+  /**
+   * The workspace's folders codebase search covers: those with the setting on, read per folder (the setting's scope is
+   * resource: a folder's own .vscode/settings.json decides for it, else the workspace's, else the user's). In order.
+   */
+  searchRoots() {
+    const roots = [];
+    for (const f of vscode.workspace.workspaceFolders || []) {
+      let on;
+      try { on = vscode.workspace.getConfiguration('perch', f.uri).get('codebaseIndex.enabled') === true; } catch (_) { on = cfg('codebaseIndex.enabled') === true; }
+      if (on && !roots.includes(f.uri.fsPath)) roots.push(f.uri.fsPath);
+    }
+    return roots;
+  }
+  /** The search server for a tab's next process, or null: no folder on (the default), or no Python here that can run it. */
   codeSearch() {
-    if (cfg('codebaseIndex.enabled') !== true || !this.searchUsable) return null;
-    return this.codeIndex.mcpServer(cwd());
+    const roots = this.searchRoots();
+    if (!roots.length || !this.searchUsable) return null;
+    return this.codeIndex.mcpServer(roots);
   }
   /**
-   * The setting changed. A tab takes it from its process's next start: a Claude tab is restarted after its turn, as on
-   * a backend switch, since the tool list is part of the cached prompt; a Codex tab's next turn is a new process anyway.
+   * The setting, or the workspace's folders, changed. A tab takes it from its process's next start: a Claude tab is
+   * restarted after its turn, as on a backend switch, since the tool list is part of the cached prompt; a Codex tab's
+   * next turn is a new process anyway.
    */
   async searchChanged() {
     const python = cfg('codebaseIndex.python') || undefined;
@@ -916,16 +931,17 @@ class PerchView {
       this.codeIndex = new CodeIndex({ root: this.root, python });
       this.searchUsable = false; this.searchProbed = null;
     }
-    if (cfg('codebaseIndex.enabled') === true) await this.probeSearch();
-    const on = !!this.codeSearch();
+    if (this.searchRoots().length) await this.probeSearch();
+    const search = this.codeSearch(), want = search ? JSON.stringify(search.args) : '';
+    const names = search ? search.args.slice(1).map((p) => require('path').basename(p)) : [];
+    const what = !search ? 'Codebase search is off' : names.length > 1 ? 'Codebase search covers ' + names.join(', ') : 'Codebase search is on';
     for (const s of this.sessions) {
-      if (!s.agent || s.search === on) continue;
-      const what = `Codebase search is ${on ? 'on' : 'off'}`;
-      if (s.kind === 'codex') { s.agent.setSearch(this.codeSearch()); s.search = on; s.post({ kind: 'note', text: `${what} for this tab from its next turn.` }); }
+      if (!s.agent || s.search === want) continue;
+      if (s.kind === 'codex') { s.agent.setSearch(search); s.search = want; s.post({ kind: 'note', text: `${what} for this tab from its next turn.` }); }
       else if (s.busy) { s.restartWhenIdle = `${what} for this tab; the conversation continues, the prompt cache starts over.`; s.post({ kind: 'note', text: `${what}. This tab takes it up after the current turn.` }); }
       else { s.restart(); s.post({ kind: 'note', text: `${what} for this tab from the next message; the conversation continues, the prompt cache starts over.` }); }
     }
-    if (on) this.offerSearch();
+    if (search) this.offerSearch();
   }
   /** Turn codebase search on or off where it is set: in the workspace's settings if they have it, else the user's. */
   async toggleSearch() {
@@ -1798,6 +1814,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.codebaseIndex.toggle', () => perch.toggleSearch()),
     vscode.commands.registerCommand('perch.codebaseIndex.install', () => perch.installSearch()),
     vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('perch.codebaseIndex')) perch.searchChanged(); }),
+    ...(vscode.workspace.onDidChangeWorkspaceFolders ? [vscode.workspace.onDidChangeWorkspaceFolders(() => perch.searchChanged())] : []),   // a folder added or removed: the search covers it, or not, from each tab's next process
     { dispose: () => perch.dispose() },
   );
   perch.start();

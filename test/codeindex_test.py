@@ -166,6 +166,20 @@ try:
         return out
 
     call = lambda i, name, args: {'jsonrpc': '2.0', 'id': i, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}
+
+    def server_many(roots, *msgs):
+        p = subprocess.Popen([sys.executable, os.path.join(HERE, '..', 'codeindex', 'server.py'), *roots],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             env=dict(os.environ, CODEINDEX_PYTHON='', CODEINDEX_MARKER=''))
+        out = []
+        for m in msgs:
+            p.stdin.write(json.dumps(m) + '\n')
+            p.stdin.flush()
+            out.append(json.loads(p.stdout.readline()))
+        p.stdin.close()
+        p.wait(timeout=20)
+        assert p.returncode == 0, p.stderr.read()
+        return out
     r = server(root,
                {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18'}},
                {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
@@ -190,6 +204,28 @@ try:
     r = server(root, call(1, 'codebase_search', {'query': 'gateway'}))
     assert 'Search is off for this repository' in r[0]['result']['content'][0]['text'], r
     os.remove(os.path.join(root, '.codebaseignore'))
+
+    # ---- several folders at once: an index each, searched together, paths the agent can open from anywhere, a folder's
+    # own .codebaseignore honoured, the status by folder
+    other2 = repo('three')
+    write(other2, 'docs/firewall.md', '# Firewall\n\nThe package-install guard blocks a developer.\n')
+    r = server_many([root, other2],
+                    call(1, 'codebase_search', {'query': 'gateway setup', 'top_k': 4}),
+                    call(2, 'codebase_search', {'query': 'package install guard blocks', 'top_k': 2}),
+                    call(3, 'codebase_status', {}))
+    t1 = r[0]['result']['content'][0]['text']
+    assert 'in 2 folders' in t1 and os.path.join(root, 'src/gateway.py') + ':1-3' in t1, t1
+    assert all(l.startswith('/') for l in t1.split('\n')[1:]), 'several folders: absolute paths\n' + t1
+    t2 = r[1]['result']['content'][0]['text']
+    assert os.path.join(other2, 'docs/firewall.md') in t2, t2
+    t3 = r[2]['result']['content'][0]['text']
+    assert t3.startswith('Search by folder:\n- one: by keywords. 4 files') and '\n- three: by keywords.' in t3, t3
+    write(other2, '.codebaseignore', '*\n')
+    r = server_many([root, other2], call(1, 'codebase_search', {'query': 'package install guard blocks', 'top_k': 2}), call(2, 'codebase_status', {}))
+    assert os.path.join(other2, 'docs/firewall.md') not in r[0]['result']['content'][0]['text'], 'a folder that says no is left out'
+    assert '- three: off (.codebaseignore is *)' in r[1]['result']['content'][0]['text']
+    r = server_many([root, root], call(1, 'codebase_status', {}))
+    assert r[0]['result']['content'][0]['text'].startswith('Search: by keywords. 4 files'), 'the same folder twice is one folder: ' + r[0]['result']['content'][0]['text']
 
     # ---- the move onto an installed environment: between two messages the server replaces itself with the environment's
     # Python (here a script that counts its runs, then runs this one), once, and nothing a client sent is lost

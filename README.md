@@ -550,6 +550,10 @@ The design and the measurements are in
   Perch offers it once, as the first tab starts, and `Perch: Install
   Codebase Search by Meaning` installs it later. A tab's search server
   moves onto it by itself, without a restart.
+- **Every folder of the workspace,** in the Explorer's order, each with
+  an index of its own; a folder's own `.vscode/settings.json` can turn it
+  off or on for that folder alone, and with several folders the results
+  carry full paths.
 - **The index stays on the machine with the code.** It is kept in
   `~/.cache/codebase-index/`, outside the repository, private to you, and
   brought up to date from the files that changed. Under Remote-SSH it is

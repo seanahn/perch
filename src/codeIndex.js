@@ -72,13 +72,14 @@ class CodeIndex {
   /**
    * The MCP server for a tab's process, as both SDKs take one: the program and its arguments. On the private
    * environment's Python once search by meaning is installed, else on the machine's, for keyword search.
-   * @param {string} workspace  the folder the tab works in: the tree the server searches
+   * @param {string|string[]} roots  the workspace's folders: the trees the server searches, an index each
    */
-  mcpServer(workspace) {
+  mcpServer(roots) {
+    const list = Array.isArray(roots) ? roots : [roots];
     const installed = this.isInstalled();
     // where the private environment is: a server started before it was installed moves onto it by itself (server.py, upgrade)
     const env = { CODEINDEX_MODELS: this.modelsDir, CODEINDEX_PYTHON: this.venvPython, CODEINDEX_MARKER: this.markerPath };
-    return { command: installed ? this.venvPython : this.python, args: [this.server, workspace], env };
+    return { command: installed ? this.venvPython : this.python, args: [this.server, ...list], env };
   }
 
   hasPip() { return this.run(this.venvPython, ['-c', 'import pip']).then(() => true, () => false); }

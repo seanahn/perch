@@ -47,6 +47,7 @@ function make(o = {}) {
     assert.deepStrictEqual([s.command, s.args], ['python3', [path.join(ROOT, 'codeindex', 'server.py'), '/w/repo']]);
     assert.deepStrictEqual(s.env, { CODEINDEX_MODELS: ix.modelsDir, CODEINDEX_PYTHON: ix.venvPython, CODEINDEX_MARKER: ix.markerPath }, 'and where the environment will be, for the server to move onto it');
     assert.strictEqual(ix.isInstalled(), false);
+    assert.deepStrictEqual(ix.mcpServer(['/w/a', '/w/b']).args, [path.join(ROOT, 'codeindex', 'server.py'), '/w/a', '/w/b'], 'a multi-root workspace: every folder, an index each');
   }
 
   // ---- whether this machine's Python can run it: asked once
