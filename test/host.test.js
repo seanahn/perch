@@ -2740,6 +2740,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       v2.fire({ type: 'setBackend', sid: v2.lastTabs().tabs[0].id, value: 'gateway' }); v2.fire({ type: 'send', sid: v2.lastTabs().tabs[0].id, text: 'back on' });
       assert(near(v2.events(v2.lastTabs().tabs[0].id).filter((e) => e.kind === 'result').pop().gatewayCostSoFar, 0.0009), 'the first tab, back on the gateway, carries on from what was saved');
       assert.deepStrictEqual(v2.lastTabs().gateway, { file, exists: true, ok: true });
+      // Returning to a Claude gateway uses the gateway file's model names in both footer and command paths, not the
+      // native Claude catalog. The command keeps its historical effort semantics; this checks only its catalog.
+      const returner = m2.perch.get(v2.lastTabs().tabs[1].id);
+      assert(returner.gateway && returner.switchVendor('codex'));
+      assert.deepStrictEqual(returner.switchTo().models, [{ value: '', label: 'default · router-auto[1m]', efforts: ['low', 'medium', 'high'], defaultEffort: '' }]);
+      const offered = [];
+      m2.picks.push((i) => { offered.push(i.label); return i.value === ''; });
+      await m2.perch.continueIn('claude', { sid: returner.id }); await flush();
+      assert.deepStrictEqual([offered, returner.kind, returner.gateway], [['default · router-auto[1m]'], 'claude', true], 'the command offers and restores the gateway default');
       // the sessions list and the handoff offer a tab on the gateway too, now that there is a file
       const qp = await m2.perch.pickSession();
       assert.deepStrictEqual(qp.rows().slice(0, 2).map((r) => r[0]), ['$(add) New Claude tab', '$(add) New Codex tab'], 'no tab kind of its own: the gateway is a backend');
@@ -2812,6 +2821,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       const infos = m.ui.infos.length;
       await m.commands['perch.continueInClaude']();
       assert(/is on Claude already/.test(m.ui.infos[infos]));
+      v.fire({ type: 'setEffort', sid: c, value: 'high' }); await flush();
+      assert.strictEqual(s.effort, 'high', 'the effort this tab had on Claude will be remembered across the switch');
 
       // to Codex: its model chosen, what it will read said, the switch made
       m.picks.push((i) => i.value === 'gpt-6-luna');
@@ -2856,14 +2867,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       m.store.transcripts[id2] = { events: [{ kind: 'user', text: String(b.sent[0]) }, { kind: 'text', text: 'answer to review it' }, { kind: 'user', text: 'and more' }, { kind: 'text', text: 'answer to and more' }], earlier: 0 };
 
       // and back to Claude: its own conversation goes on, handed only what Codex said
-      // this time from the footer's menu, which offers Claude's models and names the one chosen
+      // this time from the footer's menu, which offers each Claude model's own efforts. Clicking the model itself sends
+      // the empty effort deliberately, so its default replaces the explicit effort this tab used on Claude before.
       const sw = v.lastTabs().tabs[0].switchTo;
-      assert.strictEqual(sw.kind, 'claude'); assert.deepStrictEqual(sw.models.slice(0, 2), [{ value: '', label: 'default · Opus 5.5' }, { value: 'opus', label: 'Opus 5.5' }]);
-      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '' }); await flush(); await flush(); await flush();
+      assert.strictEqual(sw.kind, 'claude'); assert.deepStrictEqual(sw.models.slice(0, 2), [
+        { value: '', label: 'default · Opus 5.5', efforts: CATALOGS.claude.defaultModel.efforts, defaultEffort: '' },
+        { value: 'opus', label: 'Opus 5.5', efforts: CATALOGS.claude.models[0].efforts, defaultEffort: '' },
+      ]);
+      assert.deepStrictEqual(sw.models.find((x) => x.value === 'haiku').efforts, [], 'a model with no effort control has no contextual effort menu');
+      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '', effort: '' }); await flush(); await flush(); await flush();
       // what the page asked and what was done are in the Perch output channel, so a switch that lands wrong can be read back
-      assert(m.ui.traces.some((l) => / the page asks: tab \w{8} "fix the flush bug" codex → claude, model ""$/.test(l)), m.ui.traces.join('\n'));
-      assert(m.ui.traces.some((l) => / switched tab \w{8} "fix the flush bug": codex → claude, model "", resuming /.test(l)), m.ui.traces.join('\n'));
-      assert.strictEqual(s.kind, 'claude'); assert.strictEqual(s.agentSessionId, id1, 'the earlier Claude session resumes'); assert.strictEqual(s.mode, 'default');
+      assert(m.ui.traces.some((l) => / the page asks: tab \w{8} "fix the flush bug" codex → claude, model "", effort ""$/.test(l)), m.ui.traces.join('\n'));
+      assert(m.ui.traces.some((l) => / switched tab \w{8} "fix the flush bug": codex → claude, model "", effort "", resuming /.test(l)), m.ui.traces.join('\n'));
+      assert.strictEqual(s.kind, 'claude'); assert.strictEqual(s.agentSessionId, id1, 'the earlier Claude session resumes'); assert.strictEqual(s.mode, 'default'); assert.strictEqual(s.effort, '', 'the model row chose its default rather than restoring high');
       assert(b.disposed);
       v.fire({ type: 'send', sid: c, text: 'thanks' }); await flush();
       const c2 = created[created.length - 1];
@@ -2888,9 +2904,9 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
 
       // a round trip with nothing said leaves no stretch behind, resumed or not: the periods, and so the reload, stay as they were
       // (the records are read with real file I/O: a few ticks are not enough, so the switch is waited for)
-      v.fire({ type: 'switchVendor', sid: c, kind: 'codex', model: '' }); await wait(60);
-      assert.strictEqual(s.kind, 'codex'); assert.strictEqual(s.agentSessionId, id2);
-      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '' }); await wait(60);
+      v.fire({ type: 'switchVendor', sid: c, kind: 'codex', model: 'gpt-6-luna', effort: 'high' }); await wait(60);
+      assert.strictEqual(s.kind, 'codex'); assert.strictEqual(s.agentSessionId, id2); assert.deepStrictEqual([s.model, s.effort], ['gpt-6-luna', 'high'], 'a contextual effort choice is kept with its model');
+      v.fire({ type: 'switchVendor', sid: c, kind: 'claude', model: '', effort: '' }); await wait(60);
       assert.strictEqual(s.kind, 'claude'); assert.strictEqual(s.agentSessionId, id1);
       assert.deepStrictEqual(s.periods.map((p) => [p.kind, p.resume, p.said]), [['claude', id1, true], ['codex', id2, true], ['claude', id1, true]], 'no empty stretches kept');
       m.store.renamed.length = 0;

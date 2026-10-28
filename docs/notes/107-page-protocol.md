@@ -14,6 +14,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `setModel`, `setEffort`, `setMode` | `sid`, `value` | A choice from a menu |
 | `setIde` | `sid`, `value` | IDE context on or off |
 | `setBackend` | `sid`, `value` | A Claude tab's backend from the footer's menu: `subscription` or `api` (the window's, through its switch), or `gateway` (this tab's) |
+| `switchVendor` | `sid`, `kind`, `model`, `effort` | Continue the tab on the destination vendor. `effort: ""` means that model's default (a click on its model row); a contextual effort item sends its explicit value |
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
 | `meterRefresh` | `vendor` | Re-read usage |
@@ -28,7 +29,7 @@ The page and the host exchange plain JSON with `postMessage`.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
+| `tabs` | `tabs`, `active`, `single`, `gateway` | The sessions this page shows; a tab's `switchTo` names the destination vendor and each model's `efforts` and `defaultEffort`; `gateway` says where the gateway file is, whether it exists, and whether it is in order |
 | `event` | `sid`, `ev` | One event for one session |
 | `meter` | `meter`, `codex` | Claude usage, and ChatGPT plan usage |
 | `indexStatus` | `sid`, `at`, `on`, `usable`, `folders`, and `meaning`, or `why`, `error` | The answer: `on` is the workspace's setting, `usable` whether a Python here can run the search; every folder its `name`, `root` and `on` (its own setting as it resolves) and, read from the indexes' files by `server.py --status` (nothing is built), `files`, `sections`, `vectors`, `built`, `updating`, `embedding`, `off`, `ignore`, `updated`; `meaning` says whether search by meaning is installed on the Python the server runs on; `why` when no folder is open or no Python can run it, `error` when the read failed |

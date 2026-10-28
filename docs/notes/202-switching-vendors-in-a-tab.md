@@ -117,16 +117,20 @@ Both carry the same handoff text.
 
 ### How a switch is asked for
 
-**Chosen, 2026-10-27: the vendor's mark in the footer.** The Claude or ChatGPT icon before the
-backend label (`sub`, `API`, `gw`, `ChatGPT`) opens a menu: *Continue on Codex* (or Claude) with that
-vendor's models, default first, then *Open claude.ai* (or chatgpt.com), which is what the icon did
-before. A model picked there switches at once. There is no confirmation (dropped the same day, after the
-first live try): nothing is sent until the user sends, and switching straight back costs nothing,
-since a stretch in which nothing was said is dropped. The divider says how much will go and carries a
-Preview button, which opens the text in an editor until the first message has taken it.
-While the tab works the models are greyed out, and the menu says why. Built: `switchTo` in each tab's
-state, the `switchVendor` message, `vendorMenu` in the page; tests in `test/page.test.js` and
-`test/host.test.js`. The pill and card below remain the plan for phase 3, if the footer is not enough.
+**Chosen, 2026-10-27; made destination-only 2026-10-28: the other vendor's mark in the footer.** A
+Codex tab shows Claude's mark and a Claude tab shows Codex's: the mark says where the action goes,
+while the tab icon and composer say where the tab is. It opens *Continue on Codex* (or Claude) with
+that vendor's models, default first, and no unrelated vendor-home-page link. A model with effort
+control has a contextual submenu of the levels it accepts. Clicking the model row switches with the
+model's default effort; clicking an effort pins that level. There is no confirmation (dropped the
+same day, after the first live try): nothing is sent until the user sends, and switching straight
+back costs nothing, since a stretch in which nothing was said is dropped. The divider says how much
+will go and carries a Preview button, which opens the text in an editor until the first message has
+taken it. While the tab works the models and efforts are greyed out, and the menu says why. Built:
+`switchTo` in each tab's state, the `switchVendor` message, `vendorMenu` in the page; tests in
+`test/page.test.js` and `test/host.test.js`. The full tab UI and future multi-vendor shape are in
+[note 401](401-perch-tab-ui.md). The pill and card below remain the plan for phase 3, if the footer
+is not enough.
 
 1. **The model pill lists both vendors.** The menu is grouped: the tab's own vendor first, with its
    models and efforts as today, then the other vendor under its name and icon, with its models on

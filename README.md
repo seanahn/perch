@@ -232,11 +232,14 @@ agent's caching. One tab can change vendor, though: the next section.
 ## Switching between Claude and Codex in a tab
 
 A tab can go on with the other vendor: Claude does the work, GPT-6 Astra
-reviews it and opens the PR, in the same tab. Click the vendor's mark at
-the left of the footer (the Claude spark, the ChatGPT blossom) and choose
-a model under **Continue on Codex** or **Continue on Claude**; `Perch:
-Continue This Tab in Codex…` and `…in Claude…` do the same from the
-command palette and the title bar's `…` menu. The switch is immediate,
+reviews it and opens the PR, in the same tab. The left of the footer shows
+the destination vendor's mark: Claude under a Codex tab, ChatGPT under a
+Claude tab. Click it and choose a model under **Continue on Codex** or
+**Continue on Claude**. Clicking the model row uses that model's default
+effort; its › menu pins one of the effort levels that model accepts. `Perch:
+Continue This Tab in Codex…` and `…in Claude…` also switch from the command
+palette and the title bar's `…` menu, restoring that vendor's remembered effort
+when it is valid for the model chosen there. The switch is immediate,
 and nothing is sent until you send. Only an idle tab switches.
 
 Neither vendor can resume the other's session (the records are each
@@ -256,8 +259,9 @@ on your ChatGPT login`), as a warning when the conversation leaves an
 account of your own, Bedrock or a gateway, for a vendor's service; its
 **Preview** opens the exact text, until the first message has taken it.
 
-The composer, the footer, and the editor tab's icon follow the vendor the
-tab is on. Each vendor keeps its own model, effort, and mode: a vendor
+The composer, backend and usage readings, and the editor tab's icon follow
+the vendor the tab is on; the footer's handoff mark names the other vendor.
+Each vendor keeps its own model, effort, and mode: a vendor
 the tab has not used starts on its defaults, one it used before gets back
 what it had, and a permission mode is never carried across. Switching
 back resumes the vendor's earlier session and hands it only what the
@@ -772,12 +776,11 @@ second pass over the audio.
 Verified end to end on 2026-09-30, dictating messages into a tab, on
 this machine (GPU) and over Remote-SSH to a CPU-only container.
 
-A web address in an error or a note is a link. The vendor's mark at the
-left of the footer opens a menu: continue the tab on the other vendor
-(see [Switching](#switching-between-claude-and-codex-in-a-tab)), or
-open the vendor's site, claude.ai or chatgpt.com; the plan badge under a
-Codex tab (Plus, Pro) opens your ChatGPT usage page, where limits and
-credits are managed.
+A web address in an error or a note is a link. The other vendor's mark at
+the left of the footer is only for continuing the tab on that vendor (see
+[Switching](#switching-between-claude-and-codex-in-a-tab)); the plan badge
+under a Codex tab (Plus, Pro) opens your ChatGPT usage page, where limits
+and credits are managed.
 
 ## Cost
 

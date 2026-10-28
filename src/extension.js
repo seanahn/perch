@@ -367,9 +367,9 @@ class Session {
    * goes on. Settings are the vendor's own: those the tab had on it before, else its defaults; a mode is never carried
    * across. Only an idle tab switches.
    * @param {'claude'|'codex'} kind
-   * @param {{ model?: string, handoff?: object|null }} [o]  `handoff` as prepareHandoff made it
+   * @param {{ model?: string, effort?: string, handoff?: object|null }} [o]  `handoff` as prepareHandoff made it
    */
-  switchVendor(kind, { model, handoff } = {}) {
+  switchVendor(kind, { model, effort, handoff } = {}) {
     if ((kind !== 'claude' && kind !== 'codex') || kind === this.kind || this.busy || this.pending.size) return false;
     if (handoff && !handoff.fits) Handoff.writeHandoff(handoff.file, handoff.full);
     const from = this.where();
@@ -380,7 +380,10 @@ class Session {
     this.kind = kind;
     this.agentSessionId = back && back.resume ? back.resume : null;
     this.model = typeof model === 'string' ? model : back ? back.model : defaultModel(kind);
-    this.effort = back ? back.effort : defaultEffort(kind);
+    // A model row in the footer sends the empty string deliberately: use that model's default even when this tab had an
+    // explicit effort the last time it was on this vendor. With no effort choice (the command, or an internal return),
+    // keep the old behaviour and restore what the tab had.
+    this.effort = typeof effort === 'string' ? effort : back ? back.effort : defaultEffort(kind);
     this.mode = back && MODES[kind].includes(back.mode) ? back.mode : kind === 'codex' && this.view.codexUnsandboxedHere() ? 'danger-full-access' : defaultMode(kind);
     this.gateway = kind === 'claude' && !!(back && back.gateway);
     this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
@@ -398,7 +401,7 @@ class Session {
     if (this.periods.length && !this.periods[this.periods.length - 1].said) this.periods.pop();
     const prev = this.periods[this.periods.length - 1];
     if (!(prev && prev.kind === kind && prev.resume === this.agentSessionId)) this.periods.push(Object.assign({ kind, resume: this.agentSessionId, said: false, note: divider.text }, divider.level ? { warn: true } : {}));   // else back where it was: that stretch goes on
-    this.view.trace(`switched tab ${this.id.slice(0, 8)} "${this.title}": ${from.kind} → ${kind}, model ${JSON.stringify(this.model)}${this.agentSessionId ? ', resuming ' + String(this.agentSessionId).slice(0, 8) : ', a new conversation'}`);
+    this.view.trace(`switched tab ${this.id.slice(0, 8)} "${this.title}": ${from.kind} → ${kind}, model ${JSON.stringify(this.model)}, effort ${JSON.stringify(this.effort)}${this.agentSessionId ? ', resuming ' + String(this.agentSessionId).slice(0, 8) : ', a new conversation'}`);
     this.post(divider);
     this.post({ kind: 'note', text: `Mode: ${MODE_NAMES[this.mode] || this.mode}, ${VENDOR[kind]}'s own${back ? ', as this tab had it' : ''}. ` + (this.agentSessionId ? `Its earlier conversation is read from the prompt cache if that is still warm.` : `The prompt cache starts cold.`) + (this.handoff ? ' The conversation above goes with your next message.' : '') });
     this.view.persist();
@@ -984,11 +987,23 @@ class Session {
     const wide = /\[1m\]$/i.test(m) && !/\[1m\]$/i.test(e.value);
     return e.value + (wide ? '[1m]' : '');
   }
-  /** The other vendor and its models, as the footer's menu offers them: default first, named as the catalog names it. */
+  /** The model catalog used when this tab goes to `kind`, including a gateway it used there before. */
+  destinationCatalog(kind) {
+    const back = this.left[kind] || null;
+    return kind === 'claude' && back && back.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[kind];
+  }
+  /** The other vendor and its models, as the footer's menu offers them: default first, with each model's own efforts. */
   switchTo() {
-    const kind = this.kind === 'claude' ? 'codex' : 'claude', cat = this.view.catalog[kind];
-    const d = cat && cat.defaultModel && cat.defaultModel.label;
-    return { kind, models: [{ value: '', label: 'default' + (d ? ' · ' + d : '') }, ...((cat && cat.models) || []).map((m) => ({ value: m.value, label: m.label }))] };
+    const kind = this.kind === 'claude' ? 'codex' : 'claude';
+    // A return to a Claude gateway uses the gateway file's aliases and effort levels, not Claude Code's catalog.
+    const cat = this.destinationCatalog(kind);
+    const d = cat && cat.defaultModel;
+    const model = (value, label, m) => ({
+      value, label,
+      efforts: [...new Set(((m && m.efforts) || (!cat ? EFFORTS[kind] : [])).filter(Boolean))],
+      defaultEffort: String((m && m.defaultEffort) || ''),
+    });
+    return { kind, models: [model('', 'default' + (d && d.label ? ' · ' + d.label : ''), d), ...((cat && cat.models) || []).map((m) => model(m.value, m.label, m))] };
   }
   toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff }; }
 
@@ -1669,8 +1684,8 @@ class PerchView {
       case 'attach': this.attach(msg.sid); return;
       case 'setIde': if (s) { s.setIde(msg.value); this.sendTabs(); } return;
       case 'switchVendor':           // the footer's vendor menu (note 202)
-        if (s) this.trace(`the page asks: tab ${s.id.slice(0, 8)} "${s.title}" ${s.kind} → ${msg.kind}, model ${JSON.stringify(msg.model)}`);
-        if (s && (msg.kind === 'claude' || msg.kind === 'codex')) this.continueIn(msg.kind, { sid: s.id, model: String(msg.model || '') });
+        if (s) this.trace(`the page asks: tab ${s.id.slice(0, 8)} "${s.title}" ${s.kind} → ${msg.kind}, model ${JSON.stringify(msg.model)}, effort ${JSON.stringify(msg.effort)}`);
+        if (s && (msg.kind === 'claude' || msg.kind === 'codex')) this.continueIn(msg.kind, { sid: s.id, model: String(msg.model || ''), effort: typeof msg.effort === 'string' ? msg.effort : undefined });
         return;
       case 'setBackend': this.setBackend(s, msg.value); return;
       case 'meterRefresh': if (msg.vendor === 'codex') this.meter.refreshCodex(); else this.meter.poll(); return;
@@ -2015,12 +2030,12 @@ class PerchView {
    * conversation so far goes to it with the next message, as text: nothing is sent until the user sends.
    * @param {'claude'|'codex'} kind
    */
-  async continueIn(kind, { sid, model } = {}) {
+  async continueIn(kind, { sid, model, effort } = {}) {
     const s = sid ? this.get(sid) : this.active(), V = VENDOR[kind];
     if (!s) { vscode.window.showInformationMessage('Perch: no tab is active.'); return; }
     if (s.kind === kind) { vscode.window.showInformationMessage(`Perch: "${s.title}" is on ${V} already. Its model is chosen from the pill under the message box.`); return; }
     if (s.busy || s.pending.size) { vscode.window.showInformationMessage(`Perch: "${s.title}" is working. Switch once its turn has ended.`); return; }
-    const cat = this.catalog[kind];
+    const cat = s.destinationCatalog(kind);
     const items = [{ label: 'default' + (cat && cat.defaultModel && cat.defaultModel.label ? ' · ' + cat.defaultModel.label : ''), value: '' }, ...((cat && cat.models) || []).map((m) => ({ label: m.label, description: m.value, value: m.value }))];
     // from the footer's menu the model is chosen there; from the command, here
     const pick = typeof model === 'string' ? items.find((i) => i.value === model) || { label: model, value: model } : await vscode.window.showQuickPick(items, { placeHolder: `Continue "${s.title}" on ${V} with…` });
@@ -2030,7 +2045,7 @@ class PerchView {
     // no confirmation: nothing is sent until the user sends, and a switch straight back costs nothing (a stretch in which
     // nothing was said is dropped). What goes is said on the divider, whose Preview shows it
     if (s.busy || s.pending.size || s.kind === kind) return;   // it started working, or switched, while the conversation was read
-    s.switchVendor(kind, { model: pick.value, handoff: h });
+    s.switchVendor(kind, { model: pick.value, effort, handoff: h });
     this.activate(s.id);
   }
 

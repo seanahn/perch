@@ -265,23 +265,25 @@ ${glyphCss}
   #composer.codex #send.stop { background: var(--vscode-foreground); color: var(--vscode-editor-background); }
 
   /* menus open upward from the tool that owns them */
-  #menu { position: fixed; z-index: 10; min-width: 190px; max-width: min(340px, calc(100vw - 16px)); overflow-y: auto; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; }
-  #menu .h { padding: 5px 8px 3px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
+  .pop { position: fixed; z-index: 10; min-width: 190px; max-width: min(340px, calc(100vw - 16px)); overflow-y: auto; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; }
+  #submenu { z-index: 11; }
+  .pop .h { padding: 5px 8px 3px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
   .kw { position: relative; display: inline-flex; flex: none; }
   .kw .vdot { position: absolute; right: -3px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px var(--vscode-sideBar-background, var(--vscode-editor-background)); }
   .vdot.claude { background: #D97757; } .vdot.codex { background: #10a37f; }
-  #menu .h .k { width: 11px; height: 11px; vertical-align: -2px; margin-right: 2px; }
-  #menu .note { padding: 5px 8px; color: var(--vscode-descriptionForeground); white-space: normal; }
-  #menu .it { display: grid; grid-template-columns: 14px 1fr auto; column-gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
-  #menu .it:hover, #menu .it.cur { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); }
-  #menu.vendor .it { padding: 6px 8px; }
-  #menu .it.dis { opacity: .45; cursor: default; pointer-events: none; }
-  #menu .it .ck { color: var(--accent, currentColor); }
-  #menu .it .hint { color: var(--vscode-descriptionForeground); font-size: 11px; }
-  #menu .it .d { grid-column: 2 / 4; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: normal; }
-  #menu .filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; padding: 4px 8px; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 5px; outline: none; }
-  #menu .row { display: flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
-  #menu .row:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+  .pop .h .k { width: 11px; height: 11px; vertical-align: -2px; margin-right: 2px; }
+  .pop .note { padding: 5px 8px; color: var(--vscode-descriptionForeground); white-space: normal; }
+  .pop .it { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; column-gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 5px; cursor: pointer; outline: none; }
+  .pop .it:hover, .pop .it.cur, .pop .it:focus { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); }
+  .pop.vendor .it { padding: 6px 8px; }
+  .pop .it.dis { opacity: .45; cursor: default; pointer-events: none; }
+  .pop .it .ck { color: var(--accent, currentColor); }
+  .pop .it .hint { color: var(--vscode-descriptionForeground); font-size: 11px; }
+  .pop .it .chev { font-size: 15px; line-height: 10px; }
+  .pop .it .d { grid-column: 2 / -1; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: normal; }
+  .pop .filter { width: 100%; box-sizing: border-box; margin-bottom: 4px; padding: 4px 8px; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 5px; outline: none; }
+  .pop .row { display: flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 5px; cursor: pointer; }
+  .pop .row:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
 
   /* Claude usage and backend */
   #meter { display: flex; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 11px; color: var(--vscode-descriptionForeground); flex: none; }
@@ -324,7 +326,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude">${badge('claude')}</span><span id="m-codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -334,7 +336,7 @@ ${glyphCss}
   const $tAdd = $('t-add'), $tSlash = $('t-slash'), $tCtx = $('t-ctx'), $tCache = $('t-cache'), $tModel = $('t-model'), $tMode = $('t-mode'), $tIde = $('t-ide'), $tMic = $('t-mic'), $sep = document.querySelector('#tools .sep');
   const panes = new Map();   // sid -> pane state
   const commands = { claude: [], codex: [] };
-  let tabs = [], active = null, menu = null, menuOwner = null;
+  let tabs = [], active = null, menu = null, menuOwner = null, menuAnchor = null, submenu = null, submenuParent = null;
   const ICONS = ${iconsJson}, LETTER = { claude: 'C', codex: 'X' };
 
   // static artwork: never built from data
@@ -902,26 +904,76 @@ ${glyphCss}
   $tIde.addEventListener('click', () => { const t = cur(); if (t) vscode.postMessage({ type: 'setIde', sid: t.id, value: !t.ide }); });
 
   // ---- menus
-  function closeMenu() { if (menu) { menu.remove(); menu = null; menuOwner = null; } }
+  function closeSubmenu(focus) {
+    if (submenu) submenu.remove();
+    submenu = null;
+    if (submenuParent) { submenuParent.setAttribute('aria-expanded', 'false'); if (focus) submenuParent.focus(); }
+    submenuParent = null;
+  }
+  function closeMenu(focus) {
+    const anchor = menuAnchor;
+    closeSubmenu();
+    if (menu) menu.remove();
+    if (menuAnchor) menuAnchor.setAttribute('aria-expanded', 'false');
+    menu = null; menuOwner = null; menuAnchor = null;
+    if (focus && anchor) anchor.focus();
+  }
   function openMenu(owner, anchor, fill) {
     if (menu && menuOwner === owner && !menu.dataset.typed) { closeMenu(); return null; }
     closeMenu();
-    menu = el('div'); menu.id = 'menu'; menu.setAttribute('role', 'menu'); menuOwner = owner;
+    menu = el('div', 'pop'); menu.id = 'menu'; menu.setAttribute('role', 'menu'); menuOwner = owner; menuAnchor = anchor;
+    anchor.setAttribute('aria-expanded', 'true');
     const t = cur(); if (t) menu.style.setProperty('--accent', t.kind === 'claude' ? '#D97757' : '#10a37f');
     fill(menu);
     document.body.append(menu);
+    menu.addEventListener('scroll', () => closeSubmenu());
     const r = anchor.getBoundingClientRect(), up = r.top > window.innerHeight / 2;
     menu.style.maxHeight = Math.max(120, (up ? r.top : window.innerHeight - r.bottom) - 12) + 'px';
     if (up) menu.style.bottom = (window.innerHeight - r.top + 4) + 'px'; else menu.style.top = (r.bottom + 4) + 'px';
     menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
     return menu;
   }
+  function openSubmenu(anchor, fill, takeFocus) {
+    closeSubmenu();
+    submenuParent = anchor; anchor.setAttribute('aria-expanded', 'true');
+    submenu = el('div', 'pop sub'); submenu.id = 'submenu'; submenu.setAttribute('role', 'menu');
+    if (menu) submenu.style.setProperty('--accent', menu.style.getPropertyValue('--accent'));
+    fill(submenu); document.body.append(submenu);
+    const r = anchor.getBoundingClientRect(), w = submenu.offsetWidth, h = submenu.offsetHeight;
+    const right = r.right + 4, left = r.left - w - 4;
+    submenu.style.left = (right + w <= window.innerWidth - 8 ? right : Math.max(8, left)) + 'px';
+    submenu.style.top = Math.max(8, Math.min(r.top, window.innerHeight - h - 8)) + 'px';
+    const first = submenu.querySelector('.it:not(.dis)');
+    if (takeFocus && first) first.focus();
+    return submenu;
+  }
+  function moveMenuItem(n, by) {
+    const box = n.closest('.pop'), rows = box ? [...box.querySelectorAll(':scope > .it:not(.dis)')] : [];
+    const at = rows.indexOf(n); if (at < 0 || !rows.length) return;
+    rows[(at + by + rows.length) % rows.length].focus();
+  }
   function item(label, o) {
     const n = el('div', 'it' + (o.checked ? ' on' : '') + (o.disabled ? ' dis' : '')); n.setAttribute('role', o.radio ? 'menuitemradio' : 'menuitem');
+    n.tabIndex = o.disabled ? -1 : 0;
+    if (o.disabled) n.setAttribute('aria-disabled', 'true');
     if (o.radio) n.setAttribute('aria-checked', String(!!o.checked));
     n.append(el('span', 'ck', o.checked ? '✓' : ''), el('span', 'l', label), el('span', 'hint', o.hint || ''));
+    if (o.submenu) {
+      n.classList.add('has-sub'); n.setAttribute('aria-haspopup', 'menu'); n.setAttribute('aria-expanded', 'false');
+      const more = el('span', 'chev', '›'); n.append(more);
+      const show = (focus) => { if (!o.disabled) openSubmenu(n, o.submenu, focus); };
+      n.addEventListener('mouseenter', () => show(false));
+      more.addEventListener('click', (e) => { e.stopPropagation(); show(true); });
+      n.addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); show(true); } });
+    } else n.addEventListener('mouseenter', () => { if (n.closest('#menu')) closeSubmenu(); });
     if (o.desc) n.append(el('span', 'd', o.desc));
     if (!o.disabled) n.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); o.pick(); });
+    n.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); moveMenuItem(n, e.key === 'ArrowDown' ? 1 : -1); }
+      else if (e.key === 'ArrowLeft' && n.closest('#submenu')) { e.preventDefault(); e.stopPropagation(); closeSubmenu(true); }
+      else if (e.key === 'Escape' && n.closest('#submenu')) { e.preventDefault(); e.stopPropagation(); closeSubmenu(true); }
+      else if ((e.key === 'Enter' || e.key === ' ') && !o.disabled) { e.preventDefault(); e.stopPropagation(); n.click(); }
+    });
     return n;
   }
   const norm = (list) => (list || []).map((x) => (typeof x === 'string' ? { value: x, label: x } : x));
@@ -986,7 +1038,8 @@ ${glyphCss}
     });
   });
   document.addEventListener('click', closeMenu);
-  document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (menu) closeMenu(); else if (dictating() && e.target !== $input) vscode.postMessage({ type: 'voiceCancel' }); });
+  document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (submenu) closeSubmenu(true); else if (menu) closeMenu(true); else if (dictating() && e.target !== $input) vscode.postMessage({ type: 'voiceCancel' }); });
+  window.addEventListener('resize', () => closeSubmenu());
   $('e-claude').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'claude' }));
   $('e-codex').addEventListener('click', () => vscode.postMessage({ type: 'new', kind: 'codex' }));
 
@@ -1183,7 +1236,10 @@ ${glyphCss}
     $meter.hidden = !meter;
     if (!meter) return;
     const claude = meterKind === 'claude';
-    $mClaude.hidden = !claude; $mCodex.hidden = claude; $mb.hidden = false;
+    // These are actions, not identity marks: show where the tab can continue. The current vendor is already the tab's
+    // icon, composer, model and backend.
+    const destination = t.switchTo && t.switchTo.kind ? t.switchTo.kind : claude ? 'codex' : 'claude';
+    $mClaude.hidden = destination !== 'claude'; $mCodex.hidden = destination !== 'codex'; $mb.hidden = false;
     $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
     $msubs.hidden = !t.thread; syncUsageButton();   // a tab whose session is on record: its usage, thread by thread
     $mindex.hidden = !t.index; syncIndexButton();   // codebase search on for the workspace: the index, folder by folder
@@ -1237,25 +1293,37 @@ ${glyphCss}
     });
   });
   $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
-  // the vendor's mark: go on in this tab with the other vendor (note 202), or open the vendor's site
-  const SITE = { claude: ['claude.ai', 'https://claude.ai/'], codex: ['chatgpt.com', 'https://chatgpt.com/'] };
+  // A destination vendor's mark: go on in this tab with that vendor (note 202). A model row means its default effort;
+  // its contextual submenu pins one of the effort levels that model actually accepts.
   function vendorMenu(anchor) {
     const t = cur(); if (!t) return;
-    openMenu('vendor', anchor, (m) => {
+    return openMenu('vendor', anchor, (m) => {
       const to = t.switchTo || { kind: t.kind === 'claude' ? 'codex' : 'claude', models: [] }, busy = !!(t.busy || t.attention);
       m.style.setProperty('--accent', to.kind === 'claude' ? '#D97757' : '#10a37f');
       const h = el('div', 'h'); h.append(badge(to.kind), document.createTextNode(' Continue on ' + VNAME[to.kind])); m.append(h);
-      m.append(el('div', 'note', busy ? 'Once this turn has ended.' : 'This tab goes on with ' + VNAME[to.kind] + ', which reads the conversation so far with your next message.'));
+      m.append(el('div', 'note', busy ? 'Once this turn has ended.' : 'Choose a model for its default effort, or open › for a specific effort. ' + VNAME[to.kind] + ' reads the conversation so far with your next message.'));
       m.classList.add('vendor');
-      for (const o of to.models) m.append(item(o.label, { hint: o.value, disabled: busy, pick: () => vscode.postMessage({ type: 'switchVendor', sid: t.id, kind: to.kind, model: o.value }) }));
-      const site = SITE[t.kind];
-      m.append(el('div', 'h', VNAME[t.kind]));
-      m.append(item('Open ' + site[0], { pick: () => vscode.postMessage({ type: 'openExternal', url: site[1] }) }));
+      for (const o of to.models) {
+        const efforts = norm(o.efforts).filter((e) => e.value);
+        const pick = (effort) => vscode.postMessage({ type: 'switchVendor', sid: t.id, kind: to.kind, model: o.value, effort });
+        const sub = efforts.length ? (sm) => {
+          sm.append(el('div', 'h', o.label + ' effort'));
+          sm.append(el('div', 'note', 'Click the model itself for ' + (o.defaultEffort ? 'its default, ' + cap(o.defaultEffort) + '.' : 'the model\\'s default.')));
+          for (const e of efforts) sm.append(item(cap(e.label), { pick: () => pick(e.value) }));
+        } : null;
+        m.append(item(o.label, { hint: o.value, disabled: busy, submenu: sub, pick: () => pick('') }));
+      }
     });
   }
-  $mClaude.title = 'Continue on Codex, or open claude.ai'; $mCodex.title = 'Continue on Claude, or open chatgpt.com';
+  $mClaude.title = 'Continue on Claude'; $mCodex.title = 'Continue on Codex';
   $mClaude.addEventListener('click', (e) => { e.stopPropagation(); vendorMenu($mClaude); });
   $mCodex.addEventListener('click', (e) => { e.stopPropagation(); vendorMenu($mCodex); });
+  for (const b of [$mClaude, $mCodex]) b.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault(); e.stopPropagation();
+      const m = vendorMenu(b), first = m && m.querySelector('.it:not(.dis)'); if (first) first.focus();
+    }
+  });
   $mu.addEventListener('click', () => { if (onGateway) return; vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }); });
 
   window.addEventListener('message', (e) => {

@@ -39,6 +39,7 @@ const with_ = (t, o) => Object.assign({}, t, o);
 const key = (el, k, o) => el.dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, o)));
 const type = (text) => { $('#input').value = text; $('#input').dispatchEvent(new window.Event('input', { bubbles: true })); };
 const menuItems = () => $$('#menu .it').map((n) => ({ label: n.querySelector('.l').textContent, on: n.classList.contains('on'), dis: n.classList.contains('dis'), hint: n.querySelector('.hint').textContent, desc: (n.querySelector('.d') || {}).textContent || '', n }));
+const submenuItems = () => $$('#submenu .it').map((n) => ({ label: n.querySelector('.l').textContent, n }));
 const pickItem = (label) => { const it = menuItems().find((x) => x.label === label); assert(it, 'menu item ' + label); it.n.click(); };
 
 assert.deepStrictEqual(out.shift(), { type: 'ready' }, 'page announces ready');
@@ -247,29 +248,51 @@ const CODEX = { vendor: 'Codex', plan: 'plus', asOf: true, level: 'ok', action: 
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
 assert(shown($('#meter')) && !$('#m-where'), 'beneath a Codex tab: the ChatGPT plan\'s usage; no "Work locally" label, since there is nowhere else to work');
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
-assert(shown($('#m-codex')) && !shown($('#m-claude')), 'the ChatGPT glyph; no Claude glyph, and the backend switch shows Codex\'s backend');
-assert.strictEqual($('#m-codex .k').className, 'k glyph codex');
+assert(shown($('#m-claude')) && !shown($('#m-codex')), 'the Claude glyph is the destination under a Codex tab; the backend still shows Codex\'s backend');
+assert.strictEqual($('#m-claude .k').className, 'k glyph claude');
 assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus. Click to open your usage page.']);
 $('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
-// the vendor mark: go on with the other vendor, or open the vendor's site (note 202)
-const SW = { kind: 'claude', models: [{ value: '', label: 'default · Opus 5.5' }, { value: 'claude-fable-5-1', label: 'Fable 5.1' }] };
-assert.strictEqual($('#m-codex').title, 'Continue on Claude, or open chatgpt.com');
-$('#m-codex').click();
-assert.deepStrictEqual(menuItems().map((i) => [i.label, i.dis]), [['Open chatgpt.com', false]], 'a busy tab with no models offered: only the site');
-assert(/Once this turn has ended/.test($('#menu').textContent)); $('#m-codex').click();
+// the destination mark: a model row means its default effort; its contextual submenu pins one of that model's levels
+const SW = { kind: 'claude', models: [
+  { value: '', label: 'default · Opus 5.5', efforts: ['low', 'high', 'max'], defaultEffort: '' },
+  { value: 'claude-fable-5-1', label: 'Fable 5.1', efforts: ['low', 'high', 'max'], defaultEffort: '' },
+  { value: 'haiku', label: 'Haiku 4.5', efforts: [], defaultEffort: '' },
+] };
+assert.deepStrictEqual([$('#m-claude').title, $('#m-claude').getAttribute('aria-label')], ['Continue on Claude', 'Continue on Claude']);
+$('#m-claude').click();
+assert.deepStrictEqual(menuItems(), [], 'before the catalog arrives there is no model to choose');
+assert(/Once this turn has ended/.test($('#menu').textContent)); $('#m-claude').click();
 host({ type: 'tabs', tabs: [A, with_(B, { switchTo: SW })], active: 'b' });
-$('#m-codex').click();
+$('#m-claude').focus(); key($('#m-claude'), 'Enter');
+assert.strictEqual(d.activeElement.querySelector('.l').textContent, 'default · Opus 5.5', 'keyboard opening moves into the destination model menu');
+key(d.activeElement, 'Escape'); assert.deepStrictEqual([$('#menu'), d.activeElement], [null, $('#m-claude')], 'Escape closes the model menu and returns to its icon');
+$('#m-claude').click();
 assert(/Continue on Claude/i.test($('#menu .h').textContent) && $('#menu .h .k.claude'), 'headed by the other vendor, with its mark');
-assert.deepStrictEqual(menuItems().map((i) => [i.label, i.dis]), [['default · Opus 5.5', false], ['Fable 5.1', false], ['Open chatgpt.com', false]]);
-pickItem('Fable 5.1'); assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'b', kind: 'claude', model: 'claude-fable-5-1' });
-// a longer list, as Codex's is: each row sends its own model
-host({ type: 'tabs', tabs: [A, with_(B, { switchTo: { kind: 'codex', models: [{ value: '', label: 'default · GPT-5.6-Sol' }, { value: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }, { value: 'gpt-6-astra', label: 'GPT-6-Astra' }, { value: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }] } })], active: 'b' });
-for (const [label, value] of [['GPT-6-Astra', 'gpt-6-astra'], ['GPT-6.1-Sol', 'gpt-6.1-sol'], ['default · GPT-5.6-Sol', '']]) { $('#m-codex').click(); assert.strictEqual(menuItems().find((i) => i.label === label).hint, value, 'each row shows its model id beside the name'); pickItem(label); assert.strictEqual(out.pop().model, value, label); }
+assert.deepStrictEqual(menuItems().map((i) => [i.label, i.dis, i.n.getAttribute('aria-haspopup')]), [['default · Opus 5.5', false, 'menu'], ['Fable 5.1', false, 'menu'], ['Haiku 4.5', false, null]]);
+menuItems()[0].n.dispatchEvent(new window.MouseEvent('mouseenter')); assert.deepStrictEqual(submenuItems().map((i) => i.label), ['Low', 'High', 'Max'], 'hover opens that model\'s efforts');
+$('#menu').dispatchEvent(new window.Event('scroll')); assert.strictEqual($('#submenu'), null, 'scrolling a long model menu closes its now-detached effort menu');
+menuItems()[0].n.dispatchEvent(new window.MouseEvent('mouseenter')); assert.deepStrictEqual(submenuItems().map((i) => i.label), ['Low', 'High', 'Max']);
+menuItems()[2].n.dispatchEvent(new window.MouseEvent('mouseenter')); assert.strictEqual($('#submenu'), null, 'a model with no effort control closes the contextual menu');
+pickItem('Fable 5.1'); assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'b', kind: 'claude', model: 'claude-fable-5-1', effort: '' }, 'the model row asks for its default effort');
+$('#m-claude').click();
+{ const f = menuItems().find((i) => i.label === 'Fable 5.1'); f.n.querySelector('.chev').click();
+  assert.deepStrictEqual(submenuItems().map((i) => i.label), ['Low', 'High', 'Max']);
+  assert(/model's default/.test($('#submenu .note').textContent));
+  submenuItems().find((i) => i.label === 'High').n.click();
+  assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'b', kind: 'claude', model: 'claude-fable-5-1', effort: 'high' }, 'an effort row pins that level'); }
+// keyboard: Right opens the contextual effort menu, arrows move within it, Left returns to the model
+$('#m-claude').click();
+{ const f = menuItems().find((i) => i.label === 'Fable 5.1').n; f.focus(); key(f, 'ArrowRight');
+  assert.strictEqual(d.activeElement.querySelector('.l').textContent, 'Low'); key(d.activeElement, 'ArrowDown'); assert.strictEqual(d.activeElement.querySelector('.l').textContent, 'High');
+  key(d.activeElement, 'ArrowLeft'); assert.deepStrictEqual([$('#submenu'), d.activeElement], [null, f]); key(f, 'Escape'); }
+$('#m-claude').click(); pickItem('Haiku 4.5'); assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'b', kind: 'claude', model: 'haiku', effort: '' }, 'a model with no effort control uses its default directly');
+// a longer list, as Codex's is: each row sends its own model and default effort
+const CSW = { kind: 'codex', models: [{ value: '', label: 'default · GPT-5.6-Sol', efforts: ['high', 'ultra'], defaultEffort: 'ultra' }, { value: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: ['high', 'ultra'], defaultEffort: 'ultra' }, { value: 'gpt-6-astra', label: 'GPT-6-Astra', efforts: ['high'], defaultEffort: 'high' }, { value: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', efforts: [], defaultEffort: '' }] };
+host({ type: 'tabs', tabs: [with_(A, { switchTo: CSW }), B], active: 'a' });
+for (const [label, value] of [['GPT-6-Astra', 'gpt-6-astra'], ['GPT-6.1-Sol', 'gpt-6.1-sol'], ['default · GPT-5.6-Sol', '']]) { $('#m-codex').click(); assert.strictEqual(menuItems().find((i) => i.label === label).hint, value, 'each row shows its model id beside the name'); pickItem(label); assert.deepStrictEqual(out.pop(), { type: 'switchVendor', sid: 'a', kind: 'codex', model: value, effort: '' }, label); }
 $('#m-codex').click(); assert($('#menu').classList.contains('vendor'), 'the vendor menu is marked, for its roomier rows'); $('#m-codex').click();
-host({ type: 'tabs', tabs: [A, with_(B, { switchTo: SW })], active: 'b' });
-$('#m-codex').click(); pickItem('Open chatgpt.com'); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/' }, 'the site is still a click away');
 host({ type: 'tabs', tabs: [A, with_(B, { busy: true, switchTo: SW })], active: 'b' });
-$('#m-codex').click(); assert.deepStrictEqual(menuItems().map((i) => i.dis), [true, true, false], 'while the tab works, it cannot switch'); $('#m-codex').click();
+$('#m-claude').click(); assert.deepStrictEqual(menuItems().map((i) => [i.dis, i.n.getAttribute('aria-disabled')]), [[true, 'true'], [true, 'true'], [true, 'true']], 'while the tab works, every choice is disabled visually and for assistive technology'); assert.strictEqual($('#submenu'), null); $('#m-claude').click();
 // under a Codex tab the backend button shows the Codex backend, and a click asks the host to switch it
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { bedrock: { endpoint: 'runtime', region: 'us-west-2', profile: 'dev' }, backend: 'chatgpt', backendLabel: 'ChatGPT', backendTitle: 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.' }) });
 assert.deepStrictEqual([shown($('#m-backend')), $('#m-backend').textContent, $('#m-backend').title], [true, 'ChatGPT', 'Codex runs on your ChatGPT login and its plan. Click to use an OpenAI API key instead.']);
@@ -280,7 +303,7 @@ $('#m-backend').click();
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
 assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: CODEX });
-assert.strictEqual($('#m-claude').title, 'Continue on Codex, or open claude.ai');
+assert.strictEqual($('#m-claude').title, 'Continue on Claude');
 assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
 $('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
 host({ type: 'meter', meter: null, codex: Object.assign({}, CODEX, { plan: '', level: 'none', text: '\u2014', segments: [], fetchedAt: null, lines: ['Codex usage unavailable: no Codex session on this machine has reported usage yet.'] }) });
@@ -288,7 +311,7 @@ assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), s
 assert.strictEqual($('#m-usage').title, 'Codex usage unavailable: no Codex session on this machine has reported usage yet.\nClick to refresh.');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
-assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan'))], [['26m 85%'], true, true, false, false], 'switching to a Claude tab switches the footer');
+assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan'))], [['26m 85%'], true, false, true, false], 'switching to a Claude tab switches the footer and offers Codex as the destination');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '25m 84%', level: 'ok', title: 'claude 5h' }] } });
 host({ type: 'tabs', tabs: [A, B], active: 'b' });
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'a Claude update that does not mention Codex leaves the Codex reading in place');
@@ -633,7 +656,7 @@ assert(shown($m));
 assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn')], ['sub', METER.backendTitle, false]);
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
 assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
-assert.strictEqual($('#m-claude .k').className, 'k glyph claude', 'marked as Claude'); assert(shown($('#m-claude')) && !shown($('#m-codex')) && !shown($('#m-plan')));
+assert.strictEqual($('#m-codex .k').className, 'k glyph codex', 'Codex is the destination under a Claude tab'); assert(!shown($('#m-claude')) && shown($('#m-codex')) && !shown($('#m-plan')));
 // under a Claude tab the backend button is a menu: the window's two backends, and the gateway for this tab
 $mb.click();
 assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', true], ['API / Bedrock', false], ['LLM gateway', false]], 'the window\'s backend is checked');
