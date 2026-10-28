@@ -656,8 +656,8 @@ would ask for.
 The footer follows the active tab.
 
 **Under a Codex tab**: a **backend menu** (`ChatGPT`, `API` or
-`Bedrock`), your ChatGPT plan, and the plan's usage: percent remaining and
-time to reset for the five-hour window and the week. The menu moves
+`Bedrock`), the **usage** button, and the plan's usage: percent remaining
+and time to reset for the five-hour window and the week. The menu moves
 Codex between your ChatGPT login, an OpenAI API key and Amazon Bedrock.
 Choosing the key the first time asks for it and keeps it in VS Code's
 secret storage, never in a file of perch's; Codex gets it in its
@@ -704,7 +704,21 @@ is shown as full again. perch re-reads after each Codex turn it runs.
   reset for the 5-hour session, the week, and any model-scoped weekly
   limit, amber or red when one runs low. On API / Bedrock: the model in
   use and today's tokens and estimated cost, from the local transcripts.
-  Click to refresh. Hover for detail.
+  Hover for detail.
+- the **usage** button, beside **index** and **sub-agents**; it and the
+  gauge open the same panel. Under either vendor the panel has the same
+  shape: the backend; the plan as the vendor reports it (ChatGPT names
+  yours, `Pro`, with its credits; Anthropic's usage endpoint names none,
+  so none is shown); each window with its percent remaining, a word for
+  a low one beside its colour, and its reset time; when the reading was
+  made (a Codex reading is as of the last Codex turn on this machine);
+  **refresh**, or **log in** when that is what is missing; a link to the
+  account's usage page; and **session breakdown**, which opens the
+  sub-agents table. On the API key or on Bedrock it says there are no
+  plan limits, only the account's bill, and under Claude's API / Bedrock
+  it shows the cost estimate, marked as one; through the gateway it says
+  nothing is reported. A stale reading is kept and marked stale. One of
+  the three panels is open at a time; Escape closes it.
 
 This is [AI Meter](https://github.com/seanahn/ai-meter) merged into perch.
 The gauge lives in the footer of each tab; perch puts nothing in the

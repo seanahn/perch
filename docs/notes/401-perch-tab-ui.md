@@ -179,7 +179,13 @@ on Claude: [Codex]  [future vendor A] [future vendor B]
 
 Perch continues to read marks from the vendors' extensions and ships no vendor logo of its own.
 
-## Proposal: one usage control
+## One usage control
+
+Built 2026-10-28 as proposed below. Differences from the proposal: the compact reading keeps its
+colours and tooltip; a Codex panel also shows the plan's credits; one of the footer's three panels
+(usage, index, sub-agents) is open at a time; the account's usage page is a link in the panel's
+foot. The protocol gained no message: the panel is page state, and its buttons send the existing
+`meterRefresh`, `meterLogin` and `openExternal`.
 
 Replace the Codex-only plan badge with a small **usage** toggle on every tab. The label describes
 the action; plan names such as `plus`, `pro`, or `max` are data shown inside its panel.

@@ -250,8 +250,20 @@ assert(shown($('#meter')) && !$('#m-where'), 'beneath a Codex tab: the ChatGPT p
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'Codex figures, not Claude\'s');
 assert(shown($('#m-claude')) && !shown($('#m-codex')), 'the Claude glyph is the destination under a Codex tab; the backend still shows Codex\'s backend');
 assert.strictEqual($('#m-claude .k').className, 'k glyph claude');
-assert.deepStrictEqual([shown($('#m-plan')), $('#m-plan').textContent, $('#m-plan').title], [true, 'plus', 'ChatGPT plan: plus. Click to open your usage page.']);
-$('#m-plan').click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the plan badge opens the usage page');
+// the plan is inside the usage panel, the same control under both vendors; no Codex-only badge
+assert.strictEqual($('#m-plan'), null, 'no plan badge');
+const puOf = () => $$('.pane').find((n) => !n.hidden).querySelector('.pu'), puRows = () => [...puOf().querySelectorAll('table:not(.lim) tr')].map((tr) => [tr.children[0].textContent, tr.children[1].textContent]);
+const limRows = () => [...puOf().querySelectorAll('.lim tr')].slice(1).map((tr) => [[...tr.children].map((td) => td.textContent), tr.className]);
+assert.deepStrictEqual([shown($('#m-use')), $('#m-use').textContent, $('#m-use').getAttribute('aria-pressed'), shown(puOf())], [true, 'usage', 'false', false]);
+$('#m-use').click();
+assert.deepStrictEqual([shown(puOf()), $('#m-use').getAttribute('aria-pressed'), puOf().querySelector('.mxh .what').textContent, puRows()], [true, 'true', 'Codex usage', [['Backend', 'ChatGPT (login)'], ['Plan', 'Plus']]], 'the backend, and the plan as ChatGPT reports it');
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: Object.assign({}, CODEX, { credits: { has: true, unlimited: false, balance: '12.50' }, limits: [{ kind: 'session', name: '5h session', remaining: 96, reset: '14:00', eta: '2h', level: 'ok', resetsAt: 'x' }, { kind: 'weekly_all', name: 'Weekly', remaining: 19, reset: 'Mon 09:00', eta: '6d', level: 'warn', resetsAt: 'y' }] }) });
+assert.deepStrictEqual([puRows(), limRows()], [[['Backend', 'ChatGPT (login)'], ['Plan', 'Plus'], ['Credits', '12.50']], [[['5h session', '96%', '14:00 (2h)'], ''], [['Weekly', '19% \u00b7 low', 'Mon 09:00 (6d)'], 'warn']]], 'a new reading redraws the open panel: each window, its level in words beside its colour, and the credits');
+assert(/^As of the last Codex turn on this machine, /.test(puOf().querySelector('.foot span').textContent), 'a Codex reading says how old it is');
+[...puOf().querySelectorAll('.foot .lnk')].pop().click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }, 'the account is managed on the vendor\'s page');
+puOf().querySelector('.mxh .again').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' }, 'refresh lives in the panel');
+puOf().querySelector('.mxh .x').click(); assert.deepStrictEqual([shown(puOf()), $('#m-use').getAttribute('aria-pressed')], [false, 'false']);
+host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
 // the destination mark: a model row means its default effort; its contextual submenu pins one of that model's levels
 const SW = { kind: 'claude', models: [
   { value: '', label: 'default · Opus 5.5', efforts: ['low', 'high', 'max'], defaultEffort: '' },
@@ -301,17 +313,18 @@ $('#m-backend').click();
   assert(/The runtime endpoint in us-west-2, profile dev/.test(menuItems()[2].desc), 'Bedrock\'s entry says where it goes');
   $$('#menu .it')[2].click(); assert.deepStrictEqual([out.pop(), $('#menu')], [{ type: 'codexBackend', value: 'bedrock' }, null], 'a choice goes to the host and closes the menu'); }
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: Object.assign({}, CODEX, { backend: 'api', backendLabel: 'API', backendTitle: 'on the key', plan: '', segments: [], level: 'none', lines: ['Codex is on your API key: billed per token, no plan limits.'] }) });
-assert.deepStrictEqual([$('#m-backend').textContent, shown($('#m-plan')), [...$('#m-usage').children].map((n) => n.textContent)], ['API', false, ['\u2014']], 'on the key: no plan badge, no limits');
+assert.deepStrictEqual([$('#m-backend').textContent, [...$('#m-usage').children].map((n) => n.textContent)], ['API', ['\u2014']], 'on the key: no limits');
+$('#m-usage').click(); assert.deepStrictEqual([puRows(), puOf().querySelector('.line').textContent], [[['Backend', 'OpenAI API key'], ['Plan', 'none: billed per token']], 'Codex is on your API key: billed per token, no plan limits.'], 'the panel says what the key means for the plan'); assert.strictEqual([...puOf().querySelectorAll('.foot .lnk')].length, 0, 'no usage page to manage'); $('#m-use').click();
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: '', level: 'ok', action: 'refresh', lines: [], segments: [] }, codex: CODEX });
 assert.strictEqual($('#m-claude').title, 'Continue on Claude');
-assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
-$('#m-usage').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'codex' });
+assert(/^5h session: 96% remaining\nAs of the last Codex turn on this machine, .*\. Click for detail and to refresh\.$/.test($('#m-usage').children[0].title), 'the reading says how old it is');
+$('#m-usage').click(); assert(shown(puOf()) && $('#m-use').getAttribute('aria-pressed') === 'true', 'the compact reading opens the same panel'); $('#m-usage').click(); assert(!shown(puOf()));
 host({ type: 'meter', meter: null, codex: Object.assign({}, CODEX, { plan: '', level: 'none', text: '\u2014', segments: [], fetchedAt: null, lines: ['Codex usage unavailable: no Codex session on this machine has reported usage yet.'] }) });
-assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-plan'))], [['\u2014'], false]);
-assert.strictEqual($('#m-usage').title, 'Codex usage unavailable: no Codex session on this machine has reported usage yet.\nClick to refresh.');
+assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['\u2014']);
+assert.strictEqual($('#m-usage').title, 'Codex usage unavailable: no Codex session on this machine has reported usage yet.\nClick for detail and to refresh.');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '26m 85%', level: 'ok', title: 'claude 5h' }] }, codex: CODEX });
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
-assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-plan'))], [['26m 85%'], true, false, true, false], 'switching to a Claude tab switches the footer and offers Codex as the destination');
+assert.deepStrictEqual([[...$('#m-usage').children].map((n) => n.textContent), shown($('#m-backend')), shown($('#m-claude')), shown($('#m-codex')), shown($('#m-use'))], [['26m 85%'], true, false, true, true], 'switching to a Claude tab switches the footer and offers Codex as the destination');
 host({ type: 'meter', meter: { vendor: 'Claude', backendLabel: 'sub', backendTitle: 'Claude backend', level: 'ok', action: 'refresh', lines: ['c'], segments: [{ text: '25m 84%', level: 'ok', title: 'claude 5h' }] } });
 host({ type: 'tabs', tabs: [A, B], active: 'b' });
 assert.deepStrictEqual([...$('#m-usage').children].map((n) => n.textContent), ['2.3h 96%', '6.9d 99%'], 'a Claude update that does not mention Codex leaves the Codex reading in place');
@@ -655,8 +668,8 @@ host({ type: 'meter', meter: METER });
 assert(shown($m));
 assert.deepStrictEqual([$mb.textContent, $mb.title, $mb.classList.contains('warn')], ['sub', METER.backendTitle, false]);
 assert.deepStrictEqual([...$mu.children].map((n) => [n.textContent, n.className]), [['1.0h 91%', 'seg ok'], ['6.5d 20%', 'seg warn']], 'each limit keeps its own colour');
-assert(/^5h session: 91% remaining\nUpdated .*\. Click to refresh\.$/.test($mu.children[0].title));
-assert.strictEqual($('#m-codex .k').className, 'k glyph codex', 'Codex is the destination under a Claude tab'); assert(!shown($('#m-claude')) && shown($('#m-codex')) && !shown($('#m-plan')));
+assert(/^5h session: 91% remaining\nUpdated .*\. Click for detail and to refresh\.$/.test($mu.children[0].title));
+assert.strictEqual($('#m-codex .k').className, 'k glyph codex', 'Codex is the destination under a Claude tab'); assert(!shown($('#m-claude')) && shown($('#m-codex')) && shown($('#m-use')));
 // under a Claude tab the backend button is a menu: the window's two backends, and the gateway for this tab
 $mb.click();
 assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', true], ['API / Bedrock', false], ['LLM gateway', false]], 'the window\'s backend is checked');
@@ -665,17 +678,34 @@ pickItem('LLM gateway'); assert.deepStrictEqual(out.pop(), { type: 'setBackend',
 assert.strictEqual($('#menu'), null, 'the menu closes on a choice');
 $mb.click(); pickItem('API / Bedrock'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'api' });
 $mb.click(); pickItem('subscription (login)'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'subscription' });
-$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'claude' });
+// the usage panel under a Claude tab: no plan is named, since Anthropic's usage endpoint names none; each window; refresh
+$mu.click(); assert(shown(puOf()) && $('#m-use').getAttribute('aria-pressed') === 'true', 'the compact reading opens the usage panel');
+assert.deepStrictEqual([puOf().querySelector('.mxh .what').textContent, puRows()], ['Claude usage', [['Backend', 'subscription (login)'], ['Plan', 'not reported']]]);
+puOf().querySelector('.mxh .again').click(); assert.deepStrictEqual(out.pop(), { type: 'meterRefresh', vendor: 'claude' });
+host({ type: 'meter', meter: Object.assign({}, METER, { limits: [{ kind: 'session', name: '5h session', remaining: 91, reset: '11:00', eta: '1h', level: 'ok', resetsAt: 'x' }, { kind: 'weekly_all', name: 'Weekly', remaining: 20, reset: 'Mon', eta: '6d', level: 'warn', resetsAt: 'y' }, { kind: 'weekly_scoped', name: 'Fable weekly', remaining: 5, reset: 'Mon', eta: '6d', level: 'error', resetsAt: 'y' }] }) });
+assert.deepStrictEqual(limRows(), [[['5h session', '91%', '11:00 (1h)'], ''], [['Weekly', '20% \u00b7 low', 'Mon (6d)'], 'warn'], [['Fable weekly', '5% \u00b7 nearly out', 'Mon (6d)'], 'error']], 'each window, with words for its level');
+assert(/^Updated /.test(puOf().querySelector('.foot span').textContent));
+[...puOf().querySelectorAll('.foot .lnk')].pop().click(); assert.deepStrictEqual(out.pop(), { type: 'openExternal', url: 'https://claude.ai/settings/usage' });
+$('#input').focus(); key($('#input'), 'Escape'); assert.deepStrictEqual([shown(puOf()), $('#m-use').getAttribute('aria-pressed')], [false, 'false'], 'Escape closes the panel before it reaches the composer');
 host({ type: 'meter', meter: Object.assign({}, METER, { stale: true, lines: METER.lines.concat('Showing the last reading: the usage endpoint is rate limiting requests.') }) });
 assert($mu.classList.contains('stale')); assert(/^5h session: 91% remaining\nShowing the last reading: .*rate limiting requests\.\nUpdated /.test($mu.children[0].title), 'a kept reading says it is old, and why');
-host({ type: 'meter', meter: Object.assign({}, METER, { backend: 'api', backendLabel: 'API', backendWarn: true, mode: 'cost', level: 'ok', text: 'opus-5 5.2M $18.9', segments: [seg('opus-5', 'ok'), seg('5.2M', 'ok'), seg('$18.9', 'ok')], lines: ['Claude cost', 'Today 5.2M'] }) });
+$('#m-use').click(); assert(/^Showing the last reading: .*rate limiting requests\.$/.test(puOf().querySelector('.line.stale').textContent), 'the panel marks a kept reading stale, and says why'); $('#m-use').click();
+host({ type: 'meter', meter: Object.assign({}, METER, { backend: 'api', backendLabel: 'API', backendWarn: true, backendName: 'API / Bedrock', cost: { session: { tokens: 1200000, cost: 4.5 }, today: { tokens: 5200000, cost: 18.9 }, latestModel: 'opus-5', models: [{ model: 'claude-opus-5', tokens: 5200000, cost: 18.9 }] }, mode: 'cost', level: 'ok', text: 'opus-5 5.2M $18.9', segments: [seg('opus-5', 'ok'), seg('5.2M', 'ok'), seg('$18.9', 'ok')], lines: ['Claude cost', 'Today 5.2M'] }) });
 assert.deepStrictEqual([$mb.textContent, $mb.classList.contains('warn')], ['API ⚠', true], 'a backend with no credentials is flagged');
 assert.deepStrictEqual([...$mu.children].map((n) => n.textContent), ['opus-5', '5.2M', '$18.9']);
 assert(/^Claude cost\nToday 5\.2M\nUpdated /.test($mu.title), 'segments without their own tooltip share the detail');
+$('#m-use').click(); assert.deepStrictEqual([puRows(), limRows().map((r) => r[0]), /list prices; the provider's bill can differ/.test(puOf().querySelector('.line').textContent), [...puOf().querySelectorAll('.foot .lnk')].length], [[['Backend', 'API / Bedrock'], ['Plan', 'none: billed per token']], [['Session (5h)', '1.2M tokens \u00b7 \u2248$4.50'], ['Today', '5.2M tokens \u00b7 \u2248$18.90'], ['claude-opus-5', '5.2M tokens \u00b7 \u2248$18.90']], true, 0], 'on the API: the estimate, marked as one, and no plan page'); $('#m-use').click();
 host({ type: 'meter', meter: Object.assign({}, METER, { level: 'none', action: 'login', text: '—', segments: [], fetchedAt: null, lines: ['Claude usage unavailable: not logged in.'] }) });
 assert.deepStrictEqual([...$mu.children].map((n) => n.textContent), ['log in']);
-assert.strictEqual($mu.title, 'Claude usage unavailable: not logged in.\nClick to log in.');
-$mu.click(); assert.deepStrictEqual(out.pop(), { type: 'meterLogin' }, 'with no login, the gauge logs in instead of refreshing');
+assert.strictEqual($mu.title, 'Claude usage unavailable: not logged in.\nClick for detail, and to log in.');
+$mu.click(); { const lg = puOf().querySelector('.mxh .again'); assert.deepStrictEqual([lg.textContent, puOf().querySelector('.line').textContent], ['log in', 'Claude usage unavailable: not logged in.']); lg.click(); assert.deepStrictEqual(out.pop(), { type: 'meterLogin' }, 'with no login, the panel offers to log in'); }
+// the panel follows the tab's vendor, and one panel is open at a time
+host({ type: 'meter', meter: METER, codex: CODEX });
+host({ type: 'tabs', tabs: [with_(A, { kind: 'codex', index: true }), B], active: 'a' });
+assert.deepStrictEqual([shown(puOf()), puOf().querySelector('.mxh .what').textContent, puRows()[0]], [true, 'Codex usage', ['Backend', 'ChatGPT (login)']], 'a vendor switch under an open panel shows the new vendor, never the old reading');
+$('#m-index').click(); assert.deepStrictEqual([shown(puOf()), $('#m-use').getAttribute('aria-pressed'), $('#m-index').getAttribute('aria-pressed')], [false, 'false', 'true'], 'opening index closes usage');
+$('#m-use').click(); assert.deepStrictEqual([$('#m-index').getAttribute('aria-pressed'), $('#m-use').getAttribute('aria-pressed')], ['false', 'true'], 'and the other way');
+$('#m-use').click(); host({ type: 'tabs', tabs: [A, B], active: 'a' }); out.length = 0;   // the index ask above is not this section's
 host({ type: 'meter', meter: null }); assert(!shown($m));
 host({ type: 'meter', meter: METER });
 
@@ -863,7 +893,7 @@ window.close();
   tabs6();
   assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
   const kids = [...p6.$$('.pane')[0].children].map((n) => [n.className, n.hidden]);
-  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true], ['subs mx ix', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage and the index until the footer opens them');
+  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true], ['subs mx ix', true], ['subs mx pu', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage, the index and the vendor\'s usage until the footer opens them');
 
   tabs6({ busy: true, busySince: Date.now() - 75000 });
   assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');

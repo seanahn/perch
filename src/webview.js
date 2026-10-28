@@ -92,6 +92,18 @@ ${glyphCss}
   .ix button.sw:hover { color: var(--vscode-foreground); }
   .ix button.sw:disabled { opacity: .5; cursor: default; }
   .ix tr.off td { color: var(--vscode-disabledForeground, inherit); }
+  /* the vendor's usage, opened from the footer: the backend and plan, each window of the plan or the cost, and when it was read */
+  .pu th { cursor: default; }
+  .pu th:hover { color: inherit; }
+  .pu table + table { margin-top: 4px; }
+  .pu tr.warn td { color: var(--vscode-charts-yellow); }
+  .pu tr.error td { color: var(--vscode-charts-red); font-weight: 600; }
+  .pu .line { margin-top: 3px; }
+  .pu .line.stale { font-style: italic; }
+  .pu .line.error { color: var(--vscode-charts-red); }
+  .pu .foot { display: flex; gap: 12px; margin-top: 4px; }
+  .pu button.lnk { background: none; border: none; padding: 0; font: inherit; color: var(--vscode-textLink-foreground); cursor: pointer; }
+  .pu button.lnk:hover { text-decoration: underline; }
   .subs.mx th.n, .subs.mx td.n { text-align: right; }
   .mx tr.main td, .mx tr.total td { font-weight: 600; }
   .mx tr.total td { border-top: 1px solid var(--vscode-panel-border); }
@@ -291,8 +303,6 @@ ${glyphCss}
   #m-claude, #m-codex { cursor: pointer; display: inline-flex; }
   #m-claude:hover, #m-codex:hover { opacity: .8; }
   #m-claude, #m-codex { flex: none; display: inline-flex; }
-  #meter .plan { flex: none; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); text-transform: capitalize; cursor: pointer; }
-  #meter .plan:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: none; color: inherit; }
   #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb[aria-pressed="true"] { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
@@ -326,7 +336,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-plan" class="plan" hidden></span><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><button id="m-use" class="mb" aria-pressed="false">usage</button><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -460,9 +470,10 @@ ${glyphCss}
     const subs = el('div', 'subs'); subs.hidden = true;   // the running turn's sub-agents as a table, opened from the count at the foot
     const mx = el('div', 'subs mx'); mx.hidden = true;    // the whole session's usage, thread by thread, opened from the footer
     const ix = el('div', 'subs mx ix'); ix.hidden = true;  // the codebase search index, folder by folder, opened from the footer
-    root.append(log, work, subs, mx, ix); $panes.append(root);
+    const pu = el('div', 'subs mx pu'); pu.hidden = true;  // the vendor's usage: the plan's windows or the cost, opened from the footer
+    root.append(log, work, subs, mx, ix, pu); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, pu, puOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -526,6 +537,7 @@ ${glyphCss}
   function toggleUsage(sid, open) {
     const p = panes.get(sid); if (!p) return;
     p.mxOpen = open === undefined ? !p.mxOpen : open;
+    if (p.mxOpen) closeOthers(p, 'mx');
     p.mx.hidden = !p.mxOpen;
     if (p.mxOpen) { askUsage(sid); if (!p.mxData) { p.mx.textContent = ''; p.mx.append(el('div', 'mxh', 'Reading this session\\'s files…')); } else drawUsage(p); }
     syncUsageButton(); pin(p);
@@ -539,12 +551,75 @@ ${glyphCss}
   function toggleIndex(sid, open) {
     const p = panes.get(sid); if (!p) return;
     p.ixOpen = open === undefined ? !p.ixOpen : open;
+    if (p.ixOpen) closeOthers(p, 'ix');
     p.ix.hidden = !p.ixOpen;
     if (p.ixTimer) { clearInterval(p.ixTimer); p.ixTimer = null; }
     if (p.ixOpen) { askIndex(sid); drawIndex(p); p.ixTimer = setInterval(() => askIndex(sid), INDEX_POLL_MS); }
     syncIndexButton(); pin(p);
   }
   function syncIndexButton() { const t = cur(), p = t ? panes.get(t.id) : null; $mindex.setAttribute('aria-pressed', p && p.ixOpen ? 'true' : 'false'); }
+  // ---- the vendor's usage, opened from the footer's "usage" or its compact reading: what the meter the page holds says
+  // of the active tab's vendor and backend (the plan's windows, or the cost), as it is and as old as it is; refresh and
+  // login live here. Presentation state only: the host acts on nothing until a button here asks it to. One of the three
+  // panels is open at a time, so the transcript keeps its room.
+  const USAGE_URL = { claude: 'https://claude.ai/settings/usage', codex: 'https://chatgpt.com/codex/settings/usage' };
+  function closeOthers(p, keep) {
+    if (keep !== 'mx' && p.mxOpen) toggleUsage(p.sid, false);
+    if (keep !== 'ix' && p.ixOpen) toggleIndex(p.sid, false);
+    if (keep !== 'pu' && p.puOpen) togglePlan(p.sid, false);
+  }
+  function togglePlan(sid, open) {
+    const p = panes.get(sid); if (!p) return;
+    p.puOpen = open === undefined ? !p.puOpen : open;
+    if (p.puOpen) closeOthers(p, 'pu');
+    p.pu.hidden = !p.puOpen;
+    if (p.puOpen) drawPlan(p);
+    syncPlanButton(); pin(p);
+  }
+  function syncPlanButton() { const t = cur(), p = t ? panes.get(t.id) : null; $muse.setAttribute('aria-pressed', p && p.puOpen ? 'true' : 'false'); }
+  const planCap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+  function drawPlan(p) {
+    const box = p.pu, t = tabs.find((x) => x.id === p.sid), kind = t ? t.kind : null, m = kind ? meters[kind] : null; box.textContent = '';
+    const codex = kind === 'codex', vendor = codex ? 'Codex' : 'Claude', gw = !codex && !!(t && t.gateway), login = !!(m && m.action === 'login');
+    const head = el('div', 'mxh'), what = el('span', 'what', vendor + ' usage'), act = el('button', 'again', login ? 'log in' : 'refresh'), close = el('button', 'x', '×');
+    act.title = login ? 'Log in to ' + vendor + ', so a reading can be made' : codex ? 'Read the last Codex turn\\'s figures again' : 'Read the usage again';
+    act.hidden = gw || !m || m.action === null;
+    act.addEventListener('click', () => vscode.postMessage(login ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: kind }));
+    close.title = 'Close'; close.addEventListener('click', () => togglePlan(p.sid, false));
+    head.append(what, act, close); box.append(head);
+    const table = el('table'), row = (k, v) => { const tr = el('tr'); tr.append(el('th', null, k), el('td', null, v)); table.append(tr); };
+    // the backend and the plan as the vendor reports them: Anthropic's usage endpoint names no plan, so none is invented here
+    row('Backend', gw ? 'LLM gateway, this tab\\'s own' : !m ? '—' : codex ? (m.backend === 'api' ? 'OpenAI API key' : m.backend === 'bedrock' ? 'Amazon Bedrock' : 'ChatGPT (login)') : m.backendName || m.backendLabel || '—');
+    row('Plan', gw ? 'not reported through the gateway' : !m ? '—' : codex ? (m.backend === 'api' ? 'none: billed per token' : m.backend === 'bedrock' ? 'none: billed to the AWS account' : m.plan ? planCap(m.plan) : 'not reported') : m.mode === 'cost' ? 'none: billed per token' : 'not reported');
+    if (codex && m && m.credits) row('Credits', m.credits.unlimited ? 'unlimited' : m.credits.has ? m.credits.balance || 'some' : 'none');
+    box.append(table);
+    const note = (text, cls) => box.append(el('div', 'line' + (cls ? ' ' + cls : ''), text));
+    if (gw) note('Usage through the gateway is not reported here. The line under each answer shows its tokens and which models answered.');
+    else if (!m) note('No reading yet for ' + vendor + '.');
+    else if (m.limits && m.limits.length) {
+      const lt = el('table', 'lim'), hr = el('tr'); for (const h of ['window', 'remaining', 'resets']) hr.append(el('th', null, h)); lt.append(hr);
+      for (const l of m.limits) {   // a level in words beside its colour
+        const tr = el('tr', l.level === 'ok' ? '' : l.level);
+        tr.append(el('td', null, l.name), el('td', 'n', l.remaining + '%' + (l.level === 'error' ? ' · nearly out' : l.level === 'warn' ? ' · low' : '')), el('td', null, l.resetsAt ? (l.reset || '') + (l.eta ? ' (' + l.eta + ')' : '') : 'window has started over'));
+        lt.append(tr);
+      }
+      box.append(lt);
+      if (m.reached) note('The ' + m.reached + ' limit has been reached.', 'error');
+    } else if (m.cost) {
+      const c = m.cost, ct = el('table', 'lim'), hr = el('tr'), r = (k, v) => { const tr = el('tr'); tr.append(el('td', null, k), el('td', 'n', v)); ct.append(tr); };
+      hr.append(el('th', null, 'period'), el('th', null, 'tokens, estimated cost')); ct.append(hr);
+      r('Session (5h)', fmtTok(c.session.tokens) + ' tokens · ≈$' + usd(c.session.cost)); r('Today', fmtTok(c.today.tokens) + ' tokens · ≈$' + usd(c.today.cost));
+      for (const x of c.models || []) r(x.model, fmtTok(x.tokens) + ' tokens · ≈$' + usd(x.cost));
+      box.append(ct); note('Estimated from the local transcripts at Anthropic\\'s list prices; the provider\\'s bill can differ.');
+    } else for (const l of m.lines || []) note(l);
+    if (m && m.stale) note(m.lines[m.lines.length - 1] || 'Showing the last reading.', 'stale');
+    // when the reading was made; the session's own breakdown; where the account is managed
+    const foot = el('div', 'foot'), time = m && m.fetchedAt ? new Date(m.fetchedAt).toLocaleTimeString() : '';
+    foot.append(el('span', null, !m || gw ? '' : time ? (m.asOf ? 'As of the last Codex turn on this machine, ' : 'Updated ') + time : 'No reading yet'));
+    if (t && t.thread) { const b = el('button', 'lnk', 'session breakdown'); b.title = 'This session\\'s tokens, thread by thread'; b.addEventListener('click', () => toggleUsage(p.sid, true)); foot.append(b); }
+    if (!gw && m && (codex ? m.backend !== 'api' && m.backend !== 'bedrock' : m.mode !== 'cost')) { const a = el('button', 'lnk', 'Manage ' + (codex ? 'ChatGPT' : 'Claude') + ' usage ↗'); a.title = USAGE_URL[kind]; a.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: USAGE_URL[kind] })); foot.append(a); }
+    box.append(foot);
+  }
   const INDEX_COLS = [['name', 'folder'], ['on', 'setting'], ['files', 'files'], ['sections', 'sections'], ['vectors', 'with vectors'], ['search', 'search'], ['state', 'state']];
   const num = (v) => (typeof v === 'number' ? v.toLocaleString() : '—');
   function indexSearch(u, f) { return !f.on || f.off || f.built === undefined ? '—' : u.meaning && f.sections && f.vectors >= 0.9 * f.sections ? 'meaning' : 'keywords'; }
@@ -890,6 +965,7 @@ ${glyphCss}
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !menu && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && navHistory(e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return; }
     if (menu && menuOwner === 'slash' && (e.key === 'Enter' || e.key === 'Tab')) { const first = menu.querySelector('.it:not(.dis)'); if (first) { e.preventDefault(); first.click(); return; } }
     if (e.key === 'Escape' && menu) { e.preventDefault(); closeMenu(); return; }
+    if (e.key === 'Escape') { const t = cur(), p = t ? panes.get(t.id) : null; if (p && (p.puOpen || p.ixOpen || p.mxOpen)) { e.preventDefault(); closeOthers(p, null); return; } }
     if (e.key === 'Escape' && dictating()) { e.preventDefault(); vscode.postMessage({ type: 'voiceCancel' }); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
@@ -1220,7 +1296,9 @@ ${glyphCss}
   }
 
   // ---- usage, in the footer. It follows the active tab: Claude's backend and limits, or the ChatGPT plan's.
-  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $plan = $('m-plan'), $msubs = $('m-subs'), $mindex = $('m-index');
+  const $meter = $('meter'), $mb = $('m-backend'), $mu = $('m-usage'), $mClaude = $('m-claude'), $mCodex = $('m-codex'), $muse = $('m-use'), $msubs = $('m-subs'), $mindex = $('m-index');
+  $muse.title = 'This vendor\\'s usage: the backend, the plan as it reports it, each window of the plan or the cost, and when it was read';
+  $muse.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) togglePlan(t.id); });
   $mindex.title = 'Codebase search for this workspace: on or off, for the workspace and for each folder, and each folder\\'s index: files, sections, how many have vectors, whether search is by keywords or by meaning, and whether it is being built';
   $mindex.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleIndex(t.id); });
   $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
@@ -1233,6 +1311,7 @@ ${glyphCss}
     const t = cur();
     meterKind = t ? t.kind : null;
     meter = meterKind ? meters[meterKind] : null;
+    { const pp = t ? panes.get(t.id) : null; if (pp && pp.puOpen) drawPlan(pp); }   // the panel follows the tab and its vendor, never showing another's reading
     $meter.hidden = !meter;
     if (!meter) return;
     const claude = meterKind === 'claude';
@@ -1240,7 +1319,7 @@ ${glyphCss}
     // icon, composer, model and backend.
     const destination = t.switchTo && t.switchTo.kind ? t.switchTo.kind : claude ? 'codex' : 'claude';
     $mClaude.hidden = destination !== 'claude'; $mCodex.hidden = destination !== 'codex'; $mb.hidden = false;
-    $plan.hidden = claude || !meter.plan; $plan.textContent = meter.plan || ''; $plan.title = meter.plan ? 'ChatGPT plan: ' + meter.plan + '. Click to open your usage page.' : '';
+    syncPlanButton();                                // the plan is in the usage panel, for both vendors
     $msubs.hidden = !t.thread; syncUsageButton();   // a tab whose session is on record: its usage, thread by thread
     $mindex.hidden = !t.index; syncIndexButton();   // codebase search on for the workspace: the index, folder by folder
     // the backend: Claude's subscription or API / Bedrock, or the gateway this tab is on; Codex's ChatGPT login or API key
@@ -1263,7 +1342,7 @@ ${glyphCss}
     else $mu.append(el('span', 'seg none', meter.action === 'login' ? 'log in' : '\u2014'));
     const time = meter.fetchedAt ? new Date(meter.fetchedAt).toLocaleTimeString() : '';
     const when = !time ? '' : meter.asOf ? 'As of the last Codex turn on this machine, ' + time + '. ' : 'Updated ' + time + '. ';
-    const hint = meter.action === 'login' ? 'Click to log in.' : 'Click to refresh.';
+    const hint = 'Click for detail' + (meter.action === 'login' ? ', and to log in' : ' and to refresh') + '.';
     const stale = meter.stale ? '\\n' + meter.lines[meter.lines.length - 1] : '';
     if (!meter.segments.some((x) => x.title)) $mu.title = meter.lines.join('\\n') + '\\n' + when + hint;
     else { $mu.title = ''; for (const n of $mu.children) n.title += stale + '\\n' + when + hint; }
@@ -1292,7 +1371,6 @@ ${glyphCss}
       m.append(item('LLM gateway', { radio: true, checked: !!t.gateway, desc: 'This tab only: Claude Code runs with the variables in ' + (gatewayInfo.file || 'the gateway file') + (gatewayInfo.exists ? '' : ', which does not exist yet') + '.', pick: pick('gateway') }));
     });
   });
-  $plan.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://chatgpt.com/codex/settings/usage' }));   // where limits and credits are managed
   // A destination vendor's mark: go on in this tab with that vendor (note 202). A model row means its default effort;
   // its contextual submenu pins one of the effort levels that model actually accepts.
   function vendorMenu(anchor) {
@@ -1324,7 +1402,9 @@ ${glyphCss}
       const m = vendorMenu(b), first = m && m.querySelector('.it:not(.dis)'); if (first) first.focus();
     }
   });
-  $mu.addEventListener('click', () => { if (onGateway) return; vscode.postMessage(meter && meter.action === 'login' ? { type: 'meterLogin' } : { type: 'meterRefresh', vendor: meterKind }); });
+  // the compact reading and "usage" open the same panel; refresh and login are buttons in it
+  $mu.addEventListener('click', () => { const t = cur(); if (t) togglePlan(t.id); });
+  $mu.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const t = cur(); if (t) togglePlan(t.id); } });
 
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;

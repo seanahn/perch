@@ -17,7 +17,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `switchVendor` | `sid`, `kind`, `model`, `effort` | Continue the tab on the destination vendor. `effort: ""` means that model's default (a click on its model row); a contextual effort item sends its explicit value |
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |
-| `meterRefresh` | `vendor` | Re-read usage |
+| `meterRefresh` | `vendor` | Re-read usage (the usage panel's **refresh**) |
 | `subagentUsage` | `sid` | Read a session's usage, thread by thread, Codex's or Claude's (the footer's **sub-agents**); asked again at a turn's end while the table is open |
 | `indexStatus` | `sid` | Read codebase search's state: every folder of the workspace with its setting and its index (the footer's **index**, shown while the tab's `index` is true: a folder is open); asked again at a turn's end and every 5 s while the panel is open |
 | `searchToggle` | `sid` | Turn codebase search on or off for the workspace: the setting where it is set (the workspace's settings if they have it, else the user's), without the command's message; answered with `indexStatus` |

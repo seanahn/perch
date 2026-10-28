@@ -212,6 +212,21 @@ base URL and leaves the login alone ([note 115](115-verified-and-not-verified.md
   turn from Claude Code went to a third through a fallback. The agent is Claude Code; the
   model is whatever answered, and the tab now says which.
 
+**The usage panel (2026-10-28).** The footer's reading is compact by
+design; the detail is a panel, the same control under both vendors, from
+note 401's proposal. The **usage** button and the reading both toggle it.
+It shows the backend, the plan as the vendor reports it (ChatGPT's plan
+name and credits; Anthropic's usage endpoint names no plan, so none is
+invented), each window with its level in words as well as colour and its
+reset time, the cost estimate under API / Bedrock marked as an estimate,
+the gateway's silence, a stale reading marked stale, and when the reading
+was made. Refresh and login are buttons in it rather than a click on the
+numbers; the account's usage page is a link. The Codex-only plan badge
+is gone. The page holds the panel's open state; the host acts on nothing
+until a button asks (`meterRefresh`, `meterLogin`, `openExternal`). One
+of the footer's three panels is open at a time, and Escape closes it
+before it reaches the composer.
+
 **No status bar items.** The gauge is the footer of each tab, where it
 follows the tab's vendor. An earlier version put AI Meter's two items in
 the status bar as well, standing down while that extension was installed;
