@@ -293,7 +293,7 @@ follows the evidence there is.
   keywords a folder at a time by rank, BM25 scores not comparing across indexes. One embedding
   model serves all the folders of a server. A window with no folder gets no server: never the
   home directory. Many folders compete: measured on a twelve-folder workspace, three answers in
-  the c3securitytools folder's own top ten fell out of the top five, mostly to another folder's
+  the measured folder's own top ten fell out of the top five, mostly to another folder's
   skill documents matching generic words. So the tool takes an optional `folder`, one workspace
   folder by its Explorer name (`codebase_status` lists them), and returns 8 hits instead of 5
   when the workspace has more than two folders.
