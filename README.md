@@ -10,6 +10,8 @@ can change vendor in the middle of a task.
 - **Usage in the footer** — the plan's windows or the cost, a panel with the detail, the session's threads and sub-agents, and each turn's tokens under its answer ([usage](#usage-in-the-footer)).
 - **Permissions as the vendor has them** — Claude's modes and Codex's sandbox and approval policy, per tab, with the prompts answered in the tab ([permissions](#permissions)).
 
+![The working layout: the Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](docs/notes/901-window.png)
+
 ## Why: the vendors' own agents, so their caching
 
 perch runs the **Claude Code CLI** and the **Codex CLI** themselves, one
@@ -282,8 +284,6 @@ Perch). The design and the measurements are in
 [note 202](docs/notes/202-switching-vendors-in-a-tab.md).
 
 ## Setup, step by step
-
-![The working layout: the Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](docs/notes/901-window.png)
 
 1. **VS Code 1.92 or later.** Under Remote-SSH or code-server, connect
    first and do the rest in that window: Perch, the agents and the index
