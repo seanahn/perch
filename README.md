@@ -10,7 +10,7 @@ can change vendor in the middle of a task.
 - **Usage in the footer** — the plan's windows or the cost, a panel with the detail, the session's threads and sub-agents, and each turn's tokens under its answer ([usage](#usage-in-the-footer)).
 - **Permissions as the vendor has them** — Claude's modes and Codex's sandbox and approval policy, per tab, with the prompts answered in the tab ([permissions](#permissions)).
 
-![The working layout: the Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](docs/notes/901-window.png)
+[![The working layout: the Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](docs/notes/901-window.png)](docs/notes/901-window.png)
 
 ## Why: the vendors' own agents, so their caching
 
