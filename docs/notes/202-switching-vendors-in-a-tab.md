@@ -298,7 +298,8 @@ crosses providers. Worth doing with the first build, since it is the same code.
      Fable 5.1 (`us.anthropic.claude-fable-5-1`, labelled "Fable"), which the subscription refused.
      The footer's list is Perch's Claude catalog, and that had been loaded with Bedrock's names. Now
      the catalog is loaded for the window's backend, said outright (`CLAUDE_CODE_USE_BEDROCK`), only
-     the latest load is kept, and a model saved under another backend's name is launched by this
+     the latest load is kept, a tab with a backend of its own gets that backend's catalog (loaded once
+     when first needed), and a model saved under another backend's name is launched by this
      backend's name for the same model, its `[1m]` kept.
    - Reported the same day, not reproduced: a footer pick of GPT-6-Astra that came out as GPT-6.1-Sol,
      the model the tab had last used on Codex. The path was read again end to end (the menu's rows

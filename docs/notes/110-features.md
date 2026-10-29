@@ -126,8 +126,10 @@ time even when refresh is clicked. The original read a 429 as a
 malformed body and retried every 15 seconds, which prolongs a rate
 limit.
 
-**The backend switch** writes `env.CLAUDE_CODE_USE_BEDROCK` in
-`~/.claude/settings.json`.
+**The backend switch** (`Perch: Toggle Claude Backend`) writes
+`env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json`: the window's
+default, for tabs that have not chosen a backend of their own and for
+`claude` in a terminal.
 
 - The settings value wins over an exported environment variable, and
   `settings.local.json` over `settings.json`. Verified against Claude
@@ -144,6 +146,25 @@ limit.
   session on the new backend, as after a window reload. The transcript
   and the session id stay; the prompt cache starts over, being a
   property of the backend. The tab is told so.
+
+**A backend of the tab's own (0.7.12, 2026-10-29).** The footer's menu
+chooses for this tab alone, all three entries: subscription, API /
+Bedrock, or the gateway. Subscription or API / Bedrock is kept on the
+tab (`own`, saved with it, carried across a vendor switch) and given to
+its next process as settings of its own — `CLAUDE_CODE_USE_BEDROCK` and
+the model slots, as `ownBackendSettings` in `src/gateway.js` makes them,
+the same mechanism that takes a tab off a pinned gateway — which Claude
+Code applies over `~/.claude/settings.json`. So two tabs run on different
+backends side by side, nothing is written to the file, and the window's
+switch leaves such a tab where it is. A process already on the backend
+asked for is not restarted. The catalog of the other backend is loaded
+once when a tab first needs it (`claudeCatalog`), the window's serving
+meanwhile with names mapped across backends. The footer's pill shows the
+tab's backend; where the window's reading does not apply (a tab on API
+under a subscription window, or the reverse), the reading shows `—` and
+the usage panel says whose reading it is. The held-message notes and
+the login dialog act on the tab's own backend. Outside Perch nothing
+changes: a terminal `claude` reads only the file.
 
 **The gateway** is a third backend, a tab's own rather than the window's.
 A gateway is an Anthropic-compatible endpoint reached with
