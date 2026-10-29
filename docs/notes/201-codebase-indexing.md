@@ -326,7 +326,7 @@ then vectors, and a search never fails for it; what changes is the text it retur
 
 1. **Keyword index not built yet** (the first seconds; about 3 s for 1,900 files): the call waits up
    to 10 s for it. If it is still not there, the result says so, with the count ("The index of
-   c3securitytools is being built: 640 of 1,908 files. Use grep meanwhile."), and the agent greps.
+   tools is being built: 640 of 1,908 files. Use grep meanwhile."), and the agent greps.
 2. **Keywords done, vectors still building** (minutes, on a CPU): the call answers by keywords and
    says so in its first line ("by keywords; search by meaning is still being built"). In a
    multi-folder search a folder whose vectors are finished already answers by meaning; folders are
