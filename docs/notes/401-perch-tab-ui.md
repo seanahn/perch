@@ -15,8 +15,8 @@ the whole tab a single UI map, then changes two controls in the footer:
    backend usage, for Claude and Codex alike.
 
 The handoff mechanism itself is in [note 202](202-switching-vendors-in-a-tab.md), usage sources and
-their accounting are in [note 111](111-usage-meters.md), and the page-to-host messages are in
-[note 107](107-page-protocol.md). The destination control supersedes only note 202's mixed-purpose
+their accounting are in [note 111](110-features.md#n111), and the page-to-host messages are in
+[note 107](104-architecture.md#n107). The destination control supersedes only note 202's mixed-purpose
 footer icon; its handoff contents, persistence, and current-vendor tab icon stay as designed.
 
 ## The tab as a whole

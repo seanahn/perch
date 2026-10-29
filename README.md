@@ -35,7 +35,7 @@ Codex on Bedrock: every turn after the first read its whole prefix from
 the cache), with a lag on the newest options (the hour-long Claude cache
 only on some models, no 5m/1h breakdown). Behind a proxy such as an LLM
 gateway, whether the markers survive depends on the route; perch shows
-what came back, and [note 103](docs/notes/103-token-economy.md) says what was measured.
+what came back, and [note 103](docs/notes/101-purpose-and-rationale.md#n103) says what was measured.
 
 ```
 PERCH TAB   (the vendor's agent lays out the prompt; perch never touches it)
@@ -115,8 +115,8 @@ terminal session" on no source, and a public 5.5× figure turns out to be
 one run on mixed models with no cache analysis. What perch can show is
 that a tab's cache reads and costs are a terminal's, turn by turn, in its
 own footer. The full reasoning, with what has and has not been verified,
-is in the design notes, [102](docs/notes/102-why-a-shell.md) and
-[103](docs/notes/103-token-economy.md).
+is in the design notes, [102](docs/notes/101-purpose-and-rationale.md#n102) and
+[103](docs/notes/101-purpose-and-rationale.md#n103).
 
 | Tab kind | Agent | How it runs | Auth |
 | --- | --- | --- | --- |

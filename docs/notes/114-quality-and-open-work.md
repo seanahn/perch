@@ -1,6 +1,73 @@
-# 115 — Verified and not verified
+# Quality and open work
 
-## Verified against real services, on the development machine
+How Perch is tested, what has been verified against the vendors' agents and what has not, and the limitations and the work still open. One file, formerly 3 notes, each a section that keeps its number: links from elsewhere point at `#n<number>`.
+
+- [114 — Testing](#n114)
+- [115 — Verified and not verified](#n115)
+- [116 — Limitations and open work](#n116)
+
+<a id="n114"></a>
+
+## 114 — Testing
+
+| Suite | What it runs | Model calls |
+| --- | --- | --- |
+| `test/meter.test.js` | Usage, cost, the switch, in throwaway homes and four timezones | no |
+| `test/gateway.test.js` | The gateway file: parsing, what makes it usable, the template, in a throwaway directory | no |
+| `test/relay.test.js` | The relay, against a stand-in gateway on the loopback interface: forwarding, streaming, headers read, errors passed on, a gateway that is down | no |
+| `test/codexMeter.test.js` | Codex usage, in throwaway session directories | no |
+| `test/models.test.js` | Catalog and command parsing | no |
+| `test/voice.test.js` | The engine, against a stand-in server | no |
+| `audio/test/recorder.test.js` | The recorder and its commands, with a library that plays back frames | no |
+| `test/host.test.js` | The host, against a stubbed VS Code API and stand-in agents | no |
+| `test/page.test.js` | The real page script, in jsdom | no |
+| `test/harness.mjs` | Live: both agents, catalogs, usage, queueing | **yes** |
+
+`make test-offline` runs the first nine. `make test` runs all ten.
+
+### Rules learned the hard way
+
+1. **Assert on what is rendered, not on attributes.** A test checked the
+   `hidden` attribute while a `display: flex` rule overrode it, so every
+   pane drew on top of the others and the test passed. It now checks
+   computed style.
+2. **`set -o pipefail` before any pipeline that gates a commit.** A
+   failing suite was piped through a filter, the filter's status won,
+   and a commit went in with a test failing.
+3. **The page script lives in a template literal.** An escape written one
+   level short, `\n` for `\\n`, becomes a raw line break inside a string
+   and the script does not parse. The page test checks parsing first and
+   names this cause.
+4. **Never exercise the real backend switch.** It writes the user's
+   Claude settings. The suite compares that file before and after.
+5. **Do not call the usage endpoint in a loop.** It rate-limits. The live
+   check treats a rate limit as a skip.
+6. **Kill test processes by name, not by pattern.** A pattern that
+   appears in the command that runs it matches that command's own shell.
+7. **Anchor time-dependent tests to local noon.** "Today" is a local
+   notion, and a fixed UTC instant lands on different days.
+8. **A stand-in must behave like the real thing.** A stand-in server that
+   answered requests concurrently produced failures the real server
+   cannot.
+9. **Point the tests at a gateway file of their own.** The default path
+   is a real file on the developer's machine; a host test read it and
+   found a gateway on offer that the test had not made. The stub now
+   names a path that does not exist, and the gateway tests write their
+   own file in a throwaway directory.
+10. **Probe the CLI from a clean environment.** A probe run from inside a
+    Claude Code session inherits its variables (`CLAUDECODE`,
+    `CLAUDE_CODE_CHILD_SESSION`, its effort), and the CLI it started
+    answered `supportedModels()` without the `default` entry, which
+    looked like a finding about the SDK. Probes now run under `env -i`
+    with only `HOME`, `PATH`, `USER` and `LANG`.
+
+---
+
+<a id="n115"></a>
+
+## 115 — Verified and not verified
+
+### Verified against real services, on the development machine
 
 | Claim | Evidence |
 | --- | --- |
@@ -56,7 +123,7 @@
 | A web search as `codex exec` reports it | `codex-cli 0.159.0`, the binary the SDK carries, on `gpt-6.1-sol` in code mode (2026-10-12), asked to search, open the page found, and look for a phrase in it: three `web_search` items, each `item.started` with `query: ""` and `action: {type: "other"}`, and `item.completed` with `{type: "search", query}` and 12 results; `other` with an empty query and the page as its one result; `{type: "find_in_page", url, pattern}` and the page. Each result: `type`, `domain`, `ref_id`, `snippet`, `title`, `url` (and `thumbnail_url` for a page). The rollout file spells the last `findInPage` and gives a search's `queries` |
 | What Claude Code sends through a gateway, with and without the hour flag | A stand-in gateway on the loopback read the bodies: with the gateway file as it is, `cache_control.ttl` is `1h` on every cached block; with `ENABLE_PROMPT_CACHING_1H` unset, no `ttl` at all (2026-10-02). A real turn through a LiteLLM gateway with the flag answered (22,306 tokens written); its usage carried a zeroed `cache_creation` breakdown, so the route accepts the field; whether the hour took upstream is not visible from the client (the `total_cost_usd` of that run was Claude Code's own reckoning, Opus-class list prices at the five-minute write rate for a model name it does not know, not the gateway's figure) |
 
-## Not verified
+### Not verified
 
 | Claim | Why not |
 | --- | --- |
@@ -70,3 +137,66 @@
 | **The browser sign-in for Codex over Remote-SSH** | The port-forwarded return trip (`asExternalUri` on `localhost:1455`) is tested against stubs; the remote container was already logged in when it was built |
 | **The gateway's model menu and the sticky default in a live window** | Tested against stubs; the file's names are read, not asked of the gateway |
 | **A second gateway** | One file, one gateway. A list of gateways in settings is the natural extension when one is needed |
+
+---
+
+<a id="n116"></a>
+
+## 116 — Limitations and open work
+
+| Item | Notes |
+| --- | --- |
+| Codex approvals cannot prompt, and Codex cannot ask a question | A property of `codex exec`. Codex's `request_user_input` needs the app-server protocol, at the cost of rewriting the Codex integration |
+| A Codex name written by perch may not show in the ChatGPT extension | perch appends to `session_index.jsonl`, Codex's own name file; Codex also keeps titles in a database perch does not write |
+| Resumed transcripts show the last thousand entries | Older ones are the agent's; a note says how many |
+| No streaming for Codex text | The SDK reports completed messages |
+| Mentions are inserted as text | The agent resolves `@path` |
+| AI Meter's fixes are not upstreamed | The rate-limit back-off and the settings safeguards would benefit the standalone extension |
+| Two extensions poll the usage endpoint | While AI Meter is also installed, both query it. Uninstalling AI Meter removes the duplicate |
+| perch-audio must be installed by hand from a `.vsix` | From the marketplace it comes with perch, through `extensionPack` |
+| No syntax colouring in code blocks | The Markdown renderer draws code as text |
+| One gateway at a time | The file names one. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` could also let Claude Code list the gateway's own models for the menu; off in the user's file, and not used |
+| A gateway tab is told apart in the footer, not the tab bar | By choice ([note 111](110-features.md#n111)): the tab is Claude's. A small `gw` mark on the title would be the cheap remedy if wanted |
+| Backend switch under a gateway pinned in `settings.json` | Fixed in 0.6.55: see *Backend-correct tabs* below |
+
+### Backend-correct tabs (0.6.55): subscription / gateway / API first-class
+
+**Problem.** When `~/.claude/settings.json` pins a gateway for *all* Claude Code (`ANTHROPIC_BASE_URL`
+plus an `apiKeyHelper`, as a managed machine may), a tab set to **subscription** or
+**API/Bedrock** still runs on the gateway, yet the footer prints "sub" and the model menu lists the
+gateway's own names. The label lies and the list is wrong. Perch should present every
+backend truthfully, independent of what the machine pins.
+
+**Root cause (code spots).**
+- `claudeAgent.js:78` passes Claude Code's `--settings` **only for gateway tabs** (`gatewaySettings`).
+  Non-gateway tabs pass nothing, so the pinned `settings.json` wins and the tab runs on the gateway.
+- `extension.js:300` `catalog()` returns `Gateway.gatewayModels(...)` for gateway tabs, else the single
+  `view.catalog.claude` — which `extension.js:1122` loads **once**, via `loadClaudeModels()` under the
+  pinned env, so it *is* the gateway catalog. Sub/API tabs therefore show gateway models.
+
+**Verified gate (2026-10-22).** `--settings` with `{"env":{"CLAUDE_CODE_USE_BEDROCK":"0","ANTHROPIC_BASE_URL":""},"apiKeyHelper":""}`
+**does** take the CLI off the pinned gateway: it then rejected the gateway's model name as an
+*unrecognized model* (that name exists only on the gateway) instead of answering. So a per-backend `--settings`
+override works. It also proved a second requirement: switching off the gateway must **also drop the
+gateway's `model`**, or the subscription 400s on an unknown id.
+
+**Plan (coupled — they move together).**
+1. **Per-backend `--settings`.** Add `offGatewaySettings(bedrock)` → `{env:{CLAUDE_CODE_USE_BEDROCK:
+   bedrock?'1':'0', ANTHROPIC_BASE_URL:''}, apiKeyHelper:'', model:''}`. In `claudeAgent.js:78`, pass it
+   for non-gateway tabs (gateway tabs keep `gatewaySettings`). This routes sub/API tabs off the pinned
+   gateway.
+2. **Per-backend catalog.** `loadClaudeModels` gains a `settings` arg (passed to the SDK `query`
+   options); load `view.catalog.claude` under the subscription override so a sub tab lists native
+   `Opus/Sonnet/Haiku`. Gateway tabs keep `gatewayModels`. (A machine with no subscription login simply
+   gets no sub catalog and falls back to the static list — honest.)
+3. **Model reset on switch + honest label.** On a non-gateway tab, don't carry a model that isn't in
+   its catalog (drop to default); the footer label then reflects the real backend (the `gw`/label code
+   at `webview.js:1095/1103` already distinguishes — it just needs the routing to be real).
+4. **The model slots too (found 2026-10-23, before the release).** Clearing `model` was not enough: the
+   pinned file also sets the model slots (`ANTHROPIC_DEFAULT_OPUS_MODEL` and the Sonnet and Haiku ones) to
+   the gateway's names, so the sub catalog still resolved Opus, and Haiku, which Claude Code's background
+   calls use, to names that are refused off the gateway. `offGatewaySettings(bedrock, inherited)` also sets
+   each of `OFF_GATEWAY_VARS` (the three slots, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, the
+   subagent model and the gateway's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`) to what the tab inherits,
+   the machine's own export, when that suits the backend (a Bedrock id such as
+   `us.anthropic.claude-sonnet-4-6` only on Bedrock), else to `''`, Claude Code's default.

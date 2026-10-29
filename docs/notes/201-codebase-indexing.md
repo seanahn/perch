@@ -12,10 +12,10 @@ Not the goal: Cursor's cloud index, its Merkle trees, Turbopuffer, or Cursor's a
 
 ## The constraint that decides the architecture
 
-Perch is a shell, not an agent ([note 102](102-why-a-shell.md)). It runs the Claude Code CLI and
+Perch is a shell, not an agent ([note 102](101-purpose-and-rationale.md#n102)). It runs the Claude Code CLI and
 the Codex CLI through their SDKs, one process per tab, and never builds a model request. Prompt
 caching only works if the prefix is byte-identical, and only the vendor's agent owns that prefix
-([note 103](103-token-economy.md)). That is why IDE context is appended at the end of the user's
+([note 103](101-purpose-and-rationale.md#n103)). That is why IDE context is appended at the end of the user's
 message: a harness that re-renders editor state near the front, as Continue does, busts the cache.
 
 So Perch must not index the repo and put the top chunks into every turn. That would make it a
@@ -488,8 +488,8 @@ ranking and the repository decide.
 
 ## Pointers
 
-- Perch's design: notes [102](102-why-a-shell.md) (shell, not agent) and
-  [103](103-token-economy.md) (the cache).
+- Perch's design: notes [102](101-purpose-and-rationale.md#n102) (shell, not agent) and
+  [103](101-purpose-and-rationale.md#n103) (the cache).
 - Cursor's documentation on codebase indexing, semantic search, and secure indexing.
 - Prior art: local MCP indexers, full-text search with optional Ollama embeddings; Probe
   ([probeai.dev](https://probeai.dev), candidate B), checked on 2026-10-26: fully local, ripgrep and

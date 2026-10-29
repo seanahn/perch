@@ -18,14 +18,14 @@ Not the goal: one conversation shared live between two agents, or Perch building
 ## Why the conversation itself cannot move
 
 - **Each vendor keeps its own record.** A tab resumes by handing the agent its own session id
-  ([note 106](106-state-replay-and-persistence.md)): Claude Code's session file, Codex's rollout.
+  ([note 106](104-architecture.md#n106)): Claude Code's session file, Codex's rollout.
   Neither CLI reads the other's, and their formats are not Perch's.
 - **Reasoning is sealed to its maker.** Codex's reasoning items are encrypted for the provider that
   made them; a ChatGPT thread resumed on Bedrock is refused (`invalid_encrypted_content`,
-  [note 108](108-agents.md)). Claude's thinking blocks are signed the same way. A history rewritten
+  [note 108](104-architecture.md#n108)). Claude's thinking blocks are signed the same way. A history rewritten
   into the other vendor's format would be refused, or would break with the next CLI version.
 - **The cache starts cold.** Whatever crosses is read once, in full, at the new vendor's prices
-  ([note 103](103-token-economy.md)).
+  ([note 103](101-purpose-and-rationale.md#n103)).
 
 So a switch is a new conversation with the other agent that is given the old one as text. The
 question is which text.
@@ -162,7 +162,7 @@ is not enough.
 ### What a switched tab looks like
 
 - **The composer becomes the new vendor's.** It is one element with a vendor class already
-  ([note 110](110-composer.md)): Claude's bolt and cache clock, or Codex's shield and round send
+  ([note 110](110-features.md#n110)): Claude's bolt and cache clock, or Codex's shield and round send
   button, follow the tab's current vendor.
 - **A divider in the transcript** at the switch: the new vendor's icon and "Continued with GPT-6
   Astra on Codex · read 41 messages (23K tokens)", the handoff block collapsed under it. Above it
@@ -214,7 +214,7 @@ segments: [
 ## A side effect: crossing providers within Codex
 
 A ChatGPT thread cannot go on on Bedrock, so a switch of Codex backend starts a new thread with
-nothing carried ([note 108](108-agents.md)). The same handoff text fixes that: it is plain text and
+nothing carried ([note 108](104-architecture.md#n108)). The same handoff text fixes that: it is plain text and
 crosses providers. Worth doing with the first build, since it is the same code.
 
 ## Security and privacy
@@ -324,7 +324,7 @@ crosses providers. Worth doing with the first build, since it is the same code.
 4. On a switch back to a vendor the tab used before, resume its session (the proposal), or start
    fresh with the whole discussion?
 
-When this is built, [note 102](102-why-a-shell.md) and [note 103](103-token-economy.md) need a line:
+When this is built, [note 102](101-purpose-and-rationale.md#n102) and [note 103](101-purpose-and-rationale.md#n103) need a line:
 the bridge between tabs is then the last answer or the discussion, still as a message the user sends.
 
 In one line: a vendor switch is a new conversation that is handed the old one's words without its
