@@ -238,7 +238,7 @@ function collabInfo(a) {
 }
 
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, gatewayCost, gatewayEstimate, periods, left, handoff }) {
+  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, own, gatewayCost, gatewayEstimate, periods, left, handoff }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -254,6 +254,7 @@ class Session {
     this.search = '';                // the folders the agent's process searches (codeindex/), as it was given them; '' for none
     this.backend = '';               // claude only: the backend this tab's agent started on
     this.gateway = kind === 'claude' && !!gateway;   // claude only: this tab runs through the gateway (src/gateway.js), whatever the window's backend
+    this.own = kind === 'claude' && (own === 'subscription' || own === 'api') ? own : '';   // claude only: a backend of this tab's own, chosen in the footer, kept as its process's settings; '' follows the window's switch
     this.via = {};                   // gateway only: the models that answered this turn's requests, by name, with how many each
     this.lastVia = '';               // gateway only: the model that answered most recently, for the tooltip
     this.viaCost = null;             // gateway only: the gateway's own figure for this turn so far, summed over its requests; null until one is reported
@@ -373,7 +374,7 @@ class Session {
     if ((kind !== 'claude' && kind !== 'codex') || kind === this.kind || this.busy || this.pending.size) return false;
     if (handoff && !handoff.fits) Handoff.writeHandoff(handoff.file, handoff.full);
     const from = this.where();
-    this.left[this.kind] = { model: this.model, effort: this.effort, mode: this.mode, gateway: this.gateway, costSoFar: this.costSoFar, resume: this.agentSessionId };
+    this.left[this.kind] = { model: this.model, effort: this.effort, mode: this.mode, gateway: this.gateway, own: this.own, costSoFar: this.costSoFar, resume: this.agentSessionId };
     this.restart();
     const back = this.left[kind] || null;
     delete this.left[kind];
@@ -386,6 +387,7 @@ class Session {
     this.effort = typeof effort === 'string' ? effort : back ? back.effort : defaultEffort(kind);
     this.mode = back && MODES[kind].includes(back.mode) ? back.mode : kind === 'codex' && this.view.codexUnsandboxedHere() ? 'danger-full-access' : defaultMode(kind);
     this.gateway = kind === 'claude' && !!(back && back.gateway);
+    this.own = kind === 'claude' && back && (back.own === 'subscription' || back.own === 'api') ? back.own : '';
     this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
     this.context = null; this.respondedAt = 0; this.collab.clear(); this.queue = []; this.shown = []; this.via = {}; this.lastVia = ''; this.viaQueue = [];
     this.reconcile();
@@ -445,7 +447,7 @@ class Session {
 
   // ---- what this tab may choose, given the agent's catalog and the selected model
   /** On the gateway the choices are the file's names (src/gateway.js), not Claude Code's catalog. */
-  catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[this.kind] || null; }
+  catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.kind === 'claude' && this.own ? this.view.claudeCatalog(this.own) : this.view.catalog[this.kind] || null; }
   /**
    * The catalog's entry for a model the tab names: by its value, else by the model the id names, so a model given by its
    * id (`claude-fable-5-1[1m]`: Fable 5.1 with the 1M context window, chosen in Claude Code or saved by an older Perch) is
@@ -668,7 +670,7 @@ class Session {
     if (prog.from === 'none') this.post({ kind: 'error', text: MISSING[this.kind] });
     if (this.kind === 'claude') {
       // fixed for the life of the agent process: a process cannot change how it authenticated
-      this.backend = this.gateway ? 'gateway' : this.view.meter ? this.view.meter.backend() : '';
+      this.backend = this.gateway ? 'gateway' : this.own || (this.view.meter ? this.view.meter.backend() : '');
       const gw = this.gateway ? this.view.gateway() : null;
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
       const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
@@ -691,6 +693,7 @@ class Session {
         env: gw ? Gateway.gatewayEnv(gw.vars) : undefined,
         gateway: gw ? { target: gw.vars.ANTHROPIC_BASE_URL } : undefined,   // through the relay, which sees which model answers
         offGateway: pinned && this.backend ? { bedrock: this.backend !== 'subscription' } : undefined,   // take a sub/API tab off the pinned gateway
+        backend: !gw && !pinned && this.own ? { bedrock: this.own === 'api' } : undefined,   // a backend of the tab's own, as its process's settings, whatever the window's switch says
         askPermission: (req) => new Promise((resolve) => this.pending.set(req.id, resolve)),
       });
     } else {
@@ -742,12 +745,12 @@ class Session {
       }
     }
     // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
-    if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun()) {
-      const api = this.view.meter.backend() === 'api';
+    if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun(this.own || undefined)) {
+      const api = (this.own || this.view.meter.backend()) === 'api';
       this.post({ kind: 'note', text: api ? `Claude is set to API / Bedrock on ${require('os').hostname()}, and no credentials for it were found there. Set them up, or use your subscription, then send the message again.` : `Claude is not logged in on ${require('os').hostname()}. Log in, then send the message again.`,
         actions: api ? [{ id: 'claudeSettings', label: 'Open settings.json' }, { id: 'claudeSubscription', label: 'Use Subscription' }] : [{ id: 'claudeLogin', label: 'Log In' }, { id: 'claudeApi', label: 'Use API / Bedrock' }] });
       this.view.deliver(this.id, text);
-      this.view.claudeLogin();
+      this.view.claudeLogin(undefined, this);
       return;
     }
     // Codex on Bedrock with nothing to sign with: hold the message, say what Bedrock needs, offer the way back
@@ -862,22 +865,30 @@ class Session {
   }
 
   /**
-   * Put this tab on the gateway, or take it off, for its next process. A running process cannot change how it authenticates,
-   * so it ends (after the current turn, if one is running) and the next message resumes the session, as a backend switch does.
+   * This tab's backend, for its next process: the gateway; a backend of its own, 'subscription' or 'api', given to the
+   * process as settings of its own (src/gateway.js, ownBackendSettings), so the window's switch does not move it; or ''
+   * to follow the window. A running process cannot change how it authenticates, so it ends (after the current turn, if
+   * one is running) and the next message resumes the session, as a backend switch does; a process already on the backend
+   * asked for stays.
    */
-  setGateway(on) {
-    on = this.kind === 'claude' && !!on;
-    if (on === this.gateway) return;
-    this.gateway = on;
+  setBackendChoice(value) {
+    if (this.kind !== 'claude') return;
+    const gw = value === 'gateway', own = value === 'subscription' || value === 'api' ? value : '';
+    if (gw === this.gateway && own === this.own) return;
+    const was = this.gateway;
+    this.gateway = gw; this.own = own;
     // a model of Claude Code's catalog means nothing to the gateway: back to the file's default, which the pill then shows
-    if (on && this.model && !['opus', 'sonnet', 'haiku'].includes(this.model)) { this.model = ''; this.effort = ''; }
+    if (gw && !was && this.model && !['opus', 'sonnet', 'haiku'].includes(this.model)) { this.model = ''; this.effort = ''; }
     this.view.persist();
     this.view.sendTabs();                // the choice shows at once, whether or not the process has moved yet
-    const to = on ? 'the LLM gateway' : this.view.meter ? this.view.meter.state().backendName : 'the window\'s backend';
+    const to = gw ? 'the LLM gateway' : own === 'api' ? 'API / Bedrock' : own ? 'subscription (login)' : this.view.meter ? this.view.meter.state().backendName : 'the window\'s backend';
     if (!this.agent) return;
+    if (this.backend === (gw ? 'gateway' : own || (this.view.meter ? this.view.meter.backend() : ''))) return;   // already running there: nothing to move
     if (this.busy) { this.restartWhenIdle = true; this.post({ kind: 'note', text: `This tab moves to ${to} after the current turn; the conversation continues, the prompt cache starts over.` }); }
     else { this.restart(); this.post({ kind: 'note', text: `This tab is on ${to} from the next message; the conversation continues, the prompt cache starts over.` }); }
   }
+  /** Put this tab on the gateway, or take it off (back to following the window). */
+  setGateway(on) { this.setBackendChoice(on ? 'gateway' : ''); }
 
   /** @param {Record<string,string>} [answers]  for a question: each question's answer, by the question's text */
   answerPermission(id, decision, answers) {
@@ -966,6 +977,7 @@ class Session {
       path: this.path(),               // the vendors this tab has been on, in order, when more than one
       backend: this.agent ? this.backend : '',
       gateway: this.gateway,
+      own: this.own,                   // a backend of the tab's own: 'subscription' or 'api'; '' follows the window
       gatewayWarn: this.gateway && !this.view.gateway().ok,   // the file is missing or incomplete: the first message will say so
       via: this.gateway ? this.lastVia : '',                   // the model that last answered through the gateway
       queued: this.queue.length,
@@ -973,7 +985,7 @@ class Session {
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
-      cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : '', this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
+      cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : this.own, this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
   }
   /** The vendors this tab has been on, in order, each run of one vendor once: ['claude', 'codex', 'claude']. Null for one. */
@@ -1005,7 +1017,7 @@ class Session {
     });
     return { kind, models: [model('', 'default' + (d && d.label ? ' · ' + d.label : ''), d), ...((cat && cat.models) || []).map((m) => model(m.value, m.label, m))] };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, own: this.own, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -1080,10 +1092,10 @@ class PerchView {
     }
     if (why !== 'backend') return;
     // models differ by backend, and a running process cannot change how it authenticated: so the process ends and the
-    // session goes on, resumed by the next message on the new backend, as after a window reload. A tab on the gateway
-    // has its own backend and is left alone.
+    // session goes on, resumed by the next message on the new backend, as after a window reload. A tab on the gateway,
+    // or on a backend of its own chosen in the footer, is left alone.
     this.loadCatalogs(true);
-    for (const s of this.sessions) if (s.kind === 'claude' && !s.gateway && s.agent && s.backend && s.backend !== state.backend) {
+    for (const s of this.sessions) if (s.kind === 'claude' && !s.gateway && !s.own && s.agent && s.backend && s.backend !== state.backend) {
       if (s.busy) { s.restartWhenIdle = true; s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab moves to it after the current turn; the conversation continues, the prompt cache starts over.` }); }
       else { s.restart(); s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab continues on it from the next message; the prompt cache starts over.` }); }
     }
@@ -1230,7 +1242,7 @@ class PerchView {
    * sign-in (the meter's login), watched until it lands; or the switch to API / Bedrock. On API / Bedrock: the settings
    * file, where the credentials and region go; or the switch to the subscription, which offers its login. One at a time.
    */
-  async claudeLogin(choice) {
+  async claudeLogin(choice, s) {
     if (choice) {                    // from a note's button (the notification may be gone, or still waiting unseen): log in, if that is still what is missing
       if (choice !== 'Log In' || this.meter.backend() === 'api') return;
       if (this.meter.canRun()) { vscode.window.showInformationMessage('Perch: Claude is logged in. Send your message again.'); return; }
@@ -1241,14 +1253,15 @@ class PerchView {
     this.claudeLoginOpen = true;
     try {
       const host = require('os').hostname();
-      if (this.meter.backend() === 'api') {
+      const own = s && s.kind === 'claude' ? s.own : '';   // a tab with a backend of its own: the way out is that tab's, not the window's
+      if ((own || this.meter.backend()) === 'api') {
         const pick = await vscode.window.showWarningMessage(`Claude is set to API / Bedrock on ${host}, but nothing to authenticate with was found there: no ~/.aws credentials or profile, no AWS_* variables, no ANTHROPIC_API_KEY. Put AWS credentials on ${host}, and the region and model in the env block of ${this.meter.meter.settingsPath} (AWS_REGION, ANTHROPIC_MODEL), or use your subscription.`, 'Open settings.json', 'Use Subscription');
-        if (pick === 'Use Subscription') await this.meter.toggleBackend();        // with no login, the switch offers it
+        if (pick === 'Use Subscription') { if (own) s.setBackendChoice('subscription'); else await this.meter.toggleBackend(); }   // with no login, the switch offers it
         else if (pick === 'Open settings.json') await this.openSettingsFile();
         return;
       }
       const pick = await vscode.window.showWarningMessage(`Claude is not logged in on ${host}. Perch runs Claude Code with its login, kept in ${this.meter.meter.claudeDir}. Log In opens Claude Code's sign-in; or use API / Bedrock credentials instead.`, 'Log In', 'Use API / Bedrock');
-      if (pick === 'Use API / Bedrock') { await this.meter.toggleBackend(); return; }
+      if (pick === 'Use API / Bedrock') { if (own) s.setBackendChoice('api'); else await this.meter.toggleBackend(); return; }
       if (pick !== 'Log In') return;
       await this.claudeSignIn();
     } finally { this.claudeLoginOpen = false; }
@@ -1312,17 +1325,17 @@ class PerchView {
   }
 
   /**
-   * The backend of one Claude tab, from the footer's menu. The gateway is the tab's own; subscription and API / Bedrock are
-   * the window's, set with the switch every tab follows, and take the tab off the gateway if it was on it.
+   * The backend of one Claude tab, from the footer's menu: each choice is the tab's own. The gateway as before; subscription
+   * and API / Bedrock go to the tab's next process as settings of its own, so the window's switch (Perch: Toggle Claude
+   * Backend, which writes ~/.claude/settings.json for tabs that have not chosen, and for claude in a terminal) is not
+   * touched and other tabs are not moved.
    */
   setBackend(s, value) {
     if (!s || s.kind !== 'claude') return;
-    // the choice sticks: the next new Claude tab starts where this one was put (subscription and API / Bedrock stick through Claude Code's own setting)
-    if (value === 'gateway' || value === 'subscription' || value === 'api') this.context.globalState.update(GATEWAY_DEFAULT_KEY, value === 'gateway');
-    if (value === 'gateway') { s.setGateway(true); return; }
-    if (value !== 'subscription' && value !== 'api') return;
-    if (s.gateway) s.setGateway(false);
-    if (this.meter.backend() !== value) this.meter.toggleBackend();
+    if (value !== 'gateway' && value !== 'subscription' && value !== 'api') return;
+    // the gateway sticks: the next new Claude tab starts where this one was put
+    this.context.globalState.update(GATEWAY_DEFAULT_KEY, value === 'gateway');
+    s.setBackendChoice(value);
   }
 
   /** Claude Code's settings file, made with an empty env block when there is none, so there is something to fill in. */
@@ -1470,11 +1483,29 @@ class PerchView {
     // models rather than the gateway's anthropic/… names. Gateway tabs use Gateway.gatewayModels instead.
     const gen = this.catalogGen = (this.catalogGen || 0) + 1;
     const api = !!(this.meter && this.meter.backend() === 'api');
-    this.loading = Promise.resolve()
-      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(api) : { env: { CLAUDE_CODE_USE_BEDROCK: api ? '1' : '0' } } }))
-      .then((cat) => { if (gen === this.catalogGen) apply('claude', cat); })
+    this.loading = this.loadClaudeCatalog(api ? 'api' : 'subscription')
+      .then((cat) => { if (gen === this.catalogGen && cat) apply('claude', cat); })
       .catch(() => { /* keep the fallback lists */ });
     return this.loading;
+  }
+  /** Claude's catalog as one backend names its models, kept by backend: the window's, and any a tab chose for itself. */
+  loadClaudeCatalog(backend) {
+    const api = backend === 'api';
+    return Promise.resolve()
+      .then(() => loadClaudeModels({ cwd: cwd(), executable: program('claude').path || undefined, settings: this.pinnedGatewayUrl() ? Gateway.offGatewaySettings(api) : { env: { CLAUDE_CODE_USE_BEDROCK: api ? '1' : '0' } } }))
+      .then((cat) => { if (cat) (this.ownCatalogs = this.ownCatalogs || {})[backend] = cat; return cat; });
+  }
+  /**
+   * The catalog for a tab with a backend of its own: the window's when it is the same backend, else the one loaded for
+   * that backend, fetched once in the background (the window's serves meanwhile; launchModel maps names across backends).
+   */
+  claudeCatalog(backend) {
+    if (!backend || backend === (this.meter ? this.meter.backend() : '')) return this.catalog.claude || null;
+    const own = this.ownCatalogs && this.ownCatalogs[backend];
+    if (own) return own;
+    if (!this.ownLoading) this.ownLoading = {};
+    if (!this.ownLoading[backend]) this.ownLoading[backend] = this.loadClaudeCatalog(backend).then(() => { this.sendTabs(); }).catch(() => {}).finally(() => { delete this.ownLoading[backend]; });
+    return this.catalog.claude || null;
   }
 
   // ---- persistence: tabs survive a window reload by resuming the agent's own saved session
@@ -1707,8 +1738,8 @@ class PerchView {
         // the ways into Claude and Codex. A button may be an old note's: each acts only on what still applies
         else if (msg.action === 'claudeSettings') this.openSettingsFile();
         else if (msg.action === 'handoffPreview') this.previewHandoff(s);   // what the next message carries after a switch (note 202)
-        else if (msg.action === 'claudeSubscription') { if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
-        else if (msg.action === 'claudeApi') { if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
+        else if (msg.action === 'claudeSubscription') { if (s && s.own) s.setBackendChoice('subscription'); else if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
+        else if (msg.action === 'claudeApi') { if (s && s.own) s.setBackendChoice('api'); else if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
         else if (msg.action === 'codexChatgpt') { if (this.meter.codexBackend() !== 'chatgpt') this.meter.chooseCodexBackend('chatgpt'); }
         else if (msg.action === 'codexLogin' || msg.action === 'codexDevice') {

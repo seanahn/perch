@@ -686,16 +686,20 @@ is shown as full again. perch re-reads after each Codex turn it runs.
 **Under a Claude tab**:
 
 - a **backend button**, `sub`, `API`, or `gw`. Click it for a menu of
-  three: **subscription (login)** and **API / Bedrock** are the window's
-  choice, for every Claude tab, and switching writes
-  `env.CLAUDE_CODE_USE_BEDROCK` in `~/.claude/settings.json`, leaving the
-  rest of the file alone; **LLM gateway** is this tab's alone (see
-  [Logins](#logins)). Open tabs come along with the window's switch,
-  tabs on the gateway excepted: each one's process ends (after its
-  current turn, if one is running) and the next message resumes the same
-  conversation on the new backend, as after a window reload. Moving one
-  tab onto or off the gateway does the same for that tab. The prompt
-  cache starts over, being the backend's. Under a tab on the gateway the
+  three, each **this tab's own**: **subscription (login)**, **API /
+  Bedrock**, and **LLM gateway** (see [Logins](#logins)). The choice goes
+  to the tab's next process as settings of its own, which Claude Code
+  applies over `~/.claude/settings.json`, so two tabs can run on
+  different backends side by side and nothing is written to the file.
+  The window's default — what a tab that has not chosen runs on, and what
+  `claude` in a terminal gets — is `env.CLAUDE_CODE_USE_BEDROCK` in that
+  file, switched by `Perch: Toggle Claude Backend`; tabs that follow it
+  come along with the switch, tabs with a choice of their own stay put.
+  Either way a tab's process ends (after its current turn, if one is
+  running) and the next message resumes the same conversation on the new
+  backend, as after a window reload; the prompt cache starts over, being
+  the backend's. A tab on a backend the window is not on shows `—` for
+  the usage, which is the window's reading, not the tab's. Under a tab on the gateway the
   button reads `gw`, with a warning while its file is missing or
   incomplete, and the gauge shows nothing: the gateway's usage is not
   reported here, and the line under each answer shows its tokens and

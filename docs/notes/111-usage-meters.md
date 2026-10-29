@@ -63,7 +63,9 @@ limit.
   Switching back restores them.
 - The file is written atomically, by rename.
 - A settings file that is not valid JSON is **refused**, not replaced.
-- An open Claude tab moves to the new backend: its process ends (after
+- An open Claude tab that follows the window moves to the new backend
+  (a tab given a backend of its own in the footer's menu, carried to its
+  process as settings of its own, stays): its process ends (after
   the current turn, if one is running) and the next message resumes the
   session on the new backend, as after a window reload. The transcript
   and the session id stay; the prompt cache starts over, being a

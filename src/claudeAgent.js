@@ -5,7 +5,7 @@
 
 const { randomUUID } = require('crypto');
 const { Relay } = require('./relay');
-const { gatewaySettings, offGatewaySettings } = require('./gateway');
+const { gatewaySettings, offGatewaySettings, ownBackendSettings } = require('./gateway');
 
 class AsyncQueue {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -36,6 +36,7 @@ class AsyncQueue {
  * @param {number} [opts.costBefore]                   the session's cost so far, as last reported, so the first turn's own cost is known
  * @param {Record<string,string>} [opts.env]           variables added to the process's environment: a gateway's ANTHROPIC_BASE_URL and token
  * @param {{target: string}} [opts.gateway]            run the process through a relay to this base URL, so each response's model is seen (events of kind `relay`)
+ * @param {{bedrock: boolean}} [opts.backend]           a backend of this tab's own (API / Bedrock, or the subscription), as the process's settings, whatever the window's file says
  * @param {{command: string, args: string[], env?: object}} [opts.search]  the codebase search MCP server (src/codeIndex.js)
  */
 class ClaudeAgent {
@@ -78,7 +79,8 @@ class ClaudeAgent {
       // Gateway: this process's own gateway variables. Otherwise (subscription / API / Bedrock): clear a pinned gateway
       // so the tab is truly on the chosen backend, not the gateway the machine sets for every Claude Code.
       ...(this.opts.gateway ? { settings: gatewaySettings(this.opts.env, env.ANTHROPIC_BASE_URL) }
-        : this.opts.offGateway ? { settings: offGatewaySettings(this.opts.offGateway.bedrock) } : {}),
+        : this.opts.offGateway ? { settings: offGatewaySettings(this.opts.offGateway.bedrock) }
+        : this.opts.backend ? { settings: ownBackendSettings(this.opts.backend.bedrock) } : {}),
       stderr: (d) => this.emit({ kind: 'stderr', text: String(d) }),
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();

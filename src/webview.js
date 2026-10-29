@@ -589,10 +589,12 @@ ${glyphCss}
     head.append(what, act, close); box.append(head);
     const table = el('table'), row = (k, v) => { const tr = el('tr'); tr.append(el('th', null, k), el('td', null, v)); table.append(tr); };
     // the backend and the plan as the vendor reports them: Anthropic's usage endpoint names no plan, so none is invented here
-    row('Backend', gw ? 'LLM gateway, this tab\\'s own' : !m ? '—' : codex ? (m.backend === 'api' ? 'OpenAI API key' : m.backend === 'bedrock' ? 'Amazon Bedrock' : 'ChatGPT (login)') : m.backendName || m.backendLabel || '—');
+    const ownOff = !codex && !!(t && t.own && m && t.own !== m.backend);   // a backend of the tab's own, not the window's: the reading here is the window's
+    row('Backend', gw ? 'LLM gateway, this tab\\'s own' : ownOff ? (t.own === 'api' ? 'API / Bedrock' : 'subscription (login)') + ', this tab\\'s own choice' : !m ? '—' : codex ? (m.backend === 'api' ? 'OpenAI API key' : m.backend === 'bedrock' ? 'Amazon Bedrock' : 'ChatGPT (login)') : m.backendName || m.backendLabel || '—');
     row('Plan', gw ? 'not reported through the gateway' : !m ? '—' : codex ? (m.backend === 'api' ? 'none: billed per token' : m.backend === 'bedrock' ? 'none: billed to the AWS account' : m.plan ? planCap(m.plan) : 'not reported') : m.mode === 'cost' ? 'none: billed per token' : 'not reported');
     if (codex && m && m.credits) row('Credits', m.credits.unlimited ? 'unlimited' : m.credits.has ? m.credits.balance || 'some' : 'none');
     box.append(table);
+    if (ownOff) box.append(el('div', 'line', 'The window is on ' + (m.backendName || m.backendLabel) + '; the reading below is the window\\'s, not this tab\\'s. The line under each answer shows this tab\\'s tokens.'));
     const note = (text, cls) => box.append(el('div', 'line' + (cls ? ' ' + cls : ''), text));
     if (gw) note('Usage through the gateway is not reported here. The line under each answer shows its tokens and which models answered.');
     else if (!m) note('No reading yet for ' + vendor + '.');
@@ -1333,6 +1335,16 @@ ${glyphCss}
       $mu.title = 'Usage through the gateway is not reported here. The line under each answer shows its tokens.';
       return;
     }
+    // a backend of the tab's own, not the window's: the pill says the tab's, and the window's reading is not shown as its
+    if (claude && t.own && t.own !== meter.backend) {
+      const mine = t.own === 'api' ? 'API / Bedrock' : 'subscription (login)';
+      $mb.textContent = t.own === 'api' ? 'API' : 'sub'; $mb.className = 'mb';
+      $mb.title = 'Claude backend for this tab: ' + mine + ', its own choice; the window is on ' + (meter.backendName || meter.backendLabel) + '. Click to change.';
+      $mu.textContent = ''; $mu.className = 'mu none';
+      $mu.append(el('span', 'seg none', '\u2014'));
+      $mu.title = 'This tab is on ' + mine + '; the window\\'s usage reading is the ' + (meter.backendName || meter.backendLabel) + '\\'s, not this tab\\'s. The line under each answer shows its tokens.';
+      return;
+    }
     $mb.textContent = (meter.backendLabel || '') + (meter.backendWarn ? ' \u26A0' : '');
     $mb.className = 'mb' + (meter.backendWarn ? ' warn' : '');
     $mb.title = meter.backendTitle || '';
@@ -1363,11 +1375,11 @@ ${glyphCss}
       return;
     }
     openMenu('backend', $mb, (m) => {
-      const windowBackend = meter ? meter.backend : 'subscription';
+      const windowBackend = meter ? meter.backend : 'subscription', tabBackend = t.gateway ? 'gateway' : t.own || windowBackend;   // each choice is this tab's own
       const pick = (value) => () => vscode.postMessage({ type: 'setBackend', sid: t.id, value });
       m.append(el('div', 'h', 'Claude backend'));
-      m.append(item('subscription (login)', { radio: true, checked: !t.gateway && windowBackend === 'subscription', desc: 'Every tab. Writes CLAUDE_CODE_USE_BEDROCK in ~/.claude/settings.json.', pick: pick('subscription') }));
-      m.append(item('API / Bedrock', { radio: true, checked: !t.gateway && windowBackend === 'api', desc: 'Every tab, with credentials of Claude Code\\'s own. Writes the same setting.', pick: pick('api') }));
+      m.append(item('subscription (login)', { radio: true, checked: tabBackend === 'subscription', desc: 'This tab' + (windowBackend === 'subscription' ? ', as the window is' : '; the window stays on API / Bedrock') + '. Perch: Toggle Claude Backend switches the window.', pick: pick('subscription') }));
+      m.append(item('API / Bedrock', { radio: true, checked: tabBackend === 'api', desc: 'This tab, with credentials of Claude Code\\'s own' + (windowBackend === 'api' ? ', as the window is' : '; the window stays on the subscription') + '.', pick: pick('api') }));
       m.append(item('LLM gateway', { radio: true, checked: !!t.gateway, desc: 'This tab only: Claude Code runs with the variables in ' + (gatewayInfo.file || 'the gateway file') + (gatewayInfo.exists ? '' : ', which does not exist yet') + '.', pick: pick('gateway') }));
     });
   });

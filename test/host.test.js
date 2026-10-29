@@ -2707,15 +2707,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       assert.deepStrictEqual([agent.disposed, v.lastTabs().tabs[0].gateway, v.lastTabs().tabs[0].started, m.box.writes.length], [true, false, false, writes], 'the process ends; already on the subscription, the switch is not touched');
       assert(v.events(g).some((e) => e.kind === 'note' && e.text === 'This tab is on subscription (login) from the next message; the conversation continues, the prompt cache starts over.'));
       v.fire({ type: 'send', sid: g, text: 'resume' });
-      assert.deepStrictEqual([created[created.length - 1].o.resume, created[created.length - 1].o.env, v.lastTabs().tabs[0].backend], ['sess-' + n0, undefined, 'subscription'], 'the same session, resumed on the window\'s backend');
-      // the menu's API / Bedrock goes through the window's switch, for every tab
+      assert.deepStrictEqual([created[created.length - 1].o.resume, created[created.length - 1].o.env, created[created.length - 1].o.backend, v.lastTabs().tabs[0].backend, v.lastTabs().tabs[0].own], ['sess-' + n0, undefined, { bedrock: false }, 'subscription', 'subscription'], 'the same session, resumed on the subscription as this tab\'s own choice, told to its process as settings');
+      // the menu's API / Bedrock is this tab's own: the window's switch is not touched, and the next process gets the backend as its settings
       v.fire({ type: 'setBackend', sid: g, value: 'api' }); await flush(); await flush();
-      assert.deepStrictEqual([m.box.bedrock, m.box.writes.length], [true, writes + 1]);
-      v.fire({ type: 'setBackend', sid: g, value: 'api' }); await flush();
-      assert.strictEqual(m.box.writes.length, writes + 1, 'asking for the backend the window is on changes nothing');
+      assert.deepStrictEqual([m.box.bedrock, m.box.writes.length, v.lastTabs().tabs[0].own, v.lastTabs().tabs[0].gateway, v.lastTabs().tabs[0].started], [false, writes, 'api', false, false], 'the window stays on the subscription; the running process ended');
+      v.fire({ type: 'send', sid: g, text: 'on api' }); await flush();
+      assert.deepStrictEqual([created[created.length - 1].o.backend, created[created.length - 1].o.offGateway, created[created.length - 1].o.env, v.lastTabs().tabs[0].backend], [{ bedrock: true }, undefined, undefined, 'api'], 'its process is on API / Bedrock by its own settings');
+      const nAgents = created.length; v.fire({ type: 'setBackend', sid: g, value: 'api' }); await flush();
+      assert.deepStrictEqual([created.length, v.lastTabs().tabs[0].started], [nAgents, true], 'asking for the backend the tab is on changes nothing');
+      v.fire({ type: 'meterToggle' }); await flush(); await flush();
+      assert.deepStrictEqual([m.box.bedrock, v.lastTabs().tabs[0].started, v.lastTabs().tabs[0].own], [true, true, 'api'], 'the window moves to API / Bedrock; a tab with a backend of its own is left alone');
+      v.fire({ type: 'meterToggle' }); await flush(); await flush(); assert.strictEqual(m.box.bedrock, false, 'back on the subscription');
       v.fire({ type: 'setBackend', sid: g, value: 'bogus' }); v.fire({ type: 'setBackend', sid: plain, value: 'gateway' }); v.fire({ type: 'setBackend', sid: 'nope', value: 'gateway' });
       assert.deepStrictEqual([v.lastTabs().tabs[0].gateway, v.lastTabs().tabs[1].gateway], [false, true], 'junk is ignored; any Claude tab can be put on the gateway');
-      v.fire({ type: 'meterToggle' }); await flush(); await flush(); assert.strictEqual(m.box.bedrock, false);
       // a tab in the middle of a turn moves after it
       v.fire({ type: 'send', sid: g2, text: 'hold this' });
       const held = created[created.length - 1]; assert.deepStrictEqual([held.o.env.ANTHROPIC_BASE_URL, v.lastTabs().tabs[2].busy], ['https://gw.example.com/llm-api', true]);
@@ -2733,7 +2737,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       assert.deepStrictEqual(dump['perch.sessions.v1'].sessions.map((s) => s.gateway), [false, true, false, false], 'saved with each tab');
       const m2 = install(dump, { config: { 'claude.gatewayEnv': file } }); await flush();
       const v2 = fakeView(); m2.registered['perch.main'].resolveWebviewView(v2.view); v2.fire({ type: 'ready' }); await flush();
-      assert.deepStrictEqual(v2.lastTabs().tabs.map((x) => [x.gateway, x.cache && x.cache.minutes]), [[false, 60], [true, 5], [false, 60], [false, null]], 'restored as they were');
+      assert.deepStrictEqual(v2.lastTabs().tabs.map((x) => [x.gateway, x.own, x.cache && x.cache.minutes]), [[false, 'api', 5], [true, '', 5], [false, 'subscription', 60], [false, '', null]], 'restored as they were, a backend of a tab\'s own included, with that backend\'s cache lifetime');
       assert.deepStrictEqual(dump['perch.sessions.v1'].sessions.map((s) => near(s.gatewayCost, 0.0006)), [true, false, false, false], 'the first tab\'s gateway figure is kept with it, though it has left the gateway; the others have none');
       v2.fire({ type: 'send', sid: v2.lastTabs().tabs[1].id, text: 'after the reload' });
       assert(near(v2.events(v2.lastTabs().tabs[1].id).filter((e) => e.kind === 'result').pop().gatewayCostSoFar, 0.0003), 'a tab with no saved figure starts from nothing');

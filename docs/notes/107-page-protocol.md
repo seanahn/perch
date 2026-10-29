@@ -13,7 +13,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `permission` | `sid`, `id`, `decision` | `allow`, `always`, or `deny` |
 | `setModel`, `setEffort`, `setMode` | `sid`, `value` | A choice from a menu |
 | `setIde` | `sid`, `value` | IDE context on or off |
-| `setBackend` | `sid`, `value` | A Claude tab's backend from the footer's menu: `subscription` or `api` (the window's, through its switch), or `gateway` (this tab's) |
+| `setBackend` | `sid`, `value` | A Claude tab's backend from the footer's menu, each this tab's own: `subscription` or `api`, carried to its next process as settings of its own (the tab's `own`), or `gateway` |
 | `switchVendor` | `sid`, `kind`, `model`, `effort` | Continue the tab on the destination vendor. `effort: ""` means that model's default (a click on its model row); a contextual effort item sends its explicit value |
 | `attach` | `sid` | Open the file picker for mentions |
 | `new`, `close`, `activate` | `kind` (and `gateway` for a Claude tab on the gateway) or `sid` | Sidebar tab bar |

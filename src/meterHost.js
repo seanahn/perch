@@ -209,9 +209,9 @@ class MeterHost {
     return true;
   }
 
-  /** Whether a Claude session started now would have something to authenticate with, on the backend it would get. */
-  canRun() {
-    if (this.meter.bedrockConfigured()) return this.meter.apiCredentialsPresent();
+  /** Whether a Claude session started now would have something to authenticate with, on the backend it would get: the window's, or the one given. */
+  canRun(backend) {
+    if ((backend || this.backend()) === 'api') return this.meter.apiCredentialsPresent();
     return !!(process.env.ANTHROPIC_API_KEY || this.meter.readCredentials());
   }
 

@@ -119,6 +119,23 @@ const OFF_GATEWAY_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTH
  * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)
  * @returns {{ env: Record<string,string>, apiKeyHelper: string, model: string }}
  */
+/**
+ * Settings that put one tab on a backend of its own, whatever ~/.claude/settings.json says for the window: command-line
+ * settings rank above the file, so CLAUDE_CODE_USE_BEDROCK given here decides. The model slots are set as offGatewaySettings
+ * sets them, for the same reason: a Bedrock id the file pins for the window is no name the subscription knows.
+ * @param {boolean} bedrock  true for API / Bedrock, false for the subscription
+ * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)
+ * @returns {{ env: Record<string,string> }}
+ */
+function ownBackendSettings(bedrock, inherited = process.env) {
+  const env = { CLAUDE_CODE_USE_BEDROCK: bedrock ? '1' : '0' };
+  for (const k of OFF_GATEWAY_VARS) {
+    const v = typeof inherited[k] === 'string' ? inherited[k] : '';
+    env[k] = (bedrock || !PROVIDER_MODEL.test(v)) ? v : '';
+  }
+  return { env };
+}
+
 function offGatewaySettings(bedrock, inherited = process.env) {
   const env = { CLAUDE_CODE_USE_BEDROCK: bedrock ? '1' : '0', ANTHROPIC_BASE_URL: '' };
   for (const k of OFF_GATEWAY_VARS) {
@@ -158,4 +175,4 @@ function createTemplate(file) {
   fs.writeFileSync(file, TEMPLATE, { flag: 'wx', mode: 0o600 });
 }
 
-module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, gatewayModels, describe, createTemplate };
+module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, ownBackendSettings, gatewayModels, describe, createTemplate };

@@ -108,6 +108,9 @@ try {
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_MODEL, '', 'subscription: a Bedrock id is not carried over');
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5', 'subscription: a first-party pin comes back');
   assert.strictEqual(G.offGatewaySettings(false).env.CLAUDE_CODE_USE_BEDROCK, '0', 'the inherited environment defaults to this process\'s');
+  // a backend of one tab's own, whatever the window's file says: only the switch and the model slots, nothing of a gateway touched
+  assert.deepStrictEqual(G.ownBackendSettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ...noSlots } }, 'API/Bedrock for this tab: no base URL, helper or model cleared, since no gateway is pinned');
+  assert.deepStrictEqual([G.ownBackendSettings(false, pod).env.CLAUDE_CODE_USE_BEDROCK, G.ownBackendSettings(false, pod).env.ANTHROPIC_MODEL, G.ownBackendSettings(true, pod).env.ANTHROPIC_MODEL], ['0', '', 'us.anthropic.claude-sonnet-4-6'], 'subscription for this tab: a Bedrock id the machine pins is not carried over; on Bedrock it is');
 
   console.log('gateway tests passed');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

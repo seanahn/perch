@@ -678,6 +678,11 @@ pickItem('LLM gateway'); assert.deepStrictEqual(out.pop(), { type: 'setBackend',
 assert.strictEqual($('#menu'), null, 'the menu closes on a choice');
 $mb.click(); pickItem('API / Bedrock'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'api' });
 $mb.click(); pickItem('subscription (login)'); assert.deepStrictEqual(out.pop(), { type: 'setBackend', sid: 'a', value: 'subscription' });
+// a backend of the tab's own, not the window's: the pill and the menu say so, and the window's reading is not shown as the tab's
+host({ type: 'tabs', tabs: [with_(A, { own: 'api' }), B], active: 'a' });
+assert.deepStrictEqual([$mb.textContent, [...$mu.children].map((n) => n.textContent), /API \/ Bedrock, its own choice; the window is on subscription \(login\)/.test($mb.title)], ['API', ['\u2014'], true]);
+$mb.click(); assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', false], ['API / Bedrock', true], ['LLM gateway', false]], 'the tab\'s own backend is checked'); assert(/^This tab, with credentials of Claude Code's own; the window stays on the subscription\./.test(menuItems()[1].desc)); $mb.click();
+host({ type: 'tabs', tabs: [A, B], active: 'a' });
 // the usage panel under a Claude tab: no plan is named, since Anthropic's usage endpoint names none; each window; refresh
 $mu.click(); assert(shown(puOf()) && $('#m-use').getAttribute('aria-pressed') === 'true', 'the compact reading opens the usage panel');
 assert.deepStrictEqual([puOf().querySelector('.mxh .what').textContent, puRows()], ['Claude usage', [['Backend', 'subscription (login)'], ['Plan', 'not reported']]]);
