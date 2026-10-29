@@ -275,6 +275,39 @@ Each switch is logged in the Perch output channel (View › Output ›
 Perch). The design and the measurements are in
 [note 202](docs/notes/202-switching-vendors-in-a-tab.md).
 
+## Setup, step by step
+
+![The working layout: the Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](docs/notes/901-window.png)
+
+1. **VS Code 1.92 or later.** Under Remote-SSH or code-server, connect
+   first and do the rest in that window: Perch, the agents and the index
+   run where the workspace is.
+2. **Install Perch** from the Marketplace; Perch Audio (dictation's
+   recorder, on the local machine) and the Claude Code and ChatGPT
+   extensions (whose programs Perch runs) come with it. Reload, then
+   **Ctrl+Alt+P** (Cmd+Alt+P on a Mac).
+3. **The layout in the picture.** Open a file, start a Perch tab, drag
+   its tab to the right edge of the editor area: a second group. Perch
+   locks a group that holds only its tabs, so files from the Explorer go
+   to the middle group; **+** in the group's title bar opens the next
+   session there. It all comes back after a reload.
+4. **Log in** on the first message to a tab of each kind — Claude's
+   subscription or Codex's ChatGPT login in the browser — or set the
+   backend you want from the footer's menu, which is the tab's own:
+   API / Bedrock with Claude Code's credentials, a gateway from an env
+   file of yours, Codex on an API key or on Bedrock. [Logins](#logins)
+   has each one.
+
+In the picture: the Perch group's tabs and title bar (**+** new tab, the
+clock for past sessions); the transcript with a tool card and the turn's
+result line; the composer with its tools (**+** files, **/** commands,
+the context ring, the cache clock, the model pill, IDE context, the
+permission bolt, the microphone, send); and the footer: the other
+vendor's mark to continue there, the backend pill, **usage**, **index**,
+**sub-agents**, and the plan's reading. Every control is numbered and
+named in [note 901](docs/notes/901-setup.md), which is the same guide at
+full length.
+
 ## Install
 
 From the marketplace: install **Perch**; Perch Audio, the microphone
