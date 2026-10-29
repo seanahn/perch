@@ -77,6 +77,43 @@ terminal panel below.
    they were, and each tab resumes its session: the transcript is read
    back from the vendor's own record, so Perch keeps no copy.
 
+## 3b. The window, annotated
+
+![The working layout: Explorer, files in the middle, a locked group of Perch tabs on the right, the terminal below](901-window.png)
+
+The numbers, left to right and top to bottom. Everything from 4 on is
+Perch's; 1–3, 26 and 27 are VS Code's.
+
+| # | What it is | What it does |
+| --- | --- | --- |
+| 1 | The Explorer | The workspace's folders. A file opened here goes to the middle group, never into the Perch group, which is locked. |
+| 2 | The editor group in the middle | Files. The group Explorer opens land in. |
+| 3 | The lock in a group's title bar | VS Code's own mark of a locked group; Perch locks a group that holds only its tabs (`perch.lockGroup`). |
+| 4 | The Perch group's tab row | One tab per session, each with its vendor's mark; a working tab's title ends in `…`. Drag, split and reorder like files; closing the tab closes the session. |
+| 5 | The Perch group's title-bar icons | **+** opens a new tab here; the clock is `Perch: Sessions…`, every past session on the machine; the `…` menu has *Continue This Tab in …* and *Hand Off Last Answer*. |
+| 6 | The transcript | The conversation, read back from the vendor's own record after a reload. Code blocks and commands have a copy button. |
+| 7 | A message of yours | On the right, with the IDE-context tag when one was sent. |
+| 8 | A tool call | One card per call (`Bash · …`), its command and its output; a failed one says so. Sub-agents show as lines and a count. |
+| 9 | The result line | What the turn cost: time, tokens in, cached, out, and the price at the backend's rates (`≈` for an estimate). |
+| 10 | The composer | Enter sends, Shift+Enter breaks a line; paste an image to attach it. |
+| 11 | **+** | Pick files and mention them by path (`@src/a.js`). |
+| 12 | **/** | Slash commands, read from Claude Code; typing `/` opens the same list. |
+| 13 | The ring | How full the context window is: amber at 80 %, red at 95 %. |
+| 14 | The clock | Minutes until the prompt cache goes cold (an hour on a subscription, five on API / Bedrock). |
+| 15 | The model pill | Model and effort; a menu for both. |
+| 16 | **IDE context** | Send the active file and selection with the message; remembered per tab. |
+| 17 | The bolt | Permission mode: Ask, Edits, Plan, Auto, Bypass (a Codex tab shows its sandbox behind a shield instead). |
+| 18 | The microphone | Dictation, once set up; it records on the local machine. |
+| 19 | Send | Stop while the tab works. |
+| 20 | The destination vendor's mark | **Continue in Codex** (Claude's mark under a Codex tab): the other vendor's models, each with its effort levels; the conversation is handed over as text. |
+| 21 | The backend pill | `sub`, `API` or `gw` (Codex: `ChatGPT`, `API`, `Bedrock`): a menu, each choice this tab's own. |
+| 22 | **usage** | The panel: backend, the plan as the vendor reports it, each window and when it was read, refresh or log in. |
+| 23 | **index** | Codebase search: each folder's state and switches. |
+| 24 | **sub-agents** | This session's usage, thread by thread. |
+| 25 | The compact reading | The plan's windows (5-hour, weekly, per model) in colour; it opens the same panel as **usage**. |
+| 26 | The terminal panel | VS Code's; where **Log In** runs the vendors' sign-in. |
+| 27 | The status bar | VS Code's and other extensions'; Perch puts nothing here. |
+
 ## 4. Logins, per vendor and backend
 
 Perch runs the agents on the logins already on the machine with the
