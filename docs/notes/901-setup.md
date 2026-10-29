@@ -29,13 +29,6 @@ extensions, **Claude Code** (`anthropic.claude-code`) and **ChatGPT**
 Extensions view installs Perch and the vendors' extensions on the remote
 ("Install in SSH: host"); Perch Audio goes on the local side by itself.
 
-**From a checkout**, on the machine with the workspace:
-
-```
-git clone https://github.com/seanahn/perch && cd perch
-make install     # npm install, syntax check, symlink into the extension dirs
-```
-
 **From a `.vsix`** (a machine without Marketplace access): `code
 --install-extension perch-<version>.vsix`, or on a VS Code server
 `~/.vscode-server/cli/servers/Stable-*/server/bin/code-server
