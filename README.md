@@ -4,16 +4,11 @@ Claude Code and Codex as tabs in VS Code, in the editor area or the sidebar.
 Any number of sessions, with usage and backend switching built in; a tab
 can change vendor in the middle of a task.
 
-- **The vendors' own agents, unchanged** — one Claude Code or Codex process per tab, so their prompt caching, compaction and logins; no request of Perch's own ([why](#why-the-vendors-own-agents-so-their-caching)).
-- **Tabs where you work** — sessions as editor tabs in a locked group, or in the sidebar; they survive a reload ([where tabs live](#where-tabs-live)).
 - **Continue in the other vendor, or another model** — the footer's mark hands the conversation to Codex or Claude as text, a model and effort picked from its menu ([switching](#switching-between-claude-and-codex-in-a-tab)).
 - **A backend per tab** — subscription, API / Bedrock or an LLM gateway for Claude; ChatGPT, API key or Bedrock for Codex, each tab's own ([logins](#logins)).
 - **Codebase search by meaning** — an index per workspace folder and a `codebase_search` tool for both agents, keywords at once and MiniLM once installed, switched per folder ([codebase search](#codebase-search)).
 - **Usage in the footer** — the plan's windows or the cost, a panel with the detail, the session's threads and sub-agents, and each turn's tokens under its answer ([usage](#usage-in-the-footer)).
-- **Past sessions, both vendors'** — every session on the machine listed by name, reopened in a tab ([names and past sessions](#names-and-past-sessions)).
 - **Permissions as the vendor has them** — Claude's modes and Codex's sandbox and approval policy, per tab, with the prompts answered in the tab ([permissions](#permissions)).
-- **Dictation** — speech to text into the composer, the model on the workspace machine, the microphone on yours ([dictation](#dictation)).
-- **IDE context** — the active file and selection sent with a message, per tab ([the composer](#the-composer)).
 
 ## Why: the vendors' own agents, so their caching
 
