@@ -44,6 +44,10 @@ Proposals:
 
 - [201 — Codebase indexing for Perch tabs](201-codebase-indexing.md)
 
+Guides:
+
+- [901 — Setting up Perch, step by step](901-setup.md)
+
 ---
 
 <a id="n102"></a>

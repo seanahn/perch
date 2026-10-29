@@ -288,6 +288,9 @@ From a checkout:
 make install     # npm install, syntax check, symlink into the extension dirs
 ```
 
+Step by step, from a bare VS Code to the working layout and a login for
+each vendor and backend: [note 901](docs/notes/901-setup.md).
+
 Reload the window, then press **Ctrl+Alt+P** (Cmd+Alt+P on a Mac):
 `Perch: Open` brings back the tab you last used, or, with none open, the
 sessions list, which starts a new tab of either kind at the top. The same
