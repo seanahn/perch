@@ -617,6 +617,29 @@ Perch's own, which also keeps the audio on the user's machines. Codex Audio and
 Perch Audio make the same split, microphone local and recognition elsewhere;
 the difference is where the recognition is.
 
+**Why VS Code's dictation could not be used by a Perch tab.** The speech
+service feeds the workbench's own surfaces only — the editor
+(`workbench.action.editorDictation.start`) and Copilot Chat
+(`workbench.action.chat.startVoiceChat`). What extensions get is the other
+direction: `speech.registerSpeechProvider`, to *supply* recognition to VS Code,
+and it is still a proposed API, closed to a Marketplace extension. There is no
+call that hands an extension the words. The only route would have been a
+composer that is a real text editor (an untitled document in the tab) rather
+than the webview's box: VS Code Speech would then dictate into it, with no
+Perch Audio and no Whisper install — at the cost of the vendor-styled composer
+and its tools, and under VS Code Speech's own limits (official VS Code and the
+Microsoft Marketplace only, so not code-server, VSCodium or Cursor; no model,
+language or placement choice). Not taken. Codex's panel is a webview too, which
+is why OpenAI built Codex Audio instead of using VS Code's.
+
+**Cursor's dictation is VS Code's, inherited by the fork, not an integration.**
+Its 3.12.17 build carries the `editorDictation` feature and the speech service
+unchanged, with no voice code of its own (no `cursor.*` voice or dictation
+setting, no "voice mode"), and no provider can be installed, since VS Code
+Speech is not on Open VSX, Cursor's registry: the menu entry exists and fails
+with "no speech provider is registered". Its agent panel is a webview as well,
+so a provider would not have reached it either.
+
 ---
 
 <a id="n113"></a>
