@@ -295,8 +295,9 @@ Perch). The design and the measurements are in
 3. **The layout in the picture.** Open a file, start a Perch tab, drag
    its tab to the right edge of the editor area: a second group. Perch
    locks a group that holds only its tabs, so files from the Explorer go
-   to the middle group; **+** in the group's title bar opens the next
-   session there. It all comes back after a reload.
+   to the middle group — which must stay unlocked: lock it too and
+   every file opens a third group. **+** in the Perch group's title bar
+   opens the next session there. It all comes back after a reload.
 4. **Log in** on the first message to a tab of each kind — Claude's
    subscription or Codex's ChatGPT login in the browser — or set the
    backend you want from the footer's menu, which is the tab's own:

@@ -63,8 +63,10 @@ terminal panel below.
    itself, the way a terminal's is (`perch.lockGroup`, on by default):
    files from the Explorer go to the group beside it. When the last Perch
    tab leaves a group that still has files, Perch takes the lock off.
-   Nothing to do by hand; **View: Lock Editor Group** is there if you
-   want a lock Perch does not manage.
+   Nothing to do by hand, and **do not lock the files group**: VS Code
+   opens a file in the most recent unlocked group, so with both groups
+   locked every Explorer click makes a third group. (**View: Unlock
+   Editor Group** undoes a lock set by hand.)
 4. **More tabs.** The **+** in the editor title bar of the Perch group, or
    Ctrl+Alt+P again, opens the next session in that group. Tabs can be
    dragged, split and reordered like files; closing the editor tab closes
@@ -88,7 +90,7 @@ Perch's; 1–3, 26 and 27 are VS Code's.
 | --- | --- | --- |
 | 1 | The Explorer | The workspace's folders. A file opened here goes to the middle group, never into the Perch group, which is locked. |
 | 2 | The editor group in the middle | Files. The group Explorer opens land in. |
-| 3 | The lock in a group's title bar | VS Code's own mark of a locked group; Perch locks a group that holds only its tabs (`perch.lockGroup`). |
+| 3 | The lock on the Perch group's title bar | VS Code's mark of a locked group, set by Perch for a group that holds only its tabs (`perch.lockGroup`). The files group (2) carries no lock: that is what sends Explorer clicks to it. |
 | 4 | The Perch group's tab row | One tab per session, each with its vendor's mark; a working tab's title ends in `…`. Drag, split and reorder like files; closing the tab closes the session. |
 | 5 | The Perch group's title-bar icons | **+** opens a new tab here; the clock is `Perch: Sessions…`, every past session on the machine; the `…` menu has *Continue This Tab in …* and *Hand Off Last Answer*. |
 | 6 | The transcript | The conversation, read back from the vendor's own record after a reload. Code blocks and commands have a copy button. |
