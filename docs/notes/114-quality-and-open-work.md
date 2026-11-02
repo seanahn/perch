@@ -128,7 +128,7 @@ How Perch is tested, what has been verified against the vendors' agents and what
 | Claim | Why not |
 | --- | --- |
 | **Anything under Remote-SSH** | Not run in a remote window. The design follows VS Code's documented extension-kind model |
-| **perch-audio on macOS or Windows** | Prebuilt binaries ship for both. Not run |
+| **perch-audio on macOS or Windows** | Prebuilt binaries ship for both. Not run. Checked 2026-11-02 without a Mac: the recorder's `mac/arm64` and `mac/x86_64` libraries are in the package (`vsce ls`), `ctranslate2` has an Apple-silicon wheel and `faster-whisper` is pure Python, the CUDA wheels are gated to Linux by their markers, and the server ends at CPU/int8, so a Mac runs `small` on the CPU (no Metal or CoreML path in CTranslate2). First things a Mac would exercise: the microphone permission prompt (TCC) — declined or unshown, the recorder gets silence rather than a clear message; and device handling, which is Linux-only (`probeInputs`, the headset profile switch), so a Mac uses the system default input with no unplugged-jack detection. The designed case from a Mac is Remote-SSH: Perch Audio records locally, Whisper runs on the remote |
 | **Microphone permission prompts** | No device to trigger one |
 | **The page in a real webview** | Tested in jsdom, which does not lay out or paint. Visual defects have been found by eye and fixed |
 | **Editor-tab restoration in VS Code** | The serializer is tested against a stub |

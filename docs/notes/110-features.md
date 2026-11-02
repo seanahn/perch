@@ -610,6 +610,8 @@ Why Perch has a dictation of its own, against what is already there:
 | Cursor | VS Code's, inherited by the fork; no voice feature or setting of its own (3.12.17) | no provider available: VS Code Speech is not on Open VSX, Cursor's registry, and its licence is for VS Code proper | — |
 | Perch | yes, Perch Audio on the local machine, the engine on whichever machine suits (`perch.voice.runOn`) | locally, faster-whisper on a GPU or a CPU (`small` by default on a CPU) | Perch's composer, Claude and Codex tabs alike |
 
+Platforms: run on Linux, where it was built and measured. macOS and Windows have the recorder's native libraries in the package and CPU wheels for the engine, and have not been run (note 116 lists what a first run there would exercise).
+
 Perch's composer is a webview, outside the editor's speech service, so VS Code's
 dictation cannot reach it even where it is installed; Codex's reaches only the
 ChatGPT extension's panel, and Perch runs the CLIs headless. Hence the engine of
