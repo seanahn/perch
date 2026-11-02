@@ -598,6 +598,25 @@ the remote.
 | OpenAI transcription API | Not built. Needs a key, costs per minute, sends audio out |
 | Codex realtime voice | Not applicable. A spoken conversation, not dictation, and only through the app-server protocol |
 
+### The editors' and vendors' own dictation (checked 2026-11-02)
+
+Why Perch has a dictation of its own, against what is already there:
+
+| | Dictation | Speech recognised where | Types into |
+| --- | --- | --- | --- |
+| Claude Code (CLI, extension) | none — nothing voice-related in the binary, the extension's commands or its settings; Anthropic's voice mode is in the Claude desktop and mobile apps | — | — |
+| Codex (ChatGPT extension) | yes, with the **Codex Audio** companion (`openai.codex-audio`, "local microphone support for Codex dictation, including remote workspaces") | OpenAI's service: the `codex` binary speaks a realtime-session / `appendSpeech` protocol on the ChatGPT login; nothing stays on the machine | the ChatGPT extension's own panel |
+| VS Code | the built-in speech service (*Voice: Start Dictation in Editor*), inert until a provider extension registers | **VS Code Speech** (`ms-vscode.vscode-speech`): Microsoft's on-device models; 1.5 M installs, last release 2025-06 | the editor and Copilot Chat; not a webview |
+| Cursor | VS Code's, inherited by the fork; no voice feature or setting of its own (3.12.17) | no provider available: VS Code Speech is not on Open VSX, Cursor's registry, and its licence is for VS Code proper | — |
+| Perch | yes, Perch Audio on the local machine, the engine on whichever machine suits (`perch.voice.runOn`) | locally, faster-whisper on a GPU or a CPU (`small` by default on a CPU) | Perch's composer, Claude and Codex tabs alike |
+
+Perch's composer is a webview, outside the editor's speech service, so VS Code's
+dictation cannot reach it even where it is installed; Codex's reaches only the
+ChatGPT extension's panel, and Perch runs the CLIs headless. Hence the engine of
+Perch's own, which also keeps the audio on the user's machines. Codex Audio and
+Perch Audio make the same split, microphone local and recognition elsewhere;
+the difference is where the recognition is.
+
 ---
 
 <a id="n113"></a>
