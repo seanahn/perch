@@ -82,7 +82,7 @@ throwaway directories and stand-in processes with no editor running.
 
 | Package | Version | Why |
 | --- | --- | --- |
-| `@anthropic-ai/claude-agent-sdk` | 0.3.284 | Runs Claude Code. Installed from npm it brings its own CLI; packaged, perch uses the Claude Code extension's |
+| `@anthropic-ai/claude-agent-sdk` | 0.3.321 | Runs Claude Code. Installed from npm it brings its own CLI (2.1.321; Fable 5.2 needs 2.1.290 or newer, which is what moved it off 0.3.284 on 2026-11-09); packaged, perch uses the Claude Code extension's |
 | `@openai/codex-sdk` | 0.159.0 | Runs Codex. Installed from npm its dependency brings `codex`; packaged, perch uses the ChatGPT extension's |
 | `@picovoice/pvrecorder-node` | 1.2.9 | Microphone capture, in perch-audio. Prebuilt for macOS, Linux, Windows |
 | `faster-whisper` | 1.2.1 | Speech-to-text, in a private Python environment |

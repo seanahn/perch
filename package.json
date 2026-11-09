@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.7.16",
+  "version": "0.7.17",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -570,7 +570,7 @@
     ]
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.284",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.321",
     "@openai/codex-sdk": "^0.159.0"
   },
   "scripts": {
