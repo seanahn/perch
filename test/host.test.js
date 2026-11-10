@@ -1169,6 +1169,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const fs = require('fs'), os = require('os'), path = require('path');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-gw-')); const file = path.join(dir, 'env');
     fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\nexport ANTHROPIC_MODEL=router-auto-bargain[1m]\nexport ANTHROPIC_DEFAULT_OPUS_MODEL=router-auto-quality[1m]\nexport ANTHROPIC_DEFAULT_SONNET_MODEL=router-auto-unlimited[1m]\n');
+    const realFetch = globalThis.fetch; globalThis.fetch = async () => ({ ok: false });   // a gateway that will not list its models: the file's names
     const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
@@ -1183,7 +1184,31 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual([v.tab(x).model, v.tab(x).efforts.map((e) => e.value)], ['opus', ['', 'low', 'medium', 'high']]);
     v.fire({ type: 'setBackend', sid: x, value: 'subscription' }); await flush();
     assert.deepStrictEqual([v.tab(x).gateway, v.tab(x).model], [false, 'opus'], 'off the gateway an alias still means something, so it stays');
-    m.perch.dispose(); fs.rmSync(dir, { recursive: true, force: true });
+    m.perch.dispose(); fs.rmSync(dir, { recursive: true, force: true }); globalThis.fetch = realFetch;
+  }
+
+  // ---- a gateway that lists its models: one entry per model, grouped, the effort sent as part of the model's name
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-gw-')); const file = path.join(dir, 'env');
+    fs.writeFileSync(file, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\nexport ANTHROPIC_MODEL=nexus-auto-bargain[1m]\n');
+    const ids = ['opus', 'opus-high', 'opus-max', 'fable', 'fable-high', 'gpt-sol', 'gpt-sol-low', 'nexus-auto', 'anthropic/opus', 'anthropic/opus-high'];
+    const asked = []; const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => { asked.push(url); return { ok: true, json: async () => ({ data: ids.map((id) => ({ id })) }) }; };
+    const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active;
+    v.fire({ type: 'setBackend', sid: x, value: 'gateway' }); await flush(); await flush();
+    assert.strictEqual(asked[0], 'https://gw.example/llm-api/v1/models', 'the gateway is asked for its models');
+    const t = v.tab(x);
+    assert.deepStrictEqual(t.models.map((o) => [o.value, o.label, o.group || '']), [['', 'default · nexus-auto-bargain[1m]', ''], ['anthropic/opus[1m]', 'opus', 'Claude'], ['anthropic/fable[1m]', 'fable', 'Claude'], ['anthropic/gpt-sol[1m]', 'gpt-sol', 'OpenAI'], ['anthropic/nexus-auto[1m]', 'nexus-auto', 'Routers']], 'one entry per model, by family');
+    v.fire({ type: 'setModel', sid: x, value: 'anthropic/opus[1m]' }); await flush();
+    assert.deepStrictEqual(v.tab(x).efforts.map((e) => e.value), ['', 'high', 'max'], 'only the levels the gateway names');
+    v.fire({ type: 'setEffort', sid: x, value: 'high' }); await flush();
+    v.fire({ type: 'send', sid: x, text: 'go' }); await flush();
+    const o = created[created.length - 1].o;
+    assert.deepStrictEqual([o.model, o.effort], ['anthropic/opus-high[1m]', undefined], 'the effort is in the name, not an effort setting on top');
+    m.perch.dispose(); fs.rmSync(dir, { recursive: true, force: true }); globalThis.fetch = realFetch;
   }
 
   // ---- the Codex backend: the ChatGPT login, or an OpenAI API key kept in secret storage, for every Codex tab from its next turn

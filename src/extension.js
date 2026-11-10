@@ -447,7 +447,7 @@ class Session {
 
   // ---- what this tab may choose, given the agent's catalog and the selected model
   /** On the gateway the choices are the file's names (src/gateway.js), not Claude Code's catalog. */
-  catalog() { return this.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.kind === 'claude' && this.own ? this.view.claudeCatalog(this.own) : this.view.catalog[this.kind] || null; }
+  catalog() { return this.gateway ? this.view.gatewayCatalog() :this.kind === 'claude' && this.own ? this.view.claudeCatalog(this.own) : this.view.catalog[this.kind] || null; }
   /**
    * The catalog's entry for a model the tab names: by its value, else by the model the id names, so a model given by its
    * id (`claude-fable-5-1[1m]`: Fable 5.1 with the 1M context window, chosen in Claude Code or saved by an older Perch) is
@@ -525,7 +525,7 @@ class Session {
     const title = live && live !== (d && d.model) ? 'Claude Code says this session is running ' + live + (d && d.label ? '; new sessions start on ' + d.label : '') + '.'
       : d && d.description ? d.description : 'The model the agent picks by default';
     const opts = [{ value: '', label: 'default' + (name ? ' · ' + name : ''), title }];
-    for (const v of this.allowedModels().slice(1)) { const m = this.entryOf(v); opts.push({ value: v, label: this.nameOf(v), title: m ? m.description : 'not in the agent\'s model list' }); }
+    for (const v of this.allowedModels().slice(1)) { const m = this.entryOf(v); opts.push({ value: v, label: this.nameOf(v), title: m ? m.description : 'not in the agent\'s model list', ...(m && m.group ? { group: m.group } : {}) }); }
     return opts;
   }
   effortOptions() {
@@ -686,8 +686,8 @@ class Session {
         cwd: cwd(), emit, resume,
         permissionMode: this.mode,
         // off a pinned gateway the subscription does not know the gateway's model names: keep the model only if the catalog has it
-        model: (this.model && (!pinned || !launchCat || modelEntry(launchCat, this.model))) ? this.model : undefined,
-        effort: this.effort || undefined,
+        model: (this.model && (!pinned || !launchCat || modelEntry(launchCat, this.model))) ? this.wireModel() : undefined,
+        effort: (!this.effortInName() && this.effort) || undefined,   // on the gateway's list the effort is in the model's name
         executable: prog.path || undefined,
         costBefore: this.costSoFar === null ? undefined : this.costSoFar,
         env: gw ? Gateway.gatewayEnv(gw.vars) : undefined,
@@ -918,11 +918,17 @@ class Session {
     else this.agent.setSandboxMode(value);                            // Codex: from the next turn
   }
 
+  /** A gateway model whose effort is part of its name (`opus-high`), as the gateway's own list names them. */
+  effortInName() { const m = this.gateway && this.model ? this.selectedModel() : null; return !!(m && m.effortInName); }
+  /** The model name the agent is given: on the gateway's list, the model at the chosen effort. */
+  wireModel() { return this.effortInName() ? Gateway.gatewayModelName(this.model, this.effort) : this.model; }
+
   setEffort(value) {
     if (!this.allowedEfforts().includes(value)) return;
     this.effort = value;
     this.view.persist();
     if (!this.agent) return;
+    if (this.effortInName()) { this.agent.setModel(this.wireModel()); return; }   // the gateway pins effort by name
     this.agent.setEffort(value);          // Claude: from the next request. Codex: from the next turn
   }
 
@@ -937,6 +943,7 @@ class Session {
     this.renameDivider();
     this.view.persist();
     if (!this.agent) return;
+    if (this.effortInName()) { this.agent.setModel(this.wireModel()); this.agent.setEffort(''); return; }   // effort is in the name: no effort setting on top
     this.agent.setModel(value); if (effortReset) this.agent.setEffort('');
   }
 
@@ -1002,7 +1009,7 @@ class Session {
   /** The model catalog used when this tab goes to `kind`, including a gateway it used there before. */
   destinationCatalog(kind) {
     const back = this.left[kind] || null;
-    return kind === 'claude' && back && back.gateway ? Gateway.gatewayModels(this.view.gateway().vars) : this.view.catalog[kind];
+    return kind === 'claude' && back && back.gateway ? this.view.gatewayCatalog() : this.view.catalog[kind];
   }
   /** The other vendor and its models, as the footer's menu offers them: default first, with each model's own efforts. */
   switchTo() {
@@ -1292,6 +1299,31 @@ class PerchView {
   gatewayPath() { return Gateway.gatewayFile(cfg('claude.gatewayEnv')); }
   /** The gateway as its file describes it now. Read each time: the file is small, and the user may be editing it. */
   gateway() { return Gateway.readGateway(this.gatewayPath()); }
+  /**
+   * The models a gateway tab may choose: the gateway's own list (GET /v1/models) once it has answered, else the file's
+   * names. Asking is started here and answered later; the tabs are redrawn when the list arrives or changes.
+   */
+  gatewayCatalog() {
+    const gw = this.gateway();
+    this.refreshGatewayModels(gw);
+    const url = gw.vars.ANTHROPIC_BASE_URL;
+    return this.gatewayIds && this.gatewayIdsFor === url ? Gateway.gatewayCatalog(this.gatewayIds, gw.vars) : Gateway.gatewayModels(gw.vars);
+  }
+  /** Ask the gateway for its models: again after ten minutes, and after a minute when it did not answer. */
+  refreshGatewayModels(gw) {
+    if (!gw.ok || this.gatewayFetching) return;
+    const url = gw.vars.ANTHROPIC_BASE_URL, now = Date.now();
+    const fresh = this.gatewayIds && this.gatewayIdsFor === url && now - (this.gatewayFetchedAt || 0) < 10 * 60e3;
+    if (fresh || now - (this.gatewayTriedAt || 0) < 60e3) return;
+    this.gatewayFetching = true; this.gatewayTriedAt = now;
+    Gateway.fetchGatewayModels(gw.vars).then((ids) => {
+      this.gatewayFetching = false;
+      if (!ids) return;
+      const changed = this.gatewayIdsFor !== url || JSON.stringify(ids) !== JSON.stringify(this.gatewayIds);
+      Object.assign(this, { gatewayIds: ids, gatewayIdsFor: url, gatewayFetchedAt: Date.now() });
+      if (changed) this.sendTabs();
+    }, () => { this.gatewayFetching = false; });
+  }
   /** What a page needs to know of the gateway, with the tabs: whether to offer it, and whether it is in order. */
   gatewayInfo() { const gw = this.gateway(); return { file: gw.file, exists: gw.exists, ok: gw.ok }; }
   /** Tells VS Code whether there is a gateway file, so the menus offer a tab on it only then. */

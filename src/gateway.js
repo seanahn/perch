@@ -176,6 +176,76 @@ function gatewayModels(vars) {
   return { models, defaultModel };
 }
 
+/** Effort levels a gateway publishes as name suffixes (`opus-high`), in the menu's order. */
+const NAME_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const CLAUDE_ORDER = ['opus', 'fable', 'sonnet', 'haiku'];
+const GROUP_ORDER = ['Claude', 'OpenAI', 'Other', 'Routers'];
+function groupOf(base) {
+  if (CLAUDE_ORDER.includes(base)) return 'Claude';
+  if (/^gpt-/.test(base)) return 'OpenAI';
+  if (/^nexus-auto/.test(base)) return 'Routers';
+  return 'Other';
+}
+
+/**
+ * The models a tab on the gateway can choose, from the names the gateway lists (GET /v1/models): one entry per model, its
+ * effort variants (`opus-high`) folded into its efforts, the `anthropic/` duplicates dropped, grouped Claude, OpenAI,
+ * other, routers. Each is sent as `anthropic/<name>[1m]`, which Claude Code passes through as it is; the effort chosen
+ * goes into the name (gatewayModelName), since the variants are how the gateway pins effort. The default stays the
+ * file's ANTHROPIC_MODEL, sent by no name at all, so it offers no effort.
+ * @param {string[]} ids  the gateway's model ids
+ * @param {Record<string,string>} [vars]  the gateway file's variables
+ */
+function gatewayCatalog(ids, vars) {
+  const names = new Set((ids || []).filter((s) => typeof s === 'string' && s).map((s) => s.replace(/^anthropic\//, '')));
+  const efforts = new Map();
+  for (const n of names) {
+    const m = /^(.*)-(low|medium|high|xhigh|max)$/.exec(n);
+    if (m && names.has(m[1])) continue;               // a variant: counted under its model below
+    efforts.set(n, NAME_EFFORTS.filter((e) => names.has(`${n}-${e}`)));
+  }
+  const rank = (b) => [GROUP_ORDER.indexOf(groupOf(b)), groupOf(b) === 'Claude' ? CLAUDE_ORDER.indexOf(b) : 0, b];
+  const bases = [...efforts.keys()].sort((a, b) => { const x = rank(a), y = rank(b); return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0); });
+  const models = bases.map((b) => {
+    const group = groupOf(b);
+    const description = group === 'Claude' ? `${b} on the gateway`
+      : group === 'Routers' ? 'The gateway picks a model for each request'
+      : 'Not a Claude model: the gateway translates, and tools or thinking may behave differently in Claude Code';
+    return { value: `anthropic/${b}[1m]`, label: b, group, description, efforts: efforts.get(b), effortInName: true };
+  });
+  const defaultModel = Object.assign({}, gatewayModels(vars).defaultModel, { efforts: [] });
+  return { models, defaultModel };
+}
+
+/** The name sent for a gateway model at an effort: `anthropic/opus[1m]` at high is `anthropic/opus-high[1m]`. */
+function gatewayModelName(value, effort) {
+  const m = /^(.*?)(\[1m\])?$/i.exec(String(value || ''));
+  return m[1] + (effort ? '-' + effort : '') + (m[2] || '');
+}
+
+/**
+ * The model ids the gateway lists for the file's token, or null when it cannot say (no file, no network, an error).
+ * @param {Record<string,string>} vars  the gateway file's variables
+ * @param {{ timeoutMs?: number, fetch?: Function }} [opts]
+ * @returns {Promise<string[]|null>}
+ */
+async function fetchGatewayModels(vars, opts = {}) {
+  const v = vars || {};
+  const token = TOKEN_VARS.map((k) => v[k]).find(Boolean);
+  if (!v[URL_VAR] || !token) return null;
+  const doFetch = opts.fetch || globalThis.fetch;
+  if (typeof doFetch !== 'function') return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), opts.timeoutMs || 10000);
+  try {
+    const res = await doFetch(String(v[URL_VAR]).replace(/\/+$/, '') + '/v1/models', { headers: { Authorization: 'Bearer ' + token, 'x-api-key': token }, signal: ctl.signal });
+    if (!res || !res.ok) return null;
+    const body = await res.json();
+    const ids = Array.isArray(body && body.data) ? body.data.map((m) => m && m.id).filter((x) => typeof x === 'string') : [];
+    return ids.length ? ids : null;
+  } catch (_) { return null; } finally { clearTimeout(timer); }
+}
+
 /** What is wrong with the file, in a sentence that names it. */
 function describe(gw) {
   const why = { missing: 'does not exist', unreadable: 'cannot be read', 'no-url': 'sets no ' + URL_VAR, 'no-token': 'sets no ' + TOKEN_VARS.join(' or ') }[gw.error];
@@ -188,4 +258,4 @@ function createTemplate(file) {
   fs.writeFileSync(file, TEMPLATE, { flag: 'wx', mode: 0o600 });
 }
 
-module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, ownBackendSettings, gatewayModels, describe, createTemplate };
+module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, ownBackendSettings, gatewayModels, gatewayCatalog, gatewayModelName, fetchGatewayModels, describe, createTemplate };

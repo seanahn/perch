@@ -216,7 +216,20 @@ base URL and leaves the login alone ([note 115](114-quality-and-open-work.md#n11
   three aliases are exactly what Claude Code translates through those
   variables and a catalog id such as `claude-fable-5-1` would go out
   untranslated to a router that has no such name. Effort offers the usual
-  levels, a router's names saying nothing of it. A tab moved onto the
+  levels, a router's names saying nothing of it. This is now the
+  fallback: since 0.7.19 the menu is the gateway's own list, asked of
+  `GET /v1/models` when a gateway tab needs it and again after ten
+  minutes (`gatewayCatalog`, `fetchGatewayModels`). Its 100 names on
+  2026-11-10 were 13 models: each also listed with an `anthropic/`
+  prefix, most with effort variants (`opus-high` … `opus-max`). The menu
+  shows one entry per model, grouped Claude, OpenAI, other, routers, and
+  sends `anthropic/<model>[1m]`, which Claude Code passes through as it
+  is; the effort chosen goes into the name (`anthropic/opus-high[1m]`,
+  `gatewayModelName`), with no effort setting on top, since the
+  variants are how the gateway pins effort. A model offers only the
+  levels the gateway names (Sonnet has no `low`; routers none). The
+  default stays `ANTHROPIC_MODEL`, sent by no name, so it offers no
+  effort. A tab moved onto the
   gateway with a catalog model chosen starts from the file's default, so
   the pill never names a Claude model while the gateway answers; an alias
   survives the move back.

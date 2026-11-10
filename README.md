@@ -439,10 +439,13 @@ is copied from elsewhere, so a fresh remote has neither.
   a button opens the same sign-in page again, or brings back the Device
   Code terminal; once the login lands, every
   login note in every Codex tab says so in place of its buttons.
-  On the gateway the model menu is the file's names, not Claude Code's
-  catalog: the default is `ANTHROPIC_MODEL`, and opus, sonnet and haiku
-  are what `ANTHROPIC_DEFAULT_*_MODEL` map them to, which is what the
-  gateway receives. A tab moved onto the gateway with another model
+  On the gateway the model menu is the gateway's own list
+  (`GET /v1/models`), one entry per model, grouped Claude, OpenAI and
+  routers; the effort menu offers the levels the gateway names
+  (`opus-high`), and the choice is sent as that name. The default is
+  `ANTHROPIC_MODEL`. When the gateway does not answer, the menu is the
+  file's names: opus, sonnet and haiku as `ANTHROPIC_DEFAULT_*_MODEL`
+  map them. A tab moved onto the gateway with another model
   chosen starts from the file's default. The choice sticks: once a tab
   is put on the gateway, new Claude tabs start there, until a tab is put
   back on the subscription or API / Bedrock.

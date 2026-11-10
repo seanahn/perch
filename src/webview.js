@@ -284,7 +284,8 @@ ${glyphCss}
   .kw .vdot { position: absolute; right: -3px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px var(--vscode-sideBar-background, var(--vscode-editor-background)); }
   .vdot.claude { background: #D97757; } .vdot.codex { background: #10a37f; }
   .pop .h .k { width: 11px; height: 11px; vertical-align: -2px; margin-right: 2px; }
-  .pop .note { padding: 5px 8px; color: var(--vscode-descriptionForeground); white-space: normal; }
+  .pop .g { margin-top: 3px; padding: 4px 8px 2px 14px; border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-panel-border)); font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .pop .note { padding: 5px 8px;color: var(--vscode-descriptionForeground); white-space: normal; }
   .pop .it { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; column-gap: 6px; align-items: baseline; padding: 4px 8px; border-radius: 5px; cursor: pointer; outline: none; }
   .pop .it:hover, .pop .it.cur, .pop .it:focus { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); }
   .pop.vendor .it { padding: 6px 8px; }
@@ -1061,7 +1062,11 @@ ${glyphCss}
     openMenu('model', $tModel, (m) => {
       const lock = false;
       m.append(el('div', 'h', 'Model'));
-      for (const o of norm(t.models)) m.append(item(o.label, { radio: true, checked: o.value === (t.model || ''), disabled: lock, desc: o.title && o.value ? o.title : '', pick: () => vscode.postMessage({ type: 'setModel', sid: t.id, value: o.value }) }));
+      let group = '';
+      for (const o of norm(t.models)) {
+        if (o.group && o.group !== group) { group = o.group; m.append(el('div', 'g', group)); }   // the gateway's list, by family
+        m.append(item(o.label, { radio: true, checked: o.value === (t.model || ''), disabled: lock, desc: o.title && o.value ? o.title : '', pick: () => vscode.postMessage({ type: 'setModel', sid: t.id, value: o.value }) }));
+      }
       const effs = norm(t.efforts);
       if (effs.length > 1) {
         m.append(el('div', 'h', 'Effort'));
