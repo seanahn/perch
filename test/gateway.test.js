@@ -101,12 +101,15 @@ try {
   // Bedrock flag, and put the model slots back to what the tab inherits when that suits the backend (a Bedrock id only on Bedrock)
   const noSlots = { ANTHROPIC_MODEL: '', ANTHROPIC_SMALL_FAST_MODEL: '', ANTHROPIC_DEFAULT_OPUS_MODEL: '', ANTHROPIC_DEFAULT_SONNET_MODEL: '',
     ANTHROPIC_DEFAULT_HAIKU_MODEL: '', CLAUDE_CODE_SUBAGENT_MODEL: '', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '' };
-  assert.deepStrictEqual(G.offGatewaySettings(false, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'subscription: Bedrock off, the pinned gateway and its model slots cleared');
-  assert.deepStrictEqual(G.offGatewaySettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'API/Bedrock: Bedrock on, the pinned gateway and its model slots cleared');
+  // a gateway's setup also switches Claude Code's side traffic off; left on, the subscription's model list is the short built-in one
+  const TRAFFIC = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  assert.deepStrictEqual(G.offGatewaySettings(false, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: '', ...noSlots, [TRAFFIC]: '' }, apiKeyHelper: '', model: '' }, 'subscription: Bedrock off, the pinned gateway, its model slots and its traffic switch cleared');
+  assert.deepStrictEqual(G.offGatewaySettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BASE_URL: '', ...noSlots }, apiKeyHelper: '', model: '' }, 'API/Bedrock: Bedrock on, the pinned gateway and its model slots cleared; the traffic switch stays as the file has it');
   const pod = { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_MODEL: 'us.anthropic.claude-sonnet-4-6', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5' };   // a pod's own export, and a first-party pin
   assert.strictEqual(G.offGatewaySettings(true, pod).env.ANTHROPIC_MODEL, 'us.anthropic.claude-sonnet-4-6', 'API/Bedrock: the pod\'s Bedrock model comes back');
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_MODEL, '', 'subscription: a Bedrock id is not carried over');
   assert.strictEqual(G.offGatewaySettings(false, pod).env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-4-5', 'subscription: a first-party pin comes back');
+  assert.strictEqual(G.offGatewaySettings(false, { [TRAFFIC]: '1' }).env[TRAFFIC], '1', 'subscription: a traffic switch the machine itself exports is not the gateway\'s, and is kept');
   assert.strictEqual(G.offGatewaySettings(false).env.CLAUDE_CODE_USE_BEDROCK, '0', 'the inherited environment defaults to this process\'s');
   // a backend of one tab's own, whatever the window's file says: only the switch and the model slots, nothing of a gateway touched
   assert.deepStrictEqual(G.ownBackendSettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ...noSlots } }, 'API/Bedrock for this tab: no base URL, helper or model cleared, since no gateway is pinned');

@@ -109,16 +109,16 @@ const OFF_GATEWAY_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTH
   'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'];
 
 /**
- * Settings that take a Claude tab OFF a gateway the machine pins in ~/.claude/settings.json for every Claude Code
- * (ANTHROPIC_BASE_URL + an apiKeyHelper). Command-line settings rank above the file, so empty values clear the pin
- * (verified 2026-10-22: the CLI then left the gateway). The model is cleared too — the gateway's own name for a model
- * is not one a subscription or Bedrock knows, and would 400 — and so are the model slots
- * (OFF_GATEWAY_VARS): each goes back to what this process inherited, the machine's own export, when that suits the backend
- * (a Bedrock id such as us.anthropic.claude-sonnet-4-6 only on Bedrock), else to '', Claude Code's default.
- * @param {boolean} bedrock  true for API / Bedrock, false for the subscription
- * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)
- * @returns {{ env: Record<string,string>, apiKeyHelper: string, model: string }}
+ * The switch a gateway's setup also throws, since a gateway serves none of it: Claude Code's side traffic (feature flags,
+ * telemetry, error reports, update checks). A subscription tab off the gateway must not keep it. With it on, Claude Code
+ * lists a short set of models that can be a release behind: seen 2026-11-10 with Claude Code 2.1.322, four of them, the
+ * "Fable" among them still 5.1 the day after 5.2, where the same login without the switch listed thirteen, 5.2 included.
+ * It is cleared with '': Claude Code read '0' as on too. A tab on API / Bedrock keeps the file's value: its list does not
+ * depend on the switch, and its conversations do not go to Anthropic, so nothing is gained by sending Anthropic the rest.
+ * (docs/notes/114-quality-and-open-work.md, Backend-correct tabs, 5.)
  */
+const TRAFFIC_VAR = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+
 /**
  * Settings that put one tab on a backend of its own, whatever ~/.claude/settings.json says for the window: command-line
  * settings rank above the file, so CLAUDE_CODE_USE_BEDROCK given here decides. The model slots are set as offGatewaySettings
@@ -136,12 +136,25 @@ function ownBackendSettings(bedrock, inherited = process.env) {
   return { env };
 }
 
+/**
+ * Settings that take a Claude tab OFF a gateway the machine pins in ~/.claude/settings.json for every Claude Code
+ * (ANTHROPIC_BASE_URL + an apiKeyHelper). Command-line settings rank above the file, so empty values clear the pin
+ * (verified 2026-10-22: the CLI then left the gateway). The model is cleared too — the gateway's own name for a model
+ * is not one a subscription or Bedrock knows, and would 400 — and so are the model slots
+ * (OFF_GATEWAY_VARS): each goes back to what this process inherited, the machine's own export, when that suits the backend
+ * (a Bedrock id such as us.anthropic.claude-sonnet-4-6 only on Bedrock), else to '', Claude Code's default. On the
+ * subscription the gateway's traffic switch (TRAFFIC_VAR) goes back the same way: to the machine's own export, else to ''.
+ * @param {boolean} bedrock  true for API / Bedrock, false for the subscription
+ * @param {Record<string,string|undefined>} [inherited]  the environment the tab's Claude Code inherits (this process's)
+ * @returns {{ env: Record<string,string>, apiKeyHelper: string, model: string }}
+ */
 function offGatewaySettings(bedrock, inherited = process.env) {
   const env = { CLAUDE_CODE_USE_BEDROCK: bedrock ? '1' : '0', ANTHROPIC_BASE_URL: '' };
   for (const k of OFF_GATEWAY_VARS) {
     const v = typeof inherited[k] === 'string' ? inherited[k] : '';
     env[k] = (bedrock || !PROVIDER_MODEL.test(v)) ? v : '';
   }
+  if (!bedrock) env[TRAFFIC_VAR] = typeof inherited[TRAFFIC_VAR] === 'string' ? inherited[TRAFFIC_VAR] : '';
   return { env, apiKeyHelper: '', model: '' };
 }
 

@@ -78,6 +78,7 @@ How Perch is tested, what has been verified against the vendors' agents and what
 | Claude queueing | Two messages sent together answered in order, idle once |
 | Claude's idle word | `session_state_changed` running/idle arrives when `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` is in the CLI's environment; without it the SDK has the CLI mark it host-only and swallows it (probed 2026-09-30; 6 state words over the harness run) |
 | Claude catalog without a request | 11 models in about 0.5 s |
+| The traffic switch and the Claude catalog | Claude Code 2.1.322 on the subscription (2026-11-10): 13 models; with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` inherited, 4; with `''` over it in the process's settings, 13 again; with `0` over it, 4. The live harness repeats the first three on every run |
 | The model a Claude session starts on, read without a request | SDK 0.3.284's CLI on Bedrock, idle, in a clean environment (2026-10-15): `getContextUsage({ detail: 'summary' })` gave the start model's id. With `ANTHROPIC_MODEL` set to Sonnet 4.6, the catalog named the default Sonnet 4.6, efforts low to max with no `xhigh`, in 712 ms; with the settings' `model` set to Fable, as on the desktop, Fable, in 694 ms. With either, and with neither, the SDK's `default` entry was the built-in Opus 5.5 |
 | Default in a running Claude session is the built-in default | The same CLI (2026-10-15): started on `ANTHROPIC_MODEL`, on the settings' `model`, and on neither, `setModel(undefined)` then reported Opus 5.5 each time. One request after it, from a start on Haiku 4.5: `init` and the answer both Opus 5.5, $0.07 |
 | Codex usage, fresh after a turn | A reading zero to one second old |
@@ -200,3 +201,31 @@ gateway's `model`**, or the subscription 400s on an unknown id.
    subagent model and the gateway's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`) to what the tab inherits,
    the machine's own export, when that suits the backend (a Bedrock id such as
    `us.anthropic.claude-sonnet-4-6` only on Bedrock), else to `''`, Claude Code's default.
+5. **The traffic switch too, on the subscription (0.7.18, found 2026-11-10).** A gateway's setup also puts
+   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in the pinned file, since a gateway serves none of Claude
+   Code's side traffic (feature flags, telemetry, error reports, update checks). A subscription tab taken
+   off the gateway kept the switch, and with it on Claude Code lists a short set of models that can be a
+   release behind: on a pinned machine the menu had four, its "Fable" still 5.1 the day after 5.2, where
+   Claude Code without the switch listed thirteen, 5.2 among them. `offGatewaySettings(false, inherited)`
+   now also puts the switch (`TRAFFIC_VAR`) back to what the tab inherits, the machine's own export, else
+   `''`. The catalog is loaded under the same settings, so the menu and the tab agree. Measured with Claude
+   Code 2.1.322:
+   - `DISABLE_TELEMETRY=1` alone shortens the list the same way; `DISABLE_ERROR_REPORTING` and
+     `DISABLE_AUTOUPDATER` do not. The full list seems to come with Claude Code's feature flags: the first
+     start without the switch refreshed its cache of them (`cachedGrowthBookFeatures` in `~/.claude.json`),
+     and with the switch on even a fresh cache is not used. So there is no setting for "no telemetry, full
+     list".
+   - The switch is on at any value. Over an inherited `1`, `0` in the process's settings left the list
+     short; `''` brought it back.
+   - The first list after the switch is lifted can itself be a release behind, because Claude Code lists
+     from the flags it last cached and fetches new ones in the background. On the pinned machine the first
+     load gave twelve models, without 5.2, and the next gave thirteen. **Perch: Refresh Model Lists**, or
+     a window reload, is the remedy.
+   - With the switch on the names still work: `fable` asked outright ran `claude-fable-5-2`. But a tab off
+     a pinned gateway keeps only a model its catalog has (3), so no setting reached 5.2 there before this.
+
+   A tab on API / Bedrock keeps the file's switch: Bedrock's list had 5.2 with the switch on, and such a
+   tab's conversations do not go to Anthropic. `ownBackendSettings` leaves the switch alone too: with no
+   gateway pinned, a switch in the file is the user's own. What changes for the user is in
+   [note 113](110-features.md#n113), *What leaves the machine*. The live harness asks the real Claude Code
+   on every run whether the off-gateway settings still bring the full list back.

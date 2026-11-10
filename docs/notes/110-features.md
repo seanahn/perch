@@ -679,6 +679,7 @@ so a provider would not have reached it either.
 | Data | Destination |
 | --- | --- |
 | Conversations | Each vendor, through its own agent |
+| Each agent's own side traffic (feature flags, telemetry, error reports, update checks) | Its vendor, as the agent is configured. Perch changes that in one case: a Claude tab on the subscription, taken off a gateway the machine pins, runs without the gateway's switch-off of that traffic, because with the switch on Claude Code lists out-of-date models ([Backend-correct tabs, 5](114-quality-and-open-work.md#backend-correct-tabs-0655-subscription--gateway--api-first-class)). A switch the machine's own environment exports is kept |
 | Usage query | Anthropic |
 | Audio | Nowhere. From the UI machine to the workspace machine over VS Code's connection, and no further |
 | Codex usage, cost-mode figures | Nowhere |

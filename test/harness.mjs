@@ -25,6 +25,20 @@ let failed = 0;
   console.log(`claude models: ${cl ? cl.models.length : 0} in ${ms}ms, default "${cl && cl.defaultModel.label}" | codex models: ${cx ? cx.models.length : 0}, default "${cx && cx.defaultModel.label}" at effort "${cx && cx.defaultModel.defaultEffort}"`);
   if (!cl || !cl.models.length || !cl.defaultModel.label) { console.log('claude catalog FAILED'); failed++; }
   if (!cx || !cx.models.length) { console.log('codex catalog FAILED'); failed++; }
+  // What offGatewaySettings rests on (src/gateway.js, TRAFFIC_VAR), asked of the real Claude Code on the subscription: where
+  // the traffic switch shortens the model list, the settings of a tab taken off a gateway must bring the full list back.
+  // The switch reaches the CLI as a settings file's would, through the environment it inherits; nothing is written.
+  if (cl && !require('../src/meter.js').createMeter().bedrockConfigured()) {
+    const G = require('../src/gateway.js'), TRAFFIC = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', had = process.env[TRAFFIC];
+    const n = (c) => (c ? c.models.length : 0);
+    process.env[TRAFFIC] = '1';
+    try {
+      const on = await loadClaudeModels({ cwd: process.cwd(), settings: { env: { CLAUDE_CODE_USE_BEDROCK: '0' } } });
+      const off = await loadClaudeModels({ cwd: process.cwd(), settings: G.offGatewaySettings(false, {}) });
+      console.log(`traffic switch: ${n(on)} claude models with it on, ${n(off)} under a tab's off-gateway settings`);
+      if (n(on) < n(cl) && n(off) <= n(on)) { console.log('traffic switch FAILED: the off-gateway settings did not bring the full model list back'); failed++; }
+    } finally { if (had === undefined) delete process.env[TRAFFIC]; else process.env[TRAFFIC] = had; }
+  }
 }
 {
   // the real meter, read-only: one request to the usage endpoint, and the backend flag as Claude Code would see it.
