@@ -85,17 +85,9 @@ class ClaudeAgent {
       canUseTool: async (toolName, input, { suggestions }) => {
         const id = randomUUID();
         // A question for the user is a tool call: the answers go back as part of its input
-        if (toolName === 'AskUserQuestion' && input && Array.isArray(input.questions)) {
-          this.emit({ kind: 'question', id, questions: input.questions });
-          const ans = await this.opts.askPermission({ id, tool: toolName, input });
-          if (ans.decision === 'answer' && ans.answers) return { behavior: 'allow', updatedInput: Object.assign({}, input, { answers: ans.answers }) };
-          return { behavior: 'deny', message: ans.message || 'The user did not answer.' };
-        }
-        this.emit({ kind: 'permission', id, tool: toolName, input, hasSuggestions: !!(suggestions && suggestions.length) });
-        const ans = await this.opts.askPermission({ id, tool: toolName, input });
-        if (ans.decision === 'allow') return { behavior: 'allow', updatedInput: input };
-        if (ans.decision === 'always') return { behavior: 'allow', updatedInput: input, updatedPermissions: suggestions || [] };
-        return { behavior: 'deny', message: ans.message || 'Denied by user in perch' };
+        if (toolName === 'AskUserQuestion' && input && Array.isArray(input.questions)) this.emit({ kind: 'question', id, questions: input.questions });
+        else this.emit({ kind: 'permission', id, tool: toolName, input, hasSuggestions: !!(suggestions && suggestions.length) });
+        return permissionResult(toolName, input, await this.opts.askPermission({ id, tool: toolName, input }), suggestions);
       },
     };
     // codebase search (codeindex/server.py, docs/notes/201): a tool the agent calls, never retrieval into the prompt.
@@ -332,4 +324,20 @@ class ClaudeAgent {
   dispose() { this.queue.close(); this.abort.abort(); if (this.relay) { this.relay.stop(); this.relay = null; } }
 }
 
-module.exports = { ClaudeAgent, AsyncQueue };
+/**
+ * What canUseTool answers Claude Code for the user's choice. A question's answers go back in the tool's input. A "no"
+ * from the user (Deny, or Skip on a question) ends the turn, as Claude Code's own terminal does: without `interrupt` the
+ * model goes on working after the refusal, and the tab spins until Stop (seen 2026-11-12). A refusal Perch makes itself
+ * (`message`: the tab restarted or closed) only says why.
+ * @param {{ decision: string, answers?: Record<string,string>, message?: string }} ans
+ */
+function permissionResult(toolName, input, ans, suggestions) {
+  const question = toolName === 'AskUserQuestion' && input && Array.isArray(input.questions);
+  if (question && ans.decision === 'answer' && ans.answers) return { behavior: 'allow', updatedInput: Object.assign({}, input, { answers: ans.answers }) };
+  if (!question && ans.decision === 'allow') return { behavior: 'allow', updatedInput: input };
+  if (!question && ans.decision === 'always') return { behavior: 'allow', updatedInput: input, updatedPermissions: suggestions || [] };
+  if (ans.message) return { behavior: 'deny', message: ans.message };
+  return { behavior: 'deny', message: question ? 'The user did not answer.' : 'Denied by user in perch', interrupt: true };
+}
+
+module.exports = { ClaudeAgent, AsyncQueue, permissionResult };
