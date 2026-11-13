@@ -565,7 +565,7 @@ class Session {
           if (this.runningDefault() && this.reconcile()) { this.view.persist(); this.agent.setEffort(''); }   // on default the efforts follow the model, as when it reports one (ran)
           this.view.sendTabs();
         }
-        this.post({ kind: 'note', level: 'warn', text: fallbackNote({ content: ev.text, from: ev.from, to: ev.to, scope: ev.scope }) });
+        if (!ev.early) this.post({ kind: 'note', level: 'warn', text: fallbackNote({ content: ev.text, from: ev.from, to: ev.to, scope: ev.scope }) });   // early: from the answer itself; Claude Code's notice follows
         return;
       }
       case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn

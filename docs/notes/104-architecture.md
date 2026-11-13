@@ -502,6 +502,13 @@ model, takes the refused one back, and keeps the session on the fallback
 response of a sub-agent or a side question). Seen on 2026-10-20: Opus 5.5
 to Opus 4.8, category `cyber`, while the pill still said Opus 5.5. So:
 
+- The move is known from the first answer the fallback model gives. The
+  API can retry a refused response itself, and then that answer opens
+  with a `fallback` block (`from`, `to`), while Claude Code's
+  `model_refusal_fallback` comes only when the turn ends. Seen on
+  2026-11-13: the block at 16:02:26, the notice at 16:04:42, and the
+  pill said Opus 5.5 in between. The block moves the pill at once
+  (`early`, no note); the notice adds the category and the note.
 - The fallback model is the one the session runs from then on, until a
   model is chosen or the process restarts. A context reading that names
   the model asked for does not undo it.

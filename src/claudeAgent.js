@@ -224,6 +224,9 @@ class ClaudeAgent {
           if (b.type === 'text') texts.push(b.text);
           else if (b.type === 'tool_use') this.emit({ kind: 'tool_use', id: b.id, name: b.name, input: b.input });
           else if (b.type === 'thinking') this.emit({ kind: 'thinking', text: b.thinking || '' });
+          // the API retried a refused response on another model itself: the answer says so before Claude Code does, which is
+          // only when the turn ends (model_refusal_fallback, _fellBack). `early`: the move, without the notice
+          else if (b.type === 'fallback' && b.to && b.to.model) this.emit({ kind: 'fallback', from: String((b.from && b.from.model) || ''), to: String(b.to.model), scope: m.parent_tool_use_id ? 'local' : 'session', category: b.trigger && typeof b.trigger.category === 'string' ? b.trigger.category : '', text: '', early: true });
         }
         if (texts.length) { this.lastAnswer = texts.join('\n'); this.emit({ kind: 'text', text: this.lastAnswer }); }
         this.live = '';

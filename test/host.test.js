@@ -2102,6 +2102,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'session', category: '', text: 'x' });
     say({ type: 'system', subtype: 'model_refusal_fallback', scope: 'local', original_model: 'a', fallback_model: 'b', api_refusal_category: null, content: '' });
     assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'a', to: 'b', scope: 'local', category: '', text: '' }, 'a sub-agent\'s response, or a side question\'s');
+    // The API itself can retry a refused response on the fallback model: the answer then opens with a `fallback` block, and
+    // Claude Code's notice comes only when the turn ends, minutes later (seen 2026-11-13). The move is known from the block
+    out.length = 0;
+    say({ type: 'assistant', uuid: 'f8', parent_tool_use_id: null, message: { id: 'msg_5', model: 'claude-opus-4-8', content: [{ type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } }] } });
+    assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'session', category: '', text: '', early: true }, 'the move, from the answer\'s own fallback block');
+    out.length = 0;
+    say({ type: 'assistant', uuid: 'f9', parent_tool_use_id: 'toolu_2', message: { id: 'msg_6', model: 'claude-opus-4-8', content: [{ type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } }] } });
+    assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'local', category: '', text: '', early: true }, 'a sub-agent\'s answer moves only itself');
   }
 
   // ---- Claude Code moves a session to another model when the model's safeguards refuse a response (Opus 5.5 to Opus 4.8,
@@ -2121,6 +2129,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     s.post({ kind: 'result', ok: true, models: ['us.anthropic.claude-opus-resolved-v1:0'] });
     assert.strictEqual(last(c, 'result').answered, undefined, 'nor does one it answered under its provider\'s id');
 
+    // the answer's own fallback block comes first: the pill moves at once, and the notice waits for Claude Code's words
+    const notesBefore = v.events(c).filter((e) => e.kind === 'note').length;
+    s.post({ kind: 'fallback', from: 'claude-opus-resolved', to: 'claude-opus-4-6', scope: 'session', category: '', text: '', early: true });
+    assert.deepStrictEqual([tab().off && tab().off.label, tab().actualModel, v.events(c).filter((e) => e.kind === 'note').length], ['Opus 4.6', 'claude-opus-4-6', notesBefore], 'moved, with no note of Perch\'s own');
     s.post({ kind: 'fallback', from: 'claude-opus-resolved', to: 'claude-opus-4-6', scope: 'session', category: 'cyber', text: NOTICE });
     assert.deepStrictEqual(last(c, 'note'), { kind: 'note', level: 'warn', text: NOTICE }, 'Claude Code\'s notice, in its own words');
     const OFF = { model: 'claude-opus-4-6', label: 'Opus 4.6', title: 'Running Opus 4.6 (claude-opus-4-6), not Opus 5.5: Claude Code moved this session to it when Opus 5.5\'s safeguards stopped a response (cyber).' };
