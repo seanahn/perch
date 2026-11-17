@@ -568,6 +568,18 @@ class Session {
         if (!ev.early) this.post({ kind: 'note', level: 'warn', text: fallbackNote({ content: ev.text, from: ev.from, to: ev.to, scope: ev.scope }) });   // early: from the answer itself; Claude Code's notice follows
         return;
       }
+      case 'loginFailed': {          // Claude: Claude Code refused the subscription login it holds, in a running session
+        if (this.gateway || this.backend === 'api') return;   // not the subscription's login: Claude Code's words stand
+        // Its words name a command to run; the way in is Log In, which signs in though a login file is there (claudeRelogin).
+        // The process holds the refused login, so the next message starts a fresh one, which reads the new login
+        this.relogin = true;
+        const why = String(ev.text || '').replace(/^Failed to authenticate:\s*/, '').split(/\.\s/)[0].replace(/\.$/, '');
+        const back = this.turnText && String(this.turnText).trim() ? this.turnText : '';
+        this.post({ kind: 'note', nid: 'claudeLogin', text: `Claude's login on ${require('os').hostname()} no longer works${why ? ': ' + why : ''}. Log in again, then send the message again.` + (back ? ' The message is back in the box.' : ''),
+          actions: [{ id: 'claudeRelogin', label: 'Log In' }, { id: 'claudeApi', label: 'Use API / Bedrock' }] });
+        if (back) this.view.deliver(this.id, back);
+        return;
+      }
       case 'relay':                  // one response through the gateway: which model it came from, and what the gateway charged, for this turn
         if (typeof ev.cost === 'number' && Number.isFinite(ev.cost)) this.viaCost = (this.viaCost || 0) + ev.cost;
         if (typeof ev.keySpend === 'number') this.keySpend = ev.keySpend;
@@ -646,7 +658,7 @@ class Session {
         const period = this.periods[this.periods.length - 1];
         if (period && !period.said) { period.said = true; this.view.persist(); }   // this stretch of the tab has words now: it is kept, and read back
       }
-        if (this.kind === 'codex' && !ev.queued) this.turnText = ev.text;   // the running turn's message: put back in the box if Codex's login is refused
+        if (!ev.queued) this.turnText = ev.text;   // the running turn's message: put back in the box if the agent's login is refused
         // A queued Codex message is shown when it is queued. When its turn starts, the agent reports it again: that echo is dropped.
         if (this.kind === 'codex' && !ev.queued && this.shown && this.shown[0] === ev.text) { this.shown.shift(); return; }
         if (ev.images && this.thumbs.length) { const t = this.thumbs.shift(); if (t.some(Boolean)) ev.thumbs = t; this.keep(t); }
@@ -744,6 +756,8 @@ class Session {
         return;
       }
     }
+    // Claude Code refused the login its process holds: the next message gets a fresh process, which reads the login there now
+    if (this.kind === 'claude' && this.relogin && this.agent && !this.busy) { this.relogin = false; this.restart(); }
     // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
     if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun(this.own || undefined)) {
       const api = (this.own || this.view.meter.backend()) === 'api';
@@ -1773,6 +1787,7 @@ class PerchView {
         else if (msg.action === 'claudeSubscription') { if (s && s.own) s.setBackendChoice('subscription'); else if (this.meter.backend() === 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeApi') { if (s && s.own) s.setBackendChoice('api'); else if (this.meter.backend() !== 'api') this.meter.toggleBackend(); }
         else if (msg.action === 'claudeLogin') this.claudeLogin('Log In');
+        else if (msg.action === 'claudeRelogin') { if (this.meter.backend() !== 'api' || (s && s.own === 'subscription')) this.claudeSignIn(); }   // the login Claude Code refused: sign in, though a login file is there
         else if (msg.action === 'codexChatgpt') { if (this.meter.codexBackend() !== 'chatgpt') this.meter.chooseCodexBackend('chatgpt'); }
         else if (msg.action === 'codexLogin' || msg.action === 'codexDevice') {
           if (codexAuth.loggedIn() && !this.codexLoginRefused()) { this.codexLoginDone(); vscode.window.showInformationMessage('Perch: Codex is logged in. Send your message again.'); }

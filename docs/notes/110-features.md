@@ -250,6 +250,17 @@ base URL and leaves the login alone ([note 115](114-quality-and-open-work.md#n11
   without the notification, which may be gone or still waiting unseen
   in the notification centre. The Codex sign-in is one run at a time
   whichever asked for it, since it listens on a fixed port.
+- A Claude login refused in a running session is met the same way
+  (2026-11-17). The login file was there, so nothing held the message,
+  and Claude Code answered with its own words, "this login reached its
+  time limit and cannot be renewed. Run `claude auth login`", a command
+  where the tab has a button. Its message, marked `authentication_failed`,
+  now brings a note with Log In and Use API / Bedrock, and the message
+  goes back to the box. This Log In signs in although a login file is
+  there, since that login is the one refused; the next message starts a
+  fresh process, which reads the new login. On the gateway or API /
+  Bedrock the login is not the subscription's, and Claude Code's words
+  stand alone.
 - With no `ANTHROPIC_MODEL` in the file the model button reads
   "default" and its tooltip says to set one. It first read "the gateway's
   default", which was wrong as well as long: the gateway does not choose,

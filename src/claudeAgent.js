@@ -228,6 +228,8 @@ class ClaudeAgent {
           // only when the turn ends (model_refusal_fallback, _fellBack). `early`: the move, without the notice
           else if (b.type === 'fallback' && b.to && b.to.model) this.emit({ kind: 'fallback', from: String((b.from && b.from.model) || ''), to: String(b.to.model), scope: m.parent_tool_use_id ? 'local' : 'session', category: b.trigger && typeof b.trigger.category === 'string' ? b.trigger.category : '', text: '', early: true });
         }
+        // Claude Code refused the login it holds (expired past renewal, revoked): its message says so, as the API's error
+        if (!m.parent_tool_use_id && m.error === 'authentication_failed') this.emit({ kind: 'loginFailed', text: texts.join('\n') });
         if (texts.length) { this.lastAnswer = texts.join('\n'); this.emit({ kind: 'text', text: this.lastAnswer }); }
         this.live = '';
         if (!m.parent_tool_use_id) this._answered(m);

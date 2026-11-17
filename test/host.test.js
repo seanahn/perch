@@ -1096,6 +1096,34 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- Claude Code refuses the login it holds, in a running session (seen 2026-11-17: "this login reached its time limit
+  // and cannot be renewed", on the subscription). The login file is there, so nothing held the message: the tab said Claude
+  // Code's words, which name a command, and no way in. Now a note offers Log In, which signs in though a login file is there,
+  // the message goes back to the box, and the next message starts a fresh process
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+    v.fire({ type: 'send', sid: c, text: 'do the thing' }); await flush();
+    const ag = created[created.length - 1], agents = created.length;
+    s.post({ kind: 'loginFailed', text: 'Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again.' });
+    const note = v.events(c).filter((e) => e.kind === 'note').pop();
+    assert.deepStrictEqual([note.nid, note.actions.map((a) => a.id), /^Claude's login on .+ no longer works: this login reached its time limit and cannot be renewed\. Log in again, then send the message again\. The message is back in the box\.$/.test(note.text)],
+      ['claudeLogin', ['claudeRelogin', 'claudeApi'], true], 'a note with the way in, in place of a command to run');
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'insert').pop().text, 'do the thing', 'the message, back in the box');
+    const t0 = m.ui.terminals.length;
+    v.fire({ type: 'noteAction', sid: c, action: 'claudeRelogin' }); await flush(); await flush();
+    assert.strictEqual(m.ui.terminals.length, t0 + 1, 'Log In signs in, though a login file is there');
+    ag.finish(); await flush();
+    v.fire({ type: 'send', sid: c, text: 'do the thing' }); await flush();
+    assert.strictEqual(created.length, agents + 1, 'the next message starts a fresh process, with the new login');
+    // on the gateway or API / Bedrock the login is not the subscription's: Claude Code's words stand, with no note
+    s.gateway = true; const n = v.events(c).filter((e) => e.kind === 'note').length;
+    s.post({ kind: 'loginFailed', text: 'Failed to authenticate.' });
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'note').length, n);
+    m.perch.dispose();
+  }
+
   // ---- a tab the user has not named takes the title of its agent's record, so the tab and its row in the sessions list say the same name
   {
     const m = install(); await flush();
@@ -2110,6 +2138,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     out.length = 0;
     say({ type: 'assistant', uuid: 'f9', parent_tool_use_id: 'toolu_2', message: { id: 'msg_6', model: 'claude-opus-4-8', content: [{ type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } }] } });
     assert.deepStrictEqual(fellBack(), { kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-4-8', scope: 'local', category: '', text: '', early: true }, 'a sub-agent\'s answer moves only itself');
+    // Claude Code refuses its login: its own message, marked as the API's error, names the kind
+    out.length = 0;
+    const AUTH = 'Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again.';
+    say({ type: 'assistant', uuid: 'g1', parent_tool_use_id: null, error: 'authentication_failed', message: { id: 'e1', model: '<synthetic>', content: [{ type: 'text', text: AUTH }] } });
+    assert.deepStrictEqual(out.filter((e) => e.kind === 'loginFailed'), [{ kind: 'loginFailed', text: AUTH }], 'a refused login is said as one');
+    out.length = 0;
+    say({ type: 'assistant', uuid: 'g2', parent_tool_use_id: null, error: 'rate_limit', message: { id: 'e2', model: '<synthetic>', content: [{ type: 'text', text: 'limit' }] } });
+    assert.deepStrictEqual(out.filter((e) => e.kind === 'loginFailed'), [], 'another error is not');
   }
 
   // ---- Claude Code moves a session to another model when the model's safeguards refuse a response (Opus 5.5 to Opus 4.8,
