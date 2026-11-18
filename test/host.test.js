@@ -639,6 +639,37 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, undefined);
     }
 
+    // a chirp conversation in front (a webview tab, so there is no text editor) is the active file: chirp names its file
+    const CHIRP = '/home/u/.chirp/chats/PlatOps Team Chat 4b3a.teams';
+    const tabsChanged = async () => { for (const f of m.ui.listeners.tabs) f({ changed: [], opened: [], closed: [] }); await flush(); };
+    m.ui.answers = { 'chirp.activeConversationFile': () => CHIRP };
+    m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'PlatOps Team Chat', input: { viewType: 'mainThreadWebview-chirp.conversation' } }, tabs: [] });
+    await tabsChanged();
+    v2.fire({ type: 'send', sid: x, text: 'what are they saying?' }); await flush();
+    assert.strictEqual(cx.sent.pop(), 'what are they saying?\n\n<ide_context>\nActive file: ' + CHIRP + ' (Teams conversation)\n</ide_context>', 'a chirp tab in front is the active file');
+    assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, 'PlatOps Team Chat 4b3a.teams');
+    m.ui.group = () => ({ viewColumn: 2, activeTab: { label: 'Perch', input: { viewType: 'mainThreadWebview-perch.session' } }, tabs: [] });
+    await tabsChanged();
+    v2.fire({ type: 'send', sid: x, text: 'still?' }); await flush();
+    assert(/Active file: .*4b3a\.teams \(Teams conversation\)/.test(cx.sent.pop()), 'clicking into a Perch tab to write does not change what is in front');
+    m.ui.answers = { 'chirp.activeConversationFile': () => null };
+    await tabsChanged();
+    v2.fire({ type: 'send', sid: x, text: 'closed?' }); await flush();
+    assert.strictEqual(cx.sent.pop().includes('Teams conversation'), false, 'once chirp has no tab on screen, it is not the active file');
+    m.ui.answers = { 'chirp.activeConversationFile': () => CHIRP };
+    m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'PlatOps Team Chat', input: { viewType: 'mainThreadWebview-chirp.conversation' } }, tabs: [] });
+    await tabsChanged();
+    m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', '', sel(0, 0, 0, 0)); for (const f of m.ui.listeners.editor) f(m.ui.editor);
+    v2.fire({ type: 'send', sid: x, text: 'and now?' }); await flush();
+    assert(/\nActive file: src\/a\.js \(javascript\)/.test(cx.sent.pop()), 'a file focused after it takes over again');
+    m.ui.answers = { 'chirp.activeConversationFile': () => { throw new Error("command 'chirp.activeConversationFile' not found"); } };
+    m.ui.editor = undefined; m.ui.visible = [];
+    m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'PlatOps Team Chat', input: { viewType: 'mainThreadWebview-chirp.conversation' } }, tabs: [] });
+    await tabsChanged();
+    v2.fire({ type: 'send', sid: x, text: 'no chirp' }); await flush();
+    assert.strictEqual(cx.sent.pop(), 'no chirp', 'without chirp installed, context is unchanged');
+    m.ui.answers = undefined; m.ui.group = undefined; m.ui.visible = undefined;
+
     // the context is read when the message is written, not when a queued message finally starts
     m.ui.editor = editor(path.join(process.cwd(), 'one.js'), 'javascript', 'ONE', sel(0, 0, 0, 3));
     v2.fire({ type: 'send', sid: x, text: 'hold it' });

@@ -440,6 +440,13 @@ const b = 2;
 - A selection over 12000 characters is cut, and says so.
 - The code fence is made longer than any run of backticks inside.
 - Unsaved and non-file editors attach nothing.
+- A [chirp](https://github.com/seanahn/chirp) conversation tab is a
+  webview, not an editor. When one became active more recently than any
+  file, the message carries chirp's file for it instead:
+  `Active file: ~/.chirp/chats/<name> <id>.teams (Teams conversation)`.
+  Perch asks chirp (`chirp.activeConversationFile`) as tabs change, so the
+  context stays synchronous. Perch's own tabs don't count as a change, and
+  without chirp installed nothing changes.
 
 ---
 

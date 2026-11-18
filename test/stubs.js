@@ -234,7 +234,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       onDidCloseTerminal: (f) => { ui.listeners.closeTerminal.push(f); return { dispose() { const i = ui.listeners.closeTerminal.indexOf(f); if (i >= 0) ui.listeners.closeTerminal.splice(i, 1); } }; },
     },
     // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for
-    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
+    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (ui.answers && id in ui.answers) return ui.answers[id](...args); if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
     env: { clipboard: { writeText: async (t) => { ui.copied.push(t); } }, remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
