@@ -932,6 +932,20 @@ window.close();
   tabs6({ busy: true, busySince: Date.now() }); assert.deepStrictEqual(foot(), ['work', 'Working…', '0s']);
   tabs6({}, { busy: true, busySince: 0 }); assert.deepStrictEqual([foot(0), foot(1)], [null, ['work', 'Working…', '']]);
 
+  // between turns, what runs on in the background: said at the foot, quieter than a turn, and marked on the tab
+  const run = { id: 't1', type: 'local_bash', description: 'Run the gate live and upload', since: Date.now() - 252000 };
+  tabs6({ background: [run] });
+  assert.deepStrictEqual(foot(), ['work bg', 'In the background: Run the gate live and upload', '4m 12s'], 'one task, by what it does, and for how long');
+  const tabEl = () => p6.$$('.tab').find((n) => n.textContent.includes('A'));
+  assert.deepStrictEqual([tabEl().classList.contains('bg'), tabEl().classList.contains('busy')], [true, false], 'the tab marked as running something, not as working');
+  tabs6({ background: [run, { id: 'a1', type: 'local_agent', description: 'Final review', since: Date.now() - 30000 }] });
+  assert.deepStrictEqual(foot(), ['work bg', 'In the background: 2 tasks', '4m 12s'], 'two: counted, timed by the oldest');
+  assert.strictEqual(p6.$$('.pane')[0].querySelector('.work').title, 'Run the gate live and upload · 4m 12s\nFinal review · 30s', 'each by name in the tooltip');
+  tabs6({ busy: true, busySince: Date.now() - 2000, background: [run] });
+  assert.deepStrictEqual(foot(), ['work', 'Working…', '2s · 1 in the background'], 'a turn says it is working, and counts what runs beside it');
+  tabs6({ background: [] }); assert.strictEqual(foot(), null, 'all done: nothing');
+  assert.strictEqual(tabEl().classList.contains('bg'), false);
+
   // a Codex turn's sub-agents: lines in the transcript for each start and end, and a count at the foot, each by name in its tooltip
   tabs6({}, { busy: true, busySince: Date.now() - 5000, subagents: { working: 2, finished: 1, interrupted: 0, list: [{ name: 'desk_audio', state: 'working', reports: 1 }, { name: 'desk_local', state: 'working', reports: 0 }, { name: 'desk_speech', state: 'finished', reports: 2 }] } });
   assert.deepStrictEqual(foot(1), ['work', 'Working…', '5s · sub-agents: 2 working, 1 done']);

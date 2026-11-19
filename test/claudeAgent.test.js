@@ -51,4 +51,25 @@ assert.deepStrictEqual(permissionResult('Bash', cmd, { decision: 'always' }, [{ 
   assert.deepStrictEqual(busy(t.out), [false], 'without the state words, the result decides');
 }
 
+// ---- Background tasks: Claude Code says which run on between turns (a command started in the background, a backgrounded
+// agent), and each time the set changes. Perch shows them, so a tab with a run going does not look idle (seen 2026-11-19:
+// a release-gate run went on for minutes after the turn that started it, and the tab showed nothing).
+{
+  const { ClaudeAgent } = require('../src/claudeAgent.js');
+  const P = ClaudeAgent.prototype, out = [];
+  const a = { live: '', waiting: [], running: false, pending: 0, lastCost: null, emit: (e) => out.push(e), _context() {}, _settle: P._settle, _state: P._state, _tasks: P._tasks, _taken: P._taken, _answered: P._answered, _retract: P._retract, _fellBack: P._fellBack };
+  const say = (m) => P._onMessage.call(a, m);
+  const bg = () => out.filter((e) => e.kind === 'background').pop();
+  const real = Date.now; let now = 1000; Date.now = () => now;
+  try {
+    say({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 't1', task_type: 'local_bash', description: 'Run the gate live and upload' }, { task_id: 'w1', task_type: 'local_bash', description: 'watch', ambient: true }] });
+    assert.deepStrictEqual(bg(), { kind: 'background', tasks: [{ id: 't1', type: 'local_bash', description: 'Run the gate live and upload', since: 1000 }] }, 'the live tasks, housekeeping left out, each with when it was first seen');
+    now = 5000;
+    say({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 't1', task_type: 'local_bash', description: 'Run the gate live and upload' }, { task_id: 'a1', task_type: 'local_agent', description: 'Final review' }] });
+    assert.deepStrictEqual(bg().tasks.map((t) => [t.id, t.since]), [['t1', 1000], ['a1', 5000]], 'a task already running keeps its start');
+    say({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    assert.deepStrictEqual(bg(), { kind: 'background', tasks: [] }, 'all finished: none');
+  } finally { Date.now = real; }
+}
+
 console.log('CLAUDE AGENT OK');

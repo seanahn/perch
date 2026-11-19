@@ -47,6 +47,7 @@ ${glyphCss}
   .tab .t { overflow: hidden; text-overflow: ellipsis; }
   .tab .b { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
   .tab.busy .b { background: var(--vscode-charts-orange); animation: pulse 1s infinite; }
+  .tab.bg .b { background: var(--vscode-descriptionForeground); animation: pulse 2.4s infinite; }
   .tab.attn .b { background: var(--vscode-charts-red); animation: none; }
   .tab .x { flex: none; opacity: .5; padding: 0 3px; border-radius: 3px; }
   .tab .x:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
@@ -67,6 +68,8 @@ ${glyphCss}
   .work .what { color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .work .for { flex: none; font-variant-numeric: tabular-nums; }
   .work.ask .sp { border-color: var(--vscode-charts-red); animation: none; }
+  .work.bg .sp { border-color: var(--vscode-descriptionForeground); border-right-color: transparent; animation-duration: 2.4s; opacity: .7; }
+  .work.bg .what { color: var(--vscode-descriptionForeground); }
   /* A turn's sub-agents: a count at the foot that opens to a table of them, each with its model and what its turns cost. */
   .sa { cursor: pointer; text-decoration: underline dotted; }
   .subs { font-size: 11px; color: var(--vscode-descriptionForeground); overflow-x: auto; }
@@ -486,12 +489,21 @@ ${glyphCss}
   function syncWork(sid) {
     const p = panes.get(sid), t = tabs.find((x) => x.id === sid); if (!p) return;
     const busy = !!(t && t.busy), was = p.work.hidden;
-    p.work.hidden = !busy;
-    if (busy) {
+    const bg = (t && Array.isArray(t.background)) ? t.background : [];
+    p.work.hidden = !busy && !bg.length;
+    p.work.title = bg.length ? bg.map((x) => x.description + (x.since ? ' · ' + span(Date.now() - x.since) : '')).join('\\n') : '';
+    if (!busy && bg.length) {     // between turns, what runs on in the background (Claude Code's tasks): quieter than a turn
+      p.doing = ''; p.asking = 0; p.subs.hidden = true;
+      p.work.className = 'work bg';
+      p.what.textContent = 'In the background: ' + (bg.length > 1 ? bg.length + ' tasks' : bg[0].description || 'a task');
+      const oldest = Math.min(...bg.map((x) => x.since || Date.now()));
+      p.took.textContent = span(Date.now() - oldest); p.took.title = '';
+    } else if (busy) {
       p.work.className = 'work' + (p.asking ? ' ask' : '');
       p.what.textContent = p.asking ? 'Waiting for your answer' : (p.doing || 'Working') + '…';
       p.took.textContent = t.busySince ? span(Date.now() - t.busySince) : '';
       if (t.queued) p.took.textContent += (p.took.textContent ? ' · ' : '') + t.queued + ' queued';
+      if (bg.length) p.took.textContent += (p.took.textContent ? ' · ' : '') + bg.length + ' in the background';
       // Codex: the sub-agents the turn has started, which its SDK does not report; each by name in the tooltip, and the
       // count opens a table of them, each with its model and what its turns cost, read from its own thread file
       const sa = t.subagents;
@@ -750,7 +762,7 @@ ${glyphCss}
   function renderTabs() {
     $tabs.querySelectorAll('.tab').forEach((n) => n.remove());
     for (const t of tabs) {
-      const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (t.attention ? ' attn' : ''));
+      const d = el('div', 'tab' + (t.id === active ? ' active' : '') + (t.busy ? ' busy' : '') + (!t.busy && t.background && t.background.length ? ' bg' : '') + (t.attention ? ' attn' : ''));
       // a tab that has been on both vendors says so: the way it went in the tooltip, the other's colour beside its mark (note 202)
       const went = Array.isArray(t.path) && t.path.length > 1 ? t.path.map((v) => VNAME[v] || v).join(' → ') : t.kind;
       d.title = t.title + ' · ' + went + (t.gateway ? ' · LLM gateway' : '') + ' · double-click to rename';

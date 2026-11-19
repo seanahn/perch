@@ -1145,6 +1145,22 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- background tasks: the tab carries what runs on between turns, for the page to show; a new process starts with none
+  {
+    const m = install(); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active; const s = m.perch.get(c);
+    v.fire({ type: 'send', sid: c, text: 'start the run' }); await flush();
+    assert.deepStrictEqual(v.tab(c).background, [], 'none to begin with');
+    const run = { id: 't1', type: 'local_bash', description: 'Run the gate live and upload', since: 1000 };
+    s.post({ kind: 'background', tasks: [run] });
+    assert.deepStrictEqual(v.tab(c).background, [run], 'the task, on the tab');
+    assert.strictEqual(v.events(c).filter((e) => e.kind === 'background').length, 0, 'a state of the tab, not a line of the transcript');
+    s.restart();
+    assert.deepStrictEqual(v.tab(c).background, [], 'the process that ran it is gone');
+    m.perch.dispose();
+  }
+
   // ---- Claude Code refuses the login it holds, in a running session (seen 2026-11-17: "this login reached its time limit
   // and cannot be renewed", on the subscription). The login file is there, so nothing held the message: the tab said Claude
   // Code's words, which name a command, and no way in. Now a note offers Log In, which signs in though a login file is there,

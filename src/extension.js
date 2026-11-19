@@ -579,6 +579,7 @@ class Session {
         }
         return;
       case 'model': this.ran(ev.id); this.view.sendTabs(); return;
+      case 'background': this.background = Array.isArray(ev.tasks) ? ev.tasks : []; this.view.sendTabs(); return;   // what runs on between turns: a state of the tab
       case 'fallback': {             // Claude: the model's safeguards refused a response, and Claude Code retried it on another model
         if (ev.scope !== 'local' && ev.to) {   // for the session, from now on; a sub-agent's one response leaves it where it was
           this.swap = { from: ev.from || '', to: ev.to, category: ev.category || '' };
@@ -989,7 +990,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.handoffSent = false; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.background = []; this.handoffSent = false; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -1023,6 +1024,7 @@ class Session {
       via: this.gateway ? this.lastVia : '',                   // the model that last answered through the gateway
       queued: this.queue.length,
       subagents: this.kind === 'codex' && this.busy && this.collab.size ? this.collabSummary() : null,
+      background: this.background || [],   // Claude's tasks that run on between turns (a command or agent in the background)
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.

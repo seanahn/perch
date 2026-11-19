@@ -151,6 +151,21 @@ class ClaudeAgent {
     this.waiting = this.waiting.filter((q) => { if (!ids.has(q)) return true; this.emit({ kind: 'dequeued', qid: q }); return false; });
   }
   /** Nothing is queued any more (the session is idle, or its process ended): any bubble still marked queued is not. */
+  /**
+   * The tasks that run on in the background, between turns too (a command started in the background, a backgrounded agent),
+   * as Claude Code lists them each time the set changes: the whole set, replacing the last. Housekeeping it marks `ambient`
+   * is left out, as it asks. Each keeps the time it was first seen, so the page can say for how long it has run.
+   */
+  _tasks(list) {
+    const seen = this.taskSince || new Map(), now = Date.now(), next = new Map();
+    const tasks = (Array.isArray(list) ? list : []).filter((t) => t && t.task_id && !t.ambient).map((t) => {
+      const since = seen.get(t.task_id) || now; next.set(t.task_id, since);
+      return { id: String(t.task_id), type: String(t.task_type || ''), description: String(t.description || ''), since };
+    });
+    this.taskSince = next;
+    this.emit({ kind: 'background', tasks });
+  }
+
   _settle() { for (const q of this.waiting.splice(0)) this.emit({ kind: 'dequeued', qid: q }); }
 
   /**
@@ -189,6 +204,7 @@ class ClaudeAgent {
         if (m.subtype === 'init') { if (m.model) this.emit({ kind: 'model', id: m.model }); }   // the model actually in use, for the tab's tooltip
         else if (m.subtype === 'compact_boundary') this.emit({ kind: 'status', text: 'context compacted' });
         else if (m.subtype === 'session_state_changed') this._state(m.state);
+        else if (m.subtype === 'background_tasks_changed') this._tasks(m.tasks);
         else if (m.subtype === 'model_refusal_fallback') this._fellBack(m);
         return;
       case 'stream_event': {
