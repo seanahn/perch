@@ -1504,6 +1504,15 @@ class PerchView {
     if (f && f.ready) this.sendEvent(sid, { kind: 'insert', text }); else s.prefill = (s.prefill ? s.prefill.replace(/\s*$/, ' ') : '') + text;
   }
 
+  /** For other extensions (perch.insertText): put a prompt in the active tab's box and show that tab, without sending it. The page spaces it after a live draft; a missing page gets it as prefill. */
+  insertText(text) {
+    const s = this.active(); if (!s || typeof text !== 'string' || !text) return false;
+    this.deliver(s.id, text);
+    this.activate(s.id);
+    if (s.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
+    return true;
+  }
+
   /** The + button: pick files, and mention them in the message by workspace-relative path. */
   async attach(sid) {
     const s = this.get(sid); if (!s) return;
@@ -2204,6 +2213,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
+    vscode.commands.registerCommand('perch.insertText', (text) => perch.insertText(text)),
     vscode.commands.registerCommand('perch.continueInCodex', () => perch.continueIn('codex')),
     vscode.commands.registerCommand('perch.continueInClaude', () => perch.continueIn('claude')),
     vscode.commands.registerCommand('perch.sessions', () => perch.pickSession()),

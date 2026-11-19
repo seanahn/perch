@@ -86,6 +86,10 @@
         "icon": "$(arrow-swap)"
       },
       {
+        "command": "perch.insertText",
+        "title": "Perch: Insert Text into the Active Tab"
+      },
+      {
         "command": "perch.continueInCodex",
         "title": "Perch: Continue This Tab in Codex…",
         "icon": "$(arrow-swap)"
@@ -184,6 +188,9 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        { "command": "perch.insertText", "when": "false" }
+      ],
       "view/title": [
         {
           "command": "perch.handoff",

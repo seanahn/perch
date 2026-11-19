@@ -708,6 +708,10 @@ so a provider would not have reached it either.
 | Audio | Nowhere. From the UI machine to the workspace machine over VS Code's connection, and no further |
 | Codex usage, cost-mode figures | Nowhere |
 
+### Commands for other extensions
+
+`perch.insertText(text)` puts `text` in the active tab's input box and shows that tab, without sending it; it returns `false` with no tab or no text. Not in the palette.
+
 ### Vendor icons
 
 perch ships no logos. Icons are read at runtime from the installed vendor
