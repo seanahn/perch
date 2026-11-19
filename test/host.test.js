@@ -1027,7 +1027,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(spawns.length, 1, 'one run at a time');
     const s1 = spawns[0];
     assert.strictEqual(s1.exe, '/opt/claude', 'the program the Claude tabs run');
-    assert.deepStrictEqual(s1.args, ['-p', '--resume', 'sess-bg', '--model', 'haiku', '--max-turns', '1', '--tools', '', '--strict-mcp-config', `For the record: PR seanahn/kestrel#21 (${PR(21)}) was merged at ${hhmm()} (via kestrel). Don't do anything about it now; reply only 'Noted.'`]);
+    assert.deepStrictEqual(s1.args, ['-p', '--resume', 'sess-bg', '--model', 'haiku', '--max-turns', '1', '--tools', '', '--strict-mcp-config', '--settings', '{"disableAllHooks":true}', `For the record: PR seanahn/kestrel#21 (${PR(21)}) was merged at ${hhmm()} (via kestrel). Don't do anything about it now; reply only 'Noted.'`]);
     assert.strictEqual(s1.o.cwd, work);
     assert.strictEqual(s1.o.env.PATH, process.env.PATH, "a plain tab's environment");
     assert(delays.includes(120000), 'stopped after 120 s');
@@ -1068,7 +1068,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(m.ui.traces.some((l) => /claude could not start: EACCES/.test(l)));
     m.perch.dispose();
 
-    // a machine that pins a gateway for every Claude Code: the run is taken off it, as a plain tab's process is
+    // a machine that pins a gateway for every Claude Code: the run is taken off it, as a plain tab's process is, hooks still off
     const settingsPath = path.join(claudeDir, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example' }, apiKeyHelper: '/bin/gw-key' }));
     const g = install(undefined, { meter: { claudeDir, settingsPath }, config: { 'claude.executable': '/opt/claude' } }); await flush();
@@ -1076,7 +1076,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.deepStrictEqual(await g.commands['perch.notePrMerged'](PR(21)), { result: 'background', sessionId: 'sess-bg' });
     const i = got[0].indexOf('--settings');
     assert(i > 0 && got[0][got[0].length - 1].startsWith('For the record:'), 'the prompt stays last');
-    assert.deepStrictEqual(JSON.parse(got[0][i + 1]), require('../src/gateway').offGatewaySettings(false));
+    assert.deepStrictEqual(JSON.parse(got[0][i + 1]), Object.assign({ disableAllHooks: true }, require('../src/gateway').offGatewaySettings(false)), 'one --settings: no hooks, and off the gateway');
+    assert.strictEqual(got[0].filter((x) => x === '--settings').length, 1);
     g.perch.dispose();
   }
   {

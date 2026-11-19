@@ -1580,9 +1580,10 @@ class PerchView {
     if (!exe) return fail(MISSING.claude);
     if (!hit.cwd || !require('fs').existsSync(hit.cwd)) return fail(`the session's folder ${hit.cwd ? hit.cwd + ' is gone' : 'is not recorded'}`);
     if (this.meter && !this.meter.canRun()) return fail(`Claude has nothing to sign in with on ${require('os').hostname()} (${this.meter.backend() === 'api' ? 'no API / Bedrock credentials' : 'not logged in'})`);
-    // a new plain tab's process: this window's environment, and, where the machine pins a gateway, the settings that take it off
+    // a new plain tab's process: this window's environment, and, where the machine pins a gateway, the settings that take it
+    // off; and no hooks at all, so the note sets nothing else going (command-line settings rank above the user's files)
     const pinned = !!this.pinnedGatewayUrl();
-    const settings = pinned ? ['--settings', JSON.stringify(Gateway.offGatewaySettings(this.meter ? this.meter.backend() !== 'subscription' : false))] : [];
+    const settings = ['--settings', JSON.stringify(Object.assign({ disableAllHooks: true }, pinned ? Gateway.offGatewaySettings(this.meter ? this.meter.backend() !== 'subscription' : false) : {}))];
     const prompt = `For the record: PR ${pr.ref} (${pr.url}) was merged at ${hhmm} (via kestrel). Don't do anything about it now; reply only 'Noted.'`;
     const args = ['-p', '--resume', sessionId, '--model', 'haiku', '--max-turns', '1', '--tools', '', '--strict-mcp-config', ...settings, prompt];
     const ms = Number(process.env.PERCH_NOTE_TIMEOUT_MS) || NOTE_TIMEOUT_MS;
