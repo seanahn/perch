@@ -21,4 +21,34 @@ assert.deepStrictEqual(permissionResult('AskUserQuestion', ask, { decision: 'ans
 assert.deepStrictEqual(permissionResult('Bash', cmd, { decision: 'allow' }), { behavior: 'allow', updatedInput: cmd });
 assert.deepStrictEqual(permissionResult('Bash', cmd, { decision: 'always' }, [{ type: 'addRules' }]), { behavior: 'allow', updatedInput: cmd, updatedPermissions: [{ type: 'addRules' }] });
 
+// ---- The working indicator. Claude Code can go straight from one turn into another without going idle: a background task's
+// notification, queued during the turn, runs as soon as the turn's result is out (seen 2026-11-19 on seclab: a background
+// command finished while the user's message was being answered). Its own word, running or idle, decides; a result alone
+// does not end the work while it says running.
+{
+  const { ClaudeAgent } = require('../src/claudeAgent.js');
+  const P = ClaudeAgent.prototype;
+  const make = () => { const out = []; const a = { live: '', waiting: [], running: false, pending: 0, lastCost: null, emit: (e) => out.push(e), _context() {}, _taken: P._taken, _answered: P._answered, _retract: P._retract, _fellBack: P._fellBack, _settle: P._settle, _state: P._state }; return { a, out, say: (m) => P._onMessage.call(a, m) }; };
+  const busy = (out) => out.filter((e) => e.kind === 'busy').map((e) => e.busy);
+  const state = (s) => ({ type: 'system', subtype: 'session_state_changed', state: s });
+  const result = { type: 'result', subtype: 'success' };
+
+  // the user's message is answered, and the notification's turn follows without a pause: working throughout, then idle
+  let t = make(); t.a.running = true; t.a.pending = 1;
+  t.say(state('running')); t.say(result);
+  assert.deepStrictEqual(busy(t.out), [], 'the result of one turn, with Claude Code still running: still working');
+  t.say(result); t.say(state('idle'));
+  assert.deepStrictEqual(busy(t.out), [false], 'idle when Claude Code says idle');
+
+  // the usual case: idle follows the result, once
+  t = make(); t.a.running = true; t.a.pending = 1;
+  t.say(state('running')); t.say(result); t.say(state('idle'));
+  assert.deepStrictEqual(busy(t.out), [false]);
+
+  // an older CLI that says nothing of its state: the result ends the turn, as before
+  t = make(); t.a.running = true; t.a.pending = 1;
+  t.say(result);
+  assert.deepStrictEqual(busy(t.out), [false], 'without the state words, the result decides');
+}
+
 console.log('CLAUDE AGENT OK');

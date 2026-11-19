@@ -124,6 +124,7 @@ class ClaudeAgent {
    */
   _state(state) {
     this.stated = (this.stated || 0) + 1;    // how many times the CLI has said; the live test checks the signal arrives at all
+    this.said = state;                        // its latest word: while it says running, a result does not end the work
     if (state === 'idle') { this._settle(); if (this.running || this.pending) { this.running = false; this.pending = 0; this.emit({ kind: 'busy', busy: false }); } }
     else if (state === 'running' && !this.running) { this.running = true; this.pending = Math.max(1, this.pending); this.emit({ kind: 'busy', busy: true }); }
   }
@@ -244,7 +245,9 @@ class ClaudeAgent {
         return;
       }
       case 'result':
-        this.running = this.pending > 1;                 // queued messages run next, without going idle
+        // queued messages run next, without going idle; so does a background task's notification, which Claude Code takes up
+        // as a turn of its own the moment this one ends. Its word decides when it gives one: running until it says idle
+        this.running = this.pending > 1 || this.said === 'running';
         this.pending = Math.max(0, this.pending - 1);
         this.emit({ kind: 'responded', at: Date.now() });   // the prompt cache is warm from now
         this._context();
