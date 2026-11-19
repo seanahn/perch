@@ -168,23 +168,31 @@ const IDE_MAX_CHARS = 12000;          // a selection longer than this is cut, an
 // The file editor last focused. activeTextEditor is undefined while a Perch tab (a webview panel in the editor area) has
 // the focus, which is exactly when a message is written; Claude Code's own panel remembers the last file the same way.
 let lastFile = null;
-// A chirp conversation tab (github.com/seanahn/chirp) is a webview, so it is no text editor: when one became active more
-// recently than any file, its conversation is the active file, as chirp names it. Perch's own tabs change neither, since a
-// message is written in one. The path is fetched as the tabs change, so ideContext() stays synchronous; without chirp
-// installed the command fails and nothing changes.
-let chirpFront = false, chirpFile = null;
-const CHIRP_VIEW = 'chirp.conversation';
+// Some extensions show a file as a webview, which is no text editor: a chirp conversation tab (github.com/seanahn/chirp) and
+// a jay Jira ticket tab. When one became active more recently than any file, its file is the active file, as the extension
+// names it through `command`. Perch's own tabs change neither, since a message is written in one. The path is fetched as the
+// tabs change, so ideContext() stays synchronous; without the extension installed the command fails and nothing changes.
+// The most recently active of them wins.
+const WEBVIEW_FILES = [
+  { viewType: 'chirp.conversation', command: 'chirp.activeConversationFile', label: 'Teams conversation' },
+  { viewType: 'jay.ticket', command: 'jay.activeIssueFile', label: 'Jira ticket' },
+];
+let front = null, frontFile = null;   // the WEBVIEW_FILES entry in front, and the file it answered
 function watchEditors(context) {
-  const note = (ed) => { if (ed && ed.document && ed.document.uri.scheme === 'file') { lastFile = ed.document.uri.fsPath; chirpFront = false; } };
+  const note = (ed) => { if (ed && ed.document && ed.document.uri.scheme === 'file') { lastFile = ed.document.uri.fsPath; front = null; frontFile = null; } };
   note(vscode.window.activeTextEditor);
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(note));
   const tg = vscode.window.tabGroups;
   const tabs = () => {
     const g = tg && tg.activeTabGroup, t = g && g.activeTab, vt = t && t.input && t.input.viewType;
-    if (vt && String(vt).endsWith(CHIRP_VIEW)) chirpFront = true;
-    if (!chirpFront) return;
-    // asked again on every change while chirp is in front: chirp answers null once its tab is closed or off screen
-    Promise.resolve(vscode.commands.executeCommand('chirp.activeConversationFile')).then((p) => { chirpFile = typeof p === 'string' && p ? p : null; }, () => { chirpFile = null; });
+    // a viewType is reported with a prefix (mainThreadWebview-jay.ticket), hence endsWith
+    const hit = vt && WEBVIEW_FILES.find((w) => String(vt).endsWith(w.viewType));
+    if (hit && hit !== front) { front = hit; frontFile = null; }
+    if (!front) return;
+    const asked = front;
+    // asked again on every change while it is in front: the extension answers null once its tab is closed or off screen
+    const set = (p) => { if (front === asked) frontFile = typeof p === 'string' && p ? p : null; };
+    Promise.resolve(vscode.commands.executeCommand(asked.command)).then(set, () => set(null));
   };
   if (tg && tg.onDidChangeTabs) context.subscriptions.push(tg.onDidChangeTabs(tabs));
   if (tg && tg.onDidChangeTabGroups) context.subscriptions.push(tg.onDidChangeTabGroups(tabs));
@@ -198,9 +206,9 @@ function contextEditor() {
 }
 /** `base`: the folder the tab's agent runs in, to which the file's path is relative. */
 function ideContext(base = cwd()) {
-  if (chirpFront && chirpFile) {
+  if (front && frontFile) {
     const path = require('path');
-    return { block: ['', '', '<ide_context>', `Active file: ${chirpFile} (Teams conversation)`, '</ide_context>'].join('\n'), tag: path.basename(chirpFile) };
+    return { block: ['', '', '<ide_context>', `Active file: ${frontFile} (${front.label})`, '</ide_context>'].join('\n'), tag: path.basename(frontFile) };
   }
   const ed = contextEditor();
   if (!ed || !ed.document || ed.document.uri.scheme !== 'file') return null;

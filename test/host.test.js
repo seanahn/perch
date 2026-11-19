@@ -670,6 +670,37 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(cx.sent.pop(), 'no chirp', 'without chirp installed, context is unchanged');
     m.ui.answers = undefined; m.ui.group = undefined; m.ui.visible = undefined;
 
+    // a jay ticket in front (a webview panel, like chirp's) is the active file, named by jay; the most recent of the two wins
+    {
+      const JAY = '/home/u/.jay/issues/PLAT-123.jira';
+      const jayTab = () => ({ viewColumn: 1, activeTab: { label: 'PLAT-123', input: { viewType: 'mainThreadWebview-jay.ticket' } }, tabs: [] });
+      const chirpTab = () => ({ viewColumn: 1, activeTab: { label: 'PlatOps Team Chat', input: { viewType: 'mainThreadWebview-chirp.conversation' } }, tabs: [] });
+      m.ui.answers = { 'jay.activeIssueFile': () => JAY, 'chirp.activeConversationFile': () => CHIRP };
+      m.ui.group = jayTab;
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'what is this ticket?' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'what is this ticket?\n\n<ide_context>\nActive file: ' + JAY + ' (Jira ticket)\n</ide_context>', 'a jay ticket in front is the active file');
+      assert.strictEqual(v2.events(x).filter((e) => e.kind === 'user').pop().tag, 'PLAT-123.jira');
+      m.ui.group = chirpTab;
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'chirp now' }); await flush();
+      assert(/Active file: .*4b3a\.teams \(Teams conversation\)/.test(cx.sent.pop()), 'chirp in front after jay wins');
+      m.ui.group = jayTab;
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'jay again' }); await flush();
+      assert(/Active file: .*PLAT-123\.jira \(Jira ticket\)/.test(cx.sent.pop()), 'jay in front after chirp wins');
+      m.ui.editor = editor(path.join(process.cwd(), 'src', 'a.js'), 'javascript', '', sel(0, 0, 0, 0)); for (const f of m.ui.listeners.editor) f(m.ui.editor);
+      v2.fire({ type: 'send', sid: x, text: 'file now' }); await flush();
+      assert(/\nActive file: src\/a\.js \(javascript\)/.test(cx.sent.pop()), 'a file focused after a jay ticket takes over');
+      m.ui.answers = { 'jay.activeIssueFile': () => { throw new Error("command 'jay.activeIssueFile' not found"); } };
+      m.ui.editor = undefined; m.ui.visible = [];
+      m.ui.group = jayTab;
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'no jay' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'no jay', 'without jay installed, context is unchanged');
+      m.ui.answers = undefined; m.ui.group = undefined; m.ui.visible = undefined;
+    }
+
     // the context is read when the message is written, not when a queued message finally starts
     m.ui.editor = editor(path.join(process.cwd(), 'one.js'), 'javascript', 'ONE', sel(0, 0, 0, 3));
     v2.fire({ type: 'send', sid: x, text: 'hold it' });
