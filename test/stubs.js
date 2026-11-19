@@ -158,14 +158,14 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   const box = Object.assign({ bedrock: false, apiCreds: true, login: true, usage: { limits: LIMITS(), error: null }, cost: null, writes: [], fetches: 0, failWrite: null,
     codex: { limits: CODEX_LIMITS(4, 1), error: null, plan: 'plus', at: Date.now() - 60000 }, codexReads: 0 }, meter);
   const fakeMeter = {
-    claudeDir: '/nonexistent/perch-test/.claude', settingsPath: '/nonexistent/perch-test/.claude/settings.json',
+    claudeDir: box.claudeDir || '/nonexistent/perch-test/.claude', settingsPath: box.settingsPath || '/nonexistent/perch-test/.claude/settings.json',   // a test may point them at a throwaway folder
     bedrockConfigured: () => box.bedrock, apiCredentialsPresent: () => box.apiCreds, settingsEnv: () => box.settingsEnv || {}, readCredentials: () => (box.login ? { accessToken: box.token || 't' } : null), envNote: () => '',
     fetchUsage: async () => { box.fetches++; return box.usage; },
     computeCostStats: () => { if (box.cost instanceof Error) throw box.cost; return box.cost; },
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { traces: [], pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
+  const ui = { traces: [], statusMessages: [], pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -210,6 +210,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     workspace: { openTextDocument: async (uri) => ({ uri }), workspaceFolders: (workspaceFolders || [process.cwd()]).map((fsPath) => ({ uri: { fsPath } })), getConfiguration: (section, uri) => section === 'workbench.editor' ? { get: (k) => ui.editorSettings[k] } : ({ get: (k) => { const fc = uri && uri.fsPath && ui.folderConfig[uri.fsPath]; if (fc && k in fc) return fc[k]; const all = Object.assign({ 'newTabs': 'sidebar', 'claude.permissionMode': 'default', 'codex.sandboxMode': 'workspace-write', 'codex.approvalPolicy': 'never', 'ideContext': false, 'claude.gatewayEnv': '/nonexistent/perch-test/gateway-env' /* the developer's own gateway file must not reach the tests */ }, cfgBox); return k in all ? all[k] : ''; }, inspect: (k) => ({ globalValue: cfgBox[k], workspaceValue: (ui.workspaceConfig || {})[k] }), update: async (k, v, target) => { ui.configUpdates.push(uri && uri.fsPath ? [k, v, target, uri.fsPath] : [k, v, target]); if (target === 3 && uri && uri.fsPath) (ui.folderConfig[uri.fsPath] = ui.folderConfig[uri.fsPath] || {})[k] = v; else Object.assign(cfgBox, { [k]: v }); for (const f of ui.listeners.config) f({ affectsConfiguration: (sec) => ('perch.' + k).startsWith(sec) }); } }), onDidChangeConfiguration: (f) => { ui.listeners.config.push(f); return { dispose() {} }; }, onDidChangeWorkspaceFolders: (f) => { ui.listeners.folders.push(f); return { dispose() {} }; } },
     window: {
       createOutputChannel: (name) => ({ name, appendLine: (l) => ui.traces.push(l), dispose() {} }),
+      setStatusBarMessage: (text, ms) => { ui.statusMessages.push([text, ms]); return { dispose() {} }; },
       registerWebviewViewProvider: (id, p) => { registered[id] = p; return { dispose() {} }; },
       showInformationMessage: say(ui.infos), showWarningMessage: say(ui.warnings), showErrorMessage: say(ui.errors),
       showQuickPick: async (items) => picks.length ? items.find(picks.shift()) : undefined,

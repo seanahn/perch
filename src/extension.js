@@ -8,13 +8,14 @@ const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelL
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
 const { CodeIndex } = require('./codeIndex');
-const { resolveProgram, sdkCodex, terminalRun } = require('./binaries');
+const { resolveProgram, sdkCodex, sdkClaude, terminalRun } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
+const PrSessions = require('./prSessions');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
@@ -235,6 +236,7 @@ function whenClosed(term) {
   return p;
 }
 const MISSING = { claude: 'Perch runs the claude program that comes with the Claude Code extension, which is not installed here. Install it, or set perch.claude.executable to a claude program.', codex: 'Perch runs the codex program that comes with the ChatGPT extension, which is not installed here. Install it, or set perch.codex.executable to a codex program.' };
+const NOTE_TIMEOUT_MS = 120000;   // notePrMerged's headless run: stopped, and reported, if it has not ended by then
 
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
 function defaultEffort(kind) { return String((kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''); }
@@ -258,7 +260,7 @@ function collabInfo(a) {
 }
 
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, own, gatewayCost, gatewayEstimate, periods, left, handoff }) {
+  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, own, gatewayCost, gatewayEstimate, periods, left, handoff, records }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -304,6 +306,8 @@ class Session {
     this.periods[this.periods.length - 1].resume = this.agentSessionId;
     this.left = left && typeof left === 'object' ? left : {};       // a vendor this tab left: its settings and its session, for a switch back
     this.handoff = handoff && typeof handoff.text === 'string' ? handoff : null;   // the earlier conversation, sent ahead of the first message after a switch
+    this.records = Array.isArray(records) ? records.filter((r) => typeof r === 'string' && r) : [];   // sentences for the record (a PR merged: perch.notePrMerged), sent with the next message
+    this.recordsSent = 0;            // how many of them the running turn carries: let go as it ends, sent again if it never got going
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
@@ -621,6 +625,7 @@ class Session {
       case 'result': {
         if (typeof ev.cost === 'number') { this.costSoFar = ev.cost; this.view.persist(); }
         if (this.handoffSent) { this.handoff = null; this.handoffSent = false; this.view.persist(); }
+        if (this.recordsSent) { this.records.splice(0, this.recordsSent); this.recordsSent = 0; this.view.persist(); }
         const via = Object.entries(this.via).map(([model, n]) => ({ model, short: shortModel(model), n }));
         if (via.length) ev.via = via;   // what answered this turn, for the line under the answer; kept with the transcript
         this.via = {};
@@ -812,7 +817,10 @@ class Session {
     // it is let go once a turn has ended (result): a turn that never got going sends it again with the next message
     const carried = this.handoff && !this.handoffSent ? this.handoff.text + '\n\n' : '';
     if (carried) this.handoffSent = true;
-    const full = carried + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
+    // and the sentences kept for the record since the last message (noteMerged), ahead of the message, which stays as typed
+    const noted = this.records.length && !this.recordsSent ? this.records.join(' ') + '\n\n' : '';
+    if (noted) this.recordsSent = this.records.length;
+    const full = carried + noted + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
@@ -826,6 +834,16 @@ class Session {
   }
 
   setIde(on) { this.ide = !!on; this.view.persist(); }
+
+  /**
+   * kestrel merged a PR this tab's session made (perch.notePrMerged): a line in the transcript, and a sentence that goes
+   * with the user's next message. Nothing is sent now, and the tab is neither shown nor focused, busy or not.
+   */
+  noteMerged(pr, hhmm) {
+    this.post({ kind: 'note', text: `${pr.ref} was merged (${hhmm})` });
+    this.records.push(`For the record: PR ${pr.ref} (${pr.url}) was merged at ${hhmm}.`);
+    this.view.persist();
+  }
 
   /**
    * Codex refused its ChatGPT login (codexAuth.refused). Remember which login, so messages are held until there is another;
@@ -990,7 +1008,7 @@ class Session {
   restart() {
     this.restartWhenIdle = false;
     if (!this.agent) return;
-    this.agent.dispose(); this.agent = null; this.background = []; this.handoffSent = false; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
+    this.agent.dispose(); this.agent = null; this.background = []; this.handoffSent = false; this.recordsSent = 0; this.backend = ''; this.actualModel = ''; this.swap = null; this.search = ''; this.via = {}; this.viaCost = null;
     if (this.reconcile()) this.view.persist();   // on default, the next process starts on the model new sessions start on, which may lack the effort
     for (const r of this.pending.values()) r({ decision: 'deny', message: 'session restarted' });
     this.pending.clear();
@@ -1060,7 +1078,7 @@ class Session {
     });
     return { kind, models: [model('', 'default' + (d && d.label ? ' · ' + d.label : ''), d), ...((cat && cat.models) || []).map((m) => model(m.value, m.label, m))] };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, own: this.own, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, own: this.own, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff, records: this.records }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -1081,6 +1099,7 @@ class PerchView {
   constructor(context) {
     this.context = context;
     this.out = typeof vscode.window.createOutputChannel === 'function' ? vscode.window.createOutputChannel('Perch') : null;   // View › Output › Perch
+    this.spawnClaude = require('child_process').spawn;   // notePrMerged's headless run; a test puts a fake in its place
     this.sidebar = { view: null, ready: false };
     this.panels = new Map();         // session id -> { panel, ready }
     this.sessions = [];
@@ -1514,6 +1533,76 @@ class PerchView {
     this.activate(s.id);
     if (s.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
     return true;
+  }
+
+  /**
+   * For kestrel (perch.notePrMerged): a PR was merged; the Claude Code session that made it is told, and asked for nothing.
+   * Open in a tab: a note there, and a sentence that goes with the next message, the tab left as it is. Not open: Claude
+   * Code is run once, headless, on that session, with no tools and no MCP servers, to take the sentence in.
+   * @returns {Promise<{ result: 'tab'|'background'|'none'|'failed', sessionId?: string }>}
+   */
+  async notePrMerged(url) {
+    const pr = PrSessions.parsePrUrl(url); if (!pr) return { result: 'none' };
+    const at = new Date(), hhmm = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
+    let hit = null;
+    try { hit = await PrSessions.findPrSession(url, { root: this.claudeProjects() }); } catch (e) { this.trace(`notePrMerged ${pr.ref}: the search failed: ${e.message}`); }
+    if (!hit) return { result: 'none' };
+    const s = this.owner('claude', hit.id);
+    if (s) { s.noteMerged(pr, hhmm); this.trace(`notePrMerged ${pr.ref}: noted in tab ${s.id.slice(0, 8)} "${s.title}" for session ${hit.id.slice(0, 8)}`); return { result: 'tab', sessionId: hit.id }; }
+    // one run at a time; the same URL asked again while it waits or runs is that run, not another
+    this.noting = this.noting || new Map();
+    if (this.noting.has(url)) return this.noting.get(url);
+    const run = (this.noteChain || Promise.resolve()).then(() => this.noteInBackground(pr, hit, hhmm)).finally(() => this.noting.delete(url));
+    this.noteChain = run.catch(() => {});
+    this.noting.set(url, run);
+    return run;
+  }
+
+  /** Claude Code's projects folder, where its sessions are recorded. */
+  claudeProjects() {
+    const dir = this.meter && this.meter.meter && this.meter.meter.claudeDir;
+    return require('path').join(dir || require('path').join(require('os').homedir(), '.claude'), 'projects');
+  }
+
+  /**
+   * The headless run for notePrMerged: `claude -p --resume <id>` once, in the session's folder, as a new plain Claude tab
+   * would run (the same program, environment and backend settings), on Haiku, one turn, no tools, no MCP servers. Never retried.
+   */
+  async noteInBackground(pr, hit, hhmm) {
+    const sessionId = hit.id;
+    const fail = (why, stderr) => {
+      const tail = String(stderr || '').trim().split('\n').slice(-10).join('\n');
+      this.trace(`notePrMerged ${pr.ref}: could not note it in session ${sessionId.slice(0, 8)}: ${why}` + (tail ? '\n' + tail : ''));
+      return { result: 'failed', sessionId };
+    };
+    const prog = program('claude');
+    const exe = prog.path || (prog.from === 'sdk' ? sdkClaude() : '');
+    if (!exe) return fail(MISSING.claude);
+    if (!hit.cwd || !require('fs').existsSync(hit.cwd)) return fail(`the session's folder ${hit.cwd ? hit.cwd + ' is gone' : 'is not recorded'}`);
+    if (this.meter && !this.meter.canRun()) return fail(`Claude has nothing to sign in with on ${require('os').hostname()} (${this.meter.backend() === 'api' ? 'no API / Bedrock credentials' : 'not logged in'})`);
+    // a new plain tab's process: this window's environment, and, where the machine pins a gateway, the settings that take it off
+    const pinned = !!this.pinnedGatewayUrl();
+    const settings = pinned ? ['--settings', JSON.stringify(Gateway.offGatewaySettings(this.meter ? this.meter.backend() !== 'subscription' : false))] : [];
+    const prompt = `For the record: PR ${pr.ref} (${pr.url}) was merged at ${hhmm} (via kestrel). Don't do anything about it now; reply only 'Noted.'`;
+    const args = ['-p', '--resume', sessionId, '--model', 'haiku', '--max-turns', '1', '--tools', '', '--strict-mcp-config', ...settings, prompt];
+    const ms = Number(process.env.PERCH_NOTE_TIMEOUT_MS) || NOTE_TIMEOUT_MS;
+    const ended = await new Promise((resolve) => {
+      let child, err = '', done = false;
+      const end = (r) => { if (done) return; done = true; clearTimeout(timer); resolve(Object.assign({ stderr: err }, r)); };
+      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (_) { /* gone */ } end({ why: `no answer in ${ms >= 1000 ? Math.round(ms / 1000) + ' s' : ms + ' ms'}; stopped` }); }, ms);
+      try { child = this.spawnClaude(exe, args, { cwd: hit.cwd, env: Object.assign({}, process.env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); }
+      catch (e) { end({ why: 'claude could not start: ' + e.message }); return; }
+      if (child.stdout) child.stdout.on('data', () => {});   // the answer ("Noted.") is not wanted; read so the pipe never fills
+      if (child.stderr) child.stderr.on('data', (d) => { err = (err + d).slice(-8000); });
+      child.on('error', (e) => end({ why: 'claude could not start: ' + e.message }));
+      child.on('close', (code, signal) => end(code === 0 ? { ok: true } : { why: signal ? `claude ended on ${signal}` : `claude exited with code ${code}` }));
+    });
+    if (!ended.ok) return fail(ended.why, ended.stderr);
+    let title = '';
+    try { const t = await titleOf('claude', sessionId, { dir: hit.cwd }); title = t && t.title; } catch (_) { /* untitled: its id */ }
+    if (typeof vscode.window.setStatusBarMessage === 'function') vscode.window.setStatusBarMessage(`Noted the merge of ${pr.ref} in "${title || sessionId.slice(0, 8)}"`, 4000);
+    this.trace(`notePrMerged ${pr.ref}: noted in session ${sessionId.slice(0, 8)}, headless`);
+    return { result: 'background', sessionId };
   }
 
   /** The + button: pick files, and mention them in the message by workspace-relative path. */
@@ -2217,6 +2306,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
     vscode.commands.registerCommand('perch.insertText', (text) => perch.insertText(text)),
+    vscode.commands.registerCommand('perch.notePrMerged', (url) => perch.notePrMerged(url)),
     vscode.commands.registerCommand('perch.continueInCodex', () => perch.continueIn('codex')),
     vscode.commands.registerCommand('perch.continueInClaude', () => perch.continueIn('claude')),
     vscode.commands.registerCommand('perch.sessions', () => perch.pickSession()),

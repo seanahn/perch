@@ -953,6 +953,133 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
   {
+    // perch.notePrMerged: kestrel merged a PR; the Claude Code session that made it is told, from records in a throwaway
+    // Claude folder. Open in a tab: a note, and a sentence that goes with the next message. Not open: one headless run.
+    const fs = require('fs'), os = require('os'), path = require('path'), { EventEmitter } = require('events');
+    const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-pr-')), work = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-pr-work-'));
+    const PR = (n) => `https://github.com/seanahn/kestrel/pull/${n}`;
+    const made = (id, n, cwd = work) => { const d = path.join(claudeDir, 'projects', '-w'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, id + '.jsonl'), [
+      { type: 'assistant', timestamp: '2026-11-19T10:00:00Z', cwd, message: { content: [{ type: 'tool_use', id: 'tu-' + n, name: 'Bash', input: { command: 'gh pr create --fill' } }] } },
+      { type: 'user', timestamp: '2026-11-19T10:00:05Z', cwd, message: { content: [{ type: 'tool_result', tool_use_id: 'tu-' + n, content: PR(n) + '\n' }] } }].map((e) => JSON.stringify(e)).join('\n') + '\n'); };
+    made('sess-tab', 11); made('sess-old-period', 14); made('sess-bg', 21); made('sess-bg2', 22); made('sess-fail', 23); made('sess-slow', 24); made('sess-gone', 25, path.join(work, 'deleted'));
+    // the second PR made in the open tab's session, appended to its record
+    fs.appendFileSync(path.join(claudeDir, 'projects', '-w', 'sess-tab.jsonl'), JSON.stringify({ type: 'user', timestamp: '2026-11-19T11:00:05Z', cwd: work, message: { content: [{ type: 'tool_result', tool_use_id: 'tu-11', content: PR(12) }] } }) + '\n');
+    const hhmm = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    const saved = { active: 'tab-other', counters: { claude: 2, codex: 1 }, sessions: [
+      { id: 'tab-pr', kind: 'claude', title: 'PR work', titled: true, resume: 'sess-tab', location: 'sidebar' },
+      { id: 'tab-other', kind: 'claude', title: 'Other', titled: true, location: 'sidebar' },
+      // a tab that has moved on to Codex: its Claude stretch was session sess-old-period
+      { id: 'tab-switched', kind: 'codex', title: 'Moved on', titled: true, resume: 'thread-1', location: 'sidebar', periods: [{ kind: 'claude', resume: 'sess-old-period', said: true }, { kind: 'codex', resume: 'thread-1', said: true }] },
+    ] };
+    const m = install({ 'perch.sessions.v1': saved }, { meter: { claudeDir }, config: { 'claude.executable': '/opt/claude' }, past: { sessions: [{ kind: 'claude', id: 'sess-bg', title: 'Ship the panel' }] } }); await flush();
+    const spawns = [];
+    m.perch.spawnClaude = (exe, args, o) => { const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.kills = []; c.kill = (sig) => { c.kills.push(sig); setImmediate(() => c.emit('close', null, sig)); }; spawns.push({ exe, args, o, c }); return c; };
+    const v = fakeView(); let shows = 0; v.view.show = () => { shows++; }; m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    assert.strictEqual(v.lastTabs().active, 'tab-other');
+    const n0 = created.length, notes = () => v.events('tab-pr').filter((e) => e.kind === 'note').map((e) => e.text);
+
+    // not a PR's URL, or a PR no session mentions: nothing
+    for (const bad of [undefined, 'https://github.com/seanahn/kestrel/pull/11/files', 'https://example.com/pull/11']) assert.deepStrictEqual(await m.commands['perch.notePrMerged'](bad), { result: 'none' });
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(99)), { result: 'none' });
+
+    // open in a tab, idle: the note is posted and kept; the tab is not activated or shown; no agent starts, nothing is sent
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(11)), { result: 'tab', sessionId: 'sess-tab' });
+    assert.strictEqual(notes().pop(), `seanahn/kestrel#11 was merged (${hhmm()})`);
+    assert.strictEqual(m.perch.get('tab-pr').history.filter((h) => h.kind === 'note').pop().text, `seanahn/kestrel#11 was merged (${hhmm()})`, 'in the history, so a rebuilt page shows it');
+    assert.deepStrictEqual([v.lastTabs().active, shows, created.length, spawns.length], ['tab-other', 0, n0, 0], 'not activated, not shown, nothing started or run');
+    // a second one joins the first, and both survive a window reload
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(12)), { result: 'tab', sessionId: 'sess-tab' });
+    const want = [`For the record: PR seanahn/kestrel#11 (${PR(11)}) was merged at ${hhmm()}.`, `For the record: PR seanahn/kestrel#12 (${PR(12)}) was merged at ${hhmm()}.`];
+    assert.deepStrictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((s) => s.id === 'tab-pr').records, want);
+    {
+      const r = install(m.memento._dump(), { meter: { claudeDir } }); await flush();
+      assert.deepStrictEqual(r.perch.get('tab-pr').records, want, 'kept across a reload'); r.perch.dispose();
+    }
+
+    // the user's next message in that tab carries them, ahead of it; the transcript shows the message as typed
+    v.fire({ type: 'send', sid: 'tab-pr', text: 'hold on, what next?' });
+    const a = created[created.length - 1];
+    assert.strictEqual(a.sent[0], want.join(' ') + '\n\nhold on, what next?');
+    assert.strictEqual(v.events('tab-pr').filter((e) => e.kind === 'user').pop().text, 'hold on, what next?');
+    // busy: a merge noted now waits for the message after, and is not sent mid-turn; a message queued meanwhile does not carry the ones on their way
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(11)), { result: 'tab', sessionId: 'sess-tab' });
+    assert.deepStrictEqual([a.sent.length, a.interrupted, v.lastTabs().active, shows], [1, 0, 'tab-other', 0], 'nothing sent, nothing interrupted, the tab left alone');
+    a.emit({ kind: 'result', ok: true }); a.finish();   // the turn ends: what it carried is let go, the newer one stays
+    assert.deepStrictEqual(m.perch.get('tab-pr').records, [want[0]]);
+    v.fire({ type: 'send', sid: 'tab-pr', text: 'and now?' });
+    assert.strictEqual(a.sent[1], want[0] + '\n\nand now?');
+    a.emit({ kind: 'result', ok: true });
+    assert.deepStrictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((s) => s.id === 'tab-pr').records, [], 'cleared once sent');
+    v.fire({ type: 'send', sid: 'tab-pr', text: 'plain' }); assert.strictEqual(a.sent[2], 'plain', 'and not sent again');
+
+    // a tab that has since moved to Codex still holds that Claude session among its periods: it is the one noted
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(14)), { result: 'tab', sessionId: 'sess-old-period' });
+    assert.strictEqual(v.events('tab-switched').filter((e) => e.kind === 'note').pop().text, `seanahn/kestrel#14 was merged (${hhmm()})`);
+
+    // not open: Claude Code runs once, headless, in the session's folder, with the window's environment
+    const delays = [], realSetTimeout = global.setTimeout;
+    global.setTimeout = (f, ms, ...r) => { delays.push(ms); return realSetTimeout(f, ms, ...r); };
+    const p1 = m.commands['perch.notePrMerged'](PR(21));
+    const p1again = m.commands['perch.notePrMerged'](PR(21));   // the same URL again while it runs: the same run
+    const p2 = m.commands['perch.notePrMerged'](PR(22));        // another: waits its turn
+    for (let i = 0; i < 400 && !spawns.length; i++) await wait(5);
+    global.setTimeout = realSetTimeout;
+    assert.strictEqual(spawns.length, 1, 'one run at a time');
+    const s1 = spawns[0];
+    assert.strictEqual(s1.exe, '/opt/claude', 'the program the Claude tabs run');
+    assert.deepStrictEqual(s1.args, ['-p', '--resume', 'sess-bg', '--model', 'haiku', '--max-turns', '1', '--tools', '', '--strict-mcp-config', `For the record: PR seanahn/kestrel#21 (${PR(21)}) was merged at ${hhmm()} (via kestrel). Don't do anything about it now; reply only 'Noted.'`]);
+    assert.strictEqual(s1.o.cwd, work);
+    assert.strictEqual(s1.o.env.PATH, process.env.PATH, "a plain tab's environment");
+    assert(delays.includes(120000), 'stopped after 120 s');
+    s1.c.stdout.emit('data', 'Noted.\n'); s1.c.emit('close', 0, null);
+    assert.deepStrictEqual(await p1, { result: 'background', sessionId: 'sess-bg' });
+    assert.strictEqual(await p1again, await p1);
+    assert.deepStrictEqual(m.ui.statusMessages.pop(), ['Noted the merge of seanahn/kestrel#21 in "Ship the panel"', 4000]);
+    for (let i = 0; i < 400 && spawns.length < 2; i++) await wait(5);
+    assert.strictEqual(spawns.length, 2, 'then the next');
+    spawns[1].c.emit('close', 0, null);
+    assert.deepStrictEqual(await p2, { result: 'background', sessionId: 'sess-bg2' });
+    assert.deepStrictEqual(m.ui.statusMessages.pop(), ['Noted the merge of seanahn/kestrel#22 in "sess-bg2"', 4000], 'untitled: its id, cut to 8');
+
+    // failures are written to the output channel, with stderr's last lines; nothing is shown, nothing retried
+    const shown = () => m.ui.errors.length + m.ui.warnings.length + m.ui.infos.length + m.ui.statusMessages.length, shown0 = shown();
+    const pf = m.commands['perch.notePrMerged'](PR(23));
+    for (let i = 0; i < 400 && spawns.length < 3; i++) await wait(5);
+    spawns[2].c.stderr.emit('data', 'line 1\nError: No conversation found with session ID: sess-fail\n'); spawns[2].c.emit('close', 1, null);
+    assert.deepStrictEqual(await pf, { result: 'failed', sessionId: 'sess-fail' });
+    const tr = m.ui.traces.filter((l) => /notePrMerged seanahn\/kestrel#23/.test(l)).pop();
+    assert(/could not note it in session sess-fai: claude exited with code 1\nline 1\nError: No conversation found/.test(tr), tr);
+    // too long: stopped, and said so
+    process.env.PERCH_NOTE_TIMEOUT_MS = '30';
+    const ps = m.commands['perch.notePrMerged'](PR(24));
+    for (let i = 0; i < 400 && spawns.length < 4; i++) await wait(5);
+    assert.deepStrictEqual(await within(ps), { result: 'failed', sessionId: 'sess-slow' });
+    delete process.env.PERCH_NOTE_TIMEOUT_MS;
+    assert.deepStrictEqual(spawns[3].c.kills, ['SIGKILL']);
+    assert(m.ui.traces.some((l) => /kestrel#24: could not note it in session sess-slo: no answer in 30 ms; stopped/.test(l)));
+    // its folder gone: not run at all
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(25)), { result: 'failed', sessionId: 'sess-gone' });
+    assert.strictEqual(spawns.length, 4);
+    assert(m.ui.traces.some((l) => /kestrel#25: .*the session's folder .*deleted is gone/.test(l)));
+    assert.strictEqual(shown(), shown0, 'no message shown for any failure');
+    // a spawn that throws is a failure too, and a second ask afterwards is a new run, not a retry
+    m.perch.spawnClaude = () => { throw new Error('EACCES'); };
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(23)), { result: 'failed', sessionId: 'sess-fail' });
+    assert(m.ui.traces.some((l) => /claude could not start: EACCES/.test(l)));
+    m.perch.dispose();
+
+    // a machine that pins a gateway for every Claude Code: the run is taken off it, as a plain tab's process is
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example' }, apiKeyHelper: '/bin/gw-key' }));
+    const g = install(undefined, { meter: { claudeDir, settingsPath }, config: { 'claude.executable': '/opt/claude' } }); await flush();
+    const got = []; g.perch.spawnClaude = (exe, args, o) => { const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.kill = () => {}; got.push(args); setImmediate(() => c.emit('close', 0, null)); return c; };
+    assert.deepStrictEqual(await g.commands['perch.notePrMerged'](PR(21)), { result: 'background', sessionId: 'sess-bg' });
+    const i = got[0].indexOf('--settings');
+    assert(i > 0 && got[0][got[0].length - 1].startsWith('For the record:'), 'the prompt stays last');
+    assert.deepStrictEqual(JSON.parse(got[0][i + 1]), require('../src/gateway').offGatewaySettings(false));
+    g.perch.dispose();
+  }
+  {
     // no microphone where the user sits, and no companion at all
     const NOMIC = 'No microphone is connected to this computer: nothing is plugged into its audio input. Plug in a microphone or a headset, or dictate from a computer that has one, connected to this workspace over Remote-SSH with Perch Audio installed there.';
     const m = install(undefined, { audio: { available: { ok: false, code: 'no-microphone', error: NOMIC, api: 1 } } }); await flush();
