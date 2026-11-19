@@ -710,7 +710,7 @@ so a provider would not have reached it either.
 
 ### Commands for other extensions
 
-`perch.insertText(text)` puts `text` in the active tab's input box and shows that tab, without sending it; it returns `false` with no tab or no text. Not in the palette.
+`perch.insertText(text)` puts `text` at the end of the active tab's input box (after a space if the draft doesn't end in one; it replaces nothing already typed, unlike dictation, which inserts at the cursor) and shows that tab, without sending it; it returns `false` with no tab or no text. Not in the palette.
 
 ### Vendor icons
 

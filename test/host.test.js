@@ -943,7 +943,8 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const n = created.length; v.fire({ type: 'new', kind: 'claude' }); const x = v.lastTabs().active; await flush();
     assert.strictEqual(m.commands['perch.insertText'](''), false, 'empty text is refused');
     assert.strictEqual(m.commands['perch.insertText']('Fix the failing check'), true);
-    assert.strictEqual(v.events(x).filter((e) => e.kind === 'insert').pop().text, 'Fix the failing check', 'the page gets an insert, which leaves the box for the user to send');
+    assert.strictEqual(v.events(x).filter((e) => e.kind === 'append').pop().text, 'Fix the failing check', 'the page gets an append: at the end of the box, replacing nothing, left for the user to send');
+    assert(!v.events(x).some((e) => e.kind === 'insert'), 'not an insert at the caret');
     assert(created.slice(n).every((a) => !a.sent.length), 'nothing reaches an agent');
     v.destroy();   // the page is gone: the text waits as the tab's prefill, spaced after what is already there
     assert.strictEqual(m.commands['perch.insertText']('one'), true); assert.strictEqual(m.commands['perch.insertText']('two'), true);

@@ -1498,16 +1498,17 @@ class PerchView {
     }
   }
 
-  deliver(sid, text) {
+  /** Puts text in a tab's box: 'insert' at the caret (dictation), or 'append' at the end, replacing nothing (another extension's prompt). */
+  deliver(sid, text, kind = 'insert') {
     const s = this.get(sid); if (!s || !text) return;
     const f = this.surface(s);
-    if (f && f.ready) this.sendEvent(sid, { kind: 'insert', text }); else s.prefill = (s.prefill ? s.prefill.replace(/\s*$/, ' ') : '') + text;
+    if (f && f.ready) this.sendEvent(sid, { kind, text }); else s.prefill = (s.prefill ? s.prefill.replace(/\s*$/, ' ') : '') + text;
   }
 
-  /** For other extensions (perch.insertText): put a prompt in the active tab's box and show that tab, without sending it. The page spaces it after a live draft; a missing page gets it as prefill. */
+  /** For other extensions (perch.insertText): put a prompt at the end of the active tab's box and show that tab, without sending it. The page spaces it after a live draft and replaces nothing typed; a missing page gets it as prefill. */
   insertText(text) {
     const s = this.active(); if (!s || typeof text !== 'string' || !text) return false;
-    this.deliver(s.id, text);
+    this.deliver(s.id, text, 'append');
     this.activate(s.id);
     if (s.location === 'sidebar' && this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(true);
     return true;

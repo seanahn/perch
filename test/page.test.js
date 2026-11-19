@@ -472,6 +472,18 @@ host({ type: 'tabs', tabs: [A, B], active: 'b' });
 assert.strictEqual($('#input').value, '@x.js @y.js ', 'a mention for a background tab waits in its draft');
 type(''); host({ type: 'tabs', tabs: [A, B], active: 'a' }); type('');
 
+// ---- another extension's prompt (perch.insertText) goes at the end of the box and replaces nothing already typed
+type('keep this draft'); $('#input').setSelectionRange(0, 4);
+ev('a', { kind: 'append', text: 'check PR acme/widgets#1' });
+assert.strictEqual($('#input').value, 'keep this draft check PR acme/widgets#1', 'after the draft, a space between; the selection is kept, not replaced');
+assert.strictEqual($('#input').selectionStart, $('#input').value.length, 'the caret ends after it');
+type('ends in a space '); $('#input').setSelectionRange(0, 0); ev('a', { kind: 'append', text: 'x' });
+assert.strictEqual($('#input').value, 'ends in a space x', 'no doubled space, even with the caret at the start');
+type(''); ev('a', { kind: 'append', text: 'y' }); assert.strictEqual($('#input').value, 'y', 'an empty box gets the text alone');
+type(''); ev('b', { kind: 'append', text: 'later' }); host({ type: 'tabs', tabs: [A, B], active: 'b' });
+assert.strictEqual($('#input').value, 'later', 'a background tab gets it in its draft');
+type(''); host({ type: 'tabs', tabs: [A, B], active: 'a' }); type('');
+
 // ---- permission prompt
 ev('a', { kind: 'permission', id: 'p1', tool: 'Write', input: { file_path: '/x' }, hasSuggestions: false });
 assert.deepStrictEqual([...paneA.querySelectorAll('.perm button')].map((b) => b.textContent), ['Allow', 'Deny'], 'no Always without suggestions');

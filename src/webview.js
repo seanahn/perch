@@ -878,6 +878,14 @@ ${glyphCss}
     grow(); $input.focus();
   }
 
+  // Another extension's prompt: at the end of the box, a space after a draft that doesn't end in one, replacing nothing.
+  function append(text) {
+    const pre = $input.value, gap = pre && !/\\s$/.test(pre) ? ' ' : '';
+    $input.value = pre + gap + text;
+    const at = $input.value.length; try { $input.setSelectionRange(at, at); } catch (_) { /* not focusable yet */ }
+    grow(); $input.focus();
+  }
+
   // Enter always sends: while the agent is working, the message is queued behind the current turn. The button stops.
   function send() {
     const t = cur(); if (!t) return;
@@ -1238,6 +1246,7 @@ ${glyphCss}
       case 'clear': p.log.textContent = ''; p.live = null; p.liveText = ''; p.tools = {}; p.queued = {}; p.stick = true; p.sent.length = 0; p.hist = null; break;
       case 'fill': if (sid === active) { $input.value = m.text; grow(); $input.focus(); } else p.draft = m.text; break;
       case 'insert': if (sid === active) insert(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
+      case 'append': if (sid === active) append(m.text); else p.draft = (p.draft && !/\\s$/.test(p.draft) ? p.draft + ' ' : p.draft) + m.text; break;
     }
     syncWork(sid);
     pin(p);
