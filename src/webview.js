@@ -1218,7 +1218,7 @@ ${glyphCss}
         }
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
         if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; i.title = 'Click to see it larger'; i.addEventListener('click', () => { i.classList.toggle('big'); i.title = i.classList.contains('big') ? 'Click to shrink it' : 'Click to see it larger'; }); row.append(i); } d.append(row); }
-        d.append(m.text); ticketed(d); break; }
+        d.append(linkified(m.text)); ticketed(d); break; }
       case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); ticketed(p.live); break;
       case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); ticketed(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;

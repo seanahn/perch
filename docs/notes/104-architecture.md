@@ -483,7 +483,10 @@ site and `/wiki/` sends `openPage`; Ctrl/Cmd-click, or no site, leaves the
 link as it was. The host passes only an `https:` address on that site to
 `jay.openPage`, and opens it with `openExternal` when jay answers false,
 fails, or is not installed. A Confluence page jay shows is IDE context like
-a ticket (`jay.page`, answered by `jay.activePageFile`).
+a ticket (`jay.page`, answered by `jay.activePageFile`). The user's own
+messages show their web addresses as links too (`linkified`, as for plain
+text elsewhere; no markup is parsed), so a link pasted into a prompt opens
+the same way as one in an answer.
 
 ---
 

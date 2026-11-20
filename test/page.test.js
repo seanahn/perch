@@ -1332,6 +1332,19 @@ window.close();
     click(link('the plan')); assert.strictEqual(sent().length, 1, 'a trailing slash on the site is no matter');
     pc.host({ type: 'confluenceSite', url: null });
     click(link('the plan')); assert.deepStrictEqual(sent(), [], 'signed out of jay: a link keeps its behaviour');
+    // the user's own message: its web addresses are links too, opened the same way; ticket keys still link; text stays as typed
+    pc.host({ type: 'confluenceSite', url: 'https://example.atlassian.net' });
+    pc.host({ type: 'ticketProjects', projects: ['DEMO'] });
+    pc.host({ type: 'event', sid: 'a', ev: { kind: 'user', text: `see ${W}, https://other.example.com/x. and DEMO-7 <b>no</b>` } });
+    const u = [...pc.d.querySelectorAll('.msg.user')].pop();
+    assert.deepStrictEqual([...u.querySelectorAll('a')].map((a) => [a.className, a.textContent]),
+      [['', W], ['', 'https://other.example.com/x'], ['jira-key', 'DEMO-7']], 'the addresses and the ticket key are links; the period after a URL is not part of it');
+    assert.strictEqual(u.textContent, `see ${W}, https://other.example.com/x. and DEMO-7 <b>no</b>`, 'what the user wrote, still as written');
+    assert.strictEqual(u.querySelector('b'), null, 'no markup is parsed');
+    e = click([...u.querySelectorAll('a')][0]);
+    assert.deepStrictEqual([sent(), e.defaultPrevented], [[{ type: 'openPage', url: W }], true], 'a Confluence page in the user\'s message opens through jay');
+    e = click([...u.querySelectorAll('a')][0], { ctrlKey: true });
+    assert.deepStrictEqual([sent(), e.defaultPrevented], [[], false], 'Ctrl-click keeps the browser');
     pc.w.close();
   }
   console.log('PAGE OK');
