@@ -1,6 +1,7 @@
 'use strict';
 // Which Claude Code session made a GitHub pull request, read from Claude Code's own records (~/.claude/projects/*/*.jsonl),
-// for perch.notePrMerged: kestrel says a PR was merged, and the session that made it is told.
+// for perch.notePrMerged: kestrel says a PR was merged, and the session that made it is told; and for perch.findPrSession and
+// perch.openPrSession: kestrel asks which session made a PR, and opens it.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -91,4 +92,34 @@ async function findPrSession(url, { root, now = Date.now(), maxAgeDays = MAX_AGE
   return best ? { id: best.id, cwd: best.cwd, file: best.file, created: best.created } : null;
 }
 
-module.exports = { parsePrUrl, findPrSession, scanFile, mentions, MAX_AGE_DAYS };
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;   // a session's id, as it names its record: nothing that could reach outside the folder
+
+/**
+ * A session's record on this machine, for perch.openPrSession: `given` when that file exists and is named `<id>.jsonl`,
+ * else `<id>.jsonl` in any project folder under `root`. Null when there is none, or `id` is no session's id.
+ * @returns {string|null}
+ */
+function sessionFile(id, { root, given } = {}) {
+  if (typeof id !== 'string' || !SESSION_ID.test(id)) return null;
+  const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch (_) { return false; } };
+  if (typeof given === 'string' && path.isAbsolute(given) && path.basename(given) === id + '.jsonl' && isFile(given)) return given;
+  if (!root) return null;
+  let projects = []; try { projects = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch (_) { return null; }
+  for (const d of projects) { const f = path.join(root, d.name, id + '.jsonl'); if (isFile(f)) return f; }
+  return null;
+}
+
+/** The folder a session's record says it ran in: the first entry that names one. '' when none does. */
+async function recordedCwd(file) {
+  const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      if (!line.includes('"cwd"')) continue;
+      let e; try { e = JSON.parse(line); } catch (_) { continue; }
+      if (e && typeof e.cwd === 'string' && e.cwd) return e.cwd;
+    }
+  } catch (_) { /* unreadable: no folder */ } finally { rl.close(); }
+  return '';
+}
+
+module.exports = { parsePrUrl, findPrSession, scanFile, mentions, sessionFile, recordedCwd, MAX_AGE_DAYS };

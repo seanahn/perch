@@ -87,5 +87,24 @@ const result = (m, id, content, cwd = '/w/kestrel') => ({ type: 'user', timestam
     assert.strictEqual((await P.findPrSession(URL, { root })).id, 'big');
   }
 
+  // ---- a session's record by its id (perch.openPrSession): the file given, when it is that session's, else found by name
+  {
+    const root = mk(), elsewhere = mk();
+    const file = record(root, '-w-kestrel', 'dddd4444-origin', [{ type: 'summary', summary: 'x' }, say(1, 'hi', '/w/origin'), say(2, 'again', '/w/later')]);
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root }), file, 'found under a project folder');
+    const copy = path.join(elsewhere, 'dddd4444-origin.jsonl'); fs.copyFileSync(file, copy);
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root, given: copy }), copy, 'the file given, when it exists');
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root, given: path.join(elsewhere, 'missing.jsonl') }), file, 'a missing file: found by name');
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root, given: path.join(elsewhere, 'other.jsonl') }), file, "another session's file is not this one's");
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root, given: 'dddd4444-origin.jsonl' }), file, 'a relative path is not taken');
+    for (const bad of [undefined, '', 'nope', '../-w-kestrel/dddd4444-origin', '-w-kestrel/dddd4444-origin', '.'])
+      assert.strictEqual(P.sessionFile(bad, { root }), null, String(bad));
+    assert.strictEqual(P.sessionFile('dddd4444-origin', { root: path.join(root, 'missing') }), null);
+    // the folder it ran in: the first entry that names one
+    assert.strictEqual(await P.recordedCwd(file), '/w/origin');
+    assert.strictEqual(await P.recordedCwd(record(root, '-w', 'nocwd', [{ type: 'summary', summary: 'x' }])), '');
+    assert.strictEqual(await P.recordedCwd(path.join(root, 'missing.jsonl')), '', 'unreadable: no folder');
+  }
+
   console.log('PR SESSIONS OK');
 })().catch((e) => { console.error(e); process.exit(1); });

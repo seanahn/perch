@@ -196,7 +196,8 @@ function contextEditor() {
   if (!lastFile) return null;
   return (vscode.window.visibleTextEditors || []).find((v) => v.document && v.document.uri.fsPath === lastFile) || null;
 }
-function ideContext() {
+/** `base`: the folder the tab's agent runs in, to which the file's path is relative. */
+function ideContext(base = cwd()) {
   if (chirpFront && chirpFile) {
     const path = require('path');
     return { block: ['', '', '<ide_context>', `Active file: ${chirpFile} (Teams conversation)`, '</ide_context>'].join('\n'), tag: path.basename(chirpFile) };
@@ -204,7 +205,7 @@ function ideContext() {
   const ed = contextEditor();
   if (!ed || !ed.document || ed.document.uri.scheme !== 'file') return null;
   const path = require('path');
-  const abs = ed.document.uri.fsPath, r = path.relative(cwd(), abs);
+  const abs = ed.document.uri.fsPath, r = path.relative(base, abs);
   const file = r && !r.startsWith('..') && !path.isAbsolute(r) ? r : abs;
   const sel = ed.selection, lang = ed.document.languageId || '';
   const lines = ['', '', '<ide_context>', `Active file: ${file}` + (lang ? ` (${lang})` : '')];
@@ -237,6 +238,7 @@ function whenClosed(term) {
 }
 const MISSING = { claude: 'Perch runs the claude program that comes with the Claude Code extension, which is not installed here. Install it, or set perch.claude.executable to a claude program.', codex: 'Perch runs the codex program that comes with the ChatGPT extension, which is not installed here. Install it, or set perch.codex.executable to a codex program.' };
 const NOTE_TIMEOUT_MS = 120000;   // notePrMerged's headless run: stopped, and reported, if it has not ended by then
+const PR_NONE_TTL_MS = 10 * 60000;   // findPrSession: a PR no session was found for is looked for again after this long
 
 function cfg(key) { return vscode.workspace.getConfiguration('perch').get(key); }
 function defaultEffort(kind) { return String((kind === 'claude' ? cfg('claude.effort') : cfg('codex.reasoningEffort')) || ''); }
@@ -260,7 +262,7 @@ function collabInfo(a) {
 }
 
 class Session {
-  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, own, gatewayCost, gatewayEstimate, periods, left, handoff, records }) {
+  constructor(view, { id, kind, title, titled, unsaved, named, mode, effort, model, ide, resume, location, paneled, costSoFar, kept, gateway, own, gatewayCost, gatewayEstimate, periods, left, handoff, records, dir }) {
     this.view = view;
     this.id = id || randomUUID();
     this.kind = kind;
@@ -296,6 +298,9 @@ class Session {
     this.location = location === 'sidebar' || location === 'editor' ? location : view.where();   // which surface shows this tab
     this.paneled = !!paneled;        // an editor tab has been opened for it at some point, so VS Code will restore that tab
     this.prefill = '';               // text waiting for a page that is not ready yet
+    // a folder of its own for the agent's process, when its session ran in another than the window's (perch.openPrSession):
+    // Claude Code keeps sessions per project folder, so a resume runs where the session ran. Null follows the window.
+    this.dir = typeof dir === 'string' && dir ? dir : null;
     this.reconcile();
     this.agentSessionId = resume || null;
     // the vendors this tab has been on, in order, each with its agent's session (note 202); the last is the current one.
@@ -348,7 +353,7 @@ class Session {
       for (const p of this.periods) {
         const key = p.kind + ':' + p.resume;
         if (!p.resume || records.has(key)) continue;
-        const past = await loadTranscript(p.kind, p.resume, { dir: cwd(), limit: Infinity });
+        const past = await loadTranscript(p.kind, p.resume, { dir: this.workdir(), limit: Infinity });
         records.set(key, Handoff.stretches(past.events));
       }
     } catch (_) { return; }   // the note stays: the agents have the transcript, the page does not
@@ -376,12 +381,12 @@ class Session {
    */
   async prepareHandoff() {
     if (!this.agentSessionId) return null;
-    const events = await Handoff.loadDiscussion(this.kind, this.agentSessionId, { dir: cwd() });
+    const events = await Handoff.loadDiscussion(this.kind, this.agentSessionId, { dir: this.workdir() });
     const parts = Handoff.stretches(events), mine = parts[parts.length - 1];
     if (!mine || !mine.length) return null;
     const n = this.periods.length, file = Handoff.handoffFile(this.id, n);
     const cat = this.catalog(), model = this.running() ? modelLabel(cat, this.running()) || this.running() : this.model ? modelLabel(cat, this.model) || this.model : '';
-    const r = Handoff.handoffText(mine, { agent: VENDOR[this.kind], model, cwd: cwd(), file });
+    const r = Handoff.handoffText(mine, { agent: VENDOR[this.kind], model, cwd: this.workdir(), file });
     if (!r.messages) return null;
     return Object.assign(r, { file });
   }
@@ -453,7 +458,7 @@ class Session {
 
   /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
   async loadPast(id) {
-    let past; try { past = await loadTranscript(this.kind, id, { dir: cwd() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
+    let past; try { past = await loadTranscript(this.kind, id, { dir: this.workdir() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0 || !past || !past.events.length) return;
     // the transcript speaks for itself; only what is missing from it is said, where it is missing
@@ -466,6 +471,9 @@ class Session {
     if (this.history.length > MAX_HISTORY) this.history.splice(0, this.history.length - MAX_HISTORY);
     this.view.replay(this);
   }
+
+  /** The folder this tab's agent runs in: its own, else the window's. */
+  workdir() { return this.dir || cwd(); }
 
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
 
@@ -721,7 +729,7 @@ class Session {
       this.search = search ? JSON.stringify(search.args) : '';   // what this process searches: a change restarts it
       this.agent = new ClaudeAgent({
         search: search || undefined,
-        cwd: cwd(), emit, resume,
+        cwd: this.workdir(), emit, resume,
         permissionMode: this.mode,
         // off a pinned gateway the subscription does not know the gateway's model names: keep the model only if the catalog has it
         model: (this.model && (!pinned || !launchCat || modelEntry(launchCat, this.model))) ? this.wireModel() : undefined,
@@ -739,7 +747,7 @@ class Session {
       this.search = search ? JSON.stringify(search.args) : '';
       this.agent = new CodexAgent({
         search: search || undefined,
-        cwd: cwd(), emit, resume,
+        cwd: this.workdir(), emit, resume,
         additionalDirectories: additionalCwds(),
         sandboxMode: this.mode,
         approvalPolicy: cfg('codex.approvalPolicy'),
@@ -812,7 +820,7 @@ class Session {
     const agent = this.ensureAgent();
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
-    const ctx = this.ide ? ideContext() : null;
+    const ctx = this.ide ? ideContext(this.workdir()) : null;
     // the first message after a switch carries the conversation before it (note 202); the transcript shows the words only
     // it is let go once a turn has ended (result): a turn that never got going sends it again with the next message
     const carried = this.handoff && !this.handoffSent ? this.handoff.text + '\n\n' : '';
@@ -1078,7 +1086,7 @@ class Session {
     });
     return { kind, models: [model('', 'default' + (d && d.label ? ' · ' + d.label : ''), d), ...((cat && cat.models) || []).map((m) => model(m.value, m.label, m))] };
   }
-  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, own: this.own, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff, records: this.records }; }
+  toState() { return { id: this.id, kind: this.kind, title: this.title, titled: this.titled, unsaved: this.unsaved, named: this.named, mode: this.mode, effort: this.effort, model: this.model, ide: this.ide, resume: this.agentSessionId, location: this.location, paneled: this.paneled, costSoFar: this.costSoFar, kept: this.kept, gateway: this.gateway, own: this.own, gatewayCost: this.gatewayCost, gatewayEstimate: this.gatewayEstimate, periods: this.periods, left: this.left, handoff: this.handoff, records: this.records, dir: this.dir }; }
 
   /** Save a message's thumbnails with the tab, letting the oldest go once they would weigh too much. */
   keep(thumbs) {
@@ -1545,7 +1553,7 @@ class PerchView {
     const pr = PrSessions.parsePrUrl(url); if (!pr) return { result: 'none' };
     const at = new Date(), hhmm = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
     let hit = null;
-    try { hit = await PrSessions.findPrSession(url, { root: this.claudeProjects() }); } catch (e) { this.trace(`notePrMerged ${pr.ref}: the search failed: ${e.message}`); }
+    try { hit = await this.searchPr(url); } catch (e) { this.trace(`notePrMerged ${pr.ref}: the search failed: ${e.message}`); }
     if (!hit) return { result: 'none' };
     const s = this.owner('claude', hit.id);
     if (s) { s.noteMerged(pr, hhmm); this.trace(`notePrMerged ${pr.ref}: noted in tab ${s.id.slice(0, 8)} "${s.title}" for session ${hit.id.slice(0, 8)}`); return { result: 'tab', sessionId: hit.id }; }
@@ -1562,6 +1570,85 @@ class PerchView {
   claudeProjects() {
     const dir = this.meter && this.meter.meter && this.meter.meter.claudeDir;
     return require('path').join(dir || require('path').join(require('os').homedir(), '.claude'), 'projects');
+  }
+
+  /**
+   * The search for the session that made a PR, over every record of the last 30 days: one at a time, the others queued
+   * behind it, whoever asks (notePrMerged, findPrSession). `prSearch` is the search itself; a test puts a fake in its place.
+   */
+  searchPr(url) {
+    const run = (this.prChain || Promise.resolve()).then(() => this.prSearch(url));
+    this.prChain = run.catch(() => {});
+    return run;
+  }
+  prSearch(url) { return PrSessions.findPrSession(url, { root: this.claudeProjects() }); }
+
+  /**
+   * For kestrel (perch.findPrSession): which Claude Code session on this machine made the PR at `url`. kestrel asks for
+   * every PR it lists, in the background, so the answer is kept per URL for the life of the window: a session for good,
+   * none for 10 minutes, after which it is looked for again. The same URL asked while it is looked for waits for that.
+   * Never throws: a URL that is no PR's, no session, or a failed search is null, the failure written to the output channel.
+   * @returns {Promise<{ session: string, cwd: string, transcript: string, host: string, created: boolean } | null>}
+   */
+  async findPrSession(url) {
+    const pr = PrSessions.parsePrUrl(url); if (!pr) return null;
+    this.prFound = this.prFound || new Map();   // url -> { run, at, hit }: `hit` undefined while it runs
+    const had = this.prFound.get(url), now = this.clock();
+    if (!had || (had.hit === null && now - had.at >= PR_NONE_TTL_MS)) {
+      const entry = { at: now, hit: undefined };
+      entry.run = this.searchPr(url).then(
+        (h) => h ? { session: h.id, cwd: h.cwd, transcript: h.file, host: require('os').hostname(), created: !!h.created } : null,
+        (e) => { this.trace(`findPrSession ${pr.ref}: the search failed: ${(e && e.message) || e}`); return null; })
+        .then((hit) => { entry.hit = hit; entry.at = this.clock(); return hit; });
+      this.prFound.set(url, entry);
+    }
+    const hit = await this.prFound.get(url).run;
+    return hit ? Object.assign({}, hit) : null;   // a copy: the caller's to change, not the cache's
+  }
+  clock() { return Date.now(); }
+
+  /**
+   * For kestrel (perch.openPrSession): open the Claude chat that made a PR, when the user clicks its line. The session is
+   * `spec.session` (the PR's own pr-origin record) when its record is on this machine, else the one findPrSession finds.
+   * Open in a tab, or among a tab's periods: that tab is shown and focused. Otherwise a new Claude tab resumes it, in the
+   * session's own folder (Claude Code keeps sessions per project folder), and is focused; nothing is sent. A folder no
+   * longer here: the window's, and the tab says so. Nothing on this machine: 'none', and nothing is done (kestrel opens GitHub).
+   * @param {{ url: string, session?: string, cwd?: string, transcript?: string }} spec
+   * @returns {Promise<'tab'|'resumed'|'none'>}
+   */
+  async openPrSession(spec) {
+    const o = spec && typeof spec === 'object' ? spec : {};
+    const label = (PrSessions.parsePrUrl(o.url) || {}).ref || String(o.url);
+    try {
+      let id = null, dir = '';
+      const file = PrSessions.sessionFile(o.session, { root: this.claudeProjects(), given: o.transcript });
+      if (file) { id = o.session; dir = typeof o.cwd === 'string' && o.cwd ? o.cwd : await PrSessions.recordedCwd(file); }
+      else {
+        const hit = await this.findPrSession(o.url);
+        // kept from an earlier search: its record may have gone since
+        if (hit && require('fs').existsSync(hit.transcript)) { id = hit.session; dir = hit.cwd || (hit.session === o.session && typeof o.cwd === 'string' ? o.cwd : ''); }
+      }
+      if (!id) return 'none';
+      const fs = require('fs'), here = cwd();
+      const gone = !!dir && !(() => { try { return fs.statSync(dir).isDirectory(); } catch (_) { return false; } })();
+      let title = '';
+      if (!this.owner('claude', id)) { try { const t = await titleOf('claude', id, { dir: gone || !dir ? here : dir }); title = (t && t.title) || ''; } catch (_) { /* untitled: its id */ } }
+      // asked again after every wait: a tab may have opened on it meanwhile (a second click), and two must not write one record
+      const open = this.owner('claude', id);
+      if (open) { this.focusTab(open); this.trace(`openPrSession ${label}: shown tab ${open.id.slice(0, 8)} "${open.title}" for session ${id.slice(0, 8)}`); return 'tab'; }
+      const s = this.addSession('claude', { resume: id, title, dir: !gone && dir && dir !== here ? dir : undefined, note: gone ? `this chat ran in ${dir}, which isn't on this machine now` : undefined });
+      this.focusTab(s);
+      this.trace(`openPrSession ${label}: resumed session ${id.slice(0, 8)} in a new tab, in ${s.workdir()}${gone ? ` (${dir} is gone)` : ''}`);
+      return 'resumed';
+    } catch (e) { this.trace(`openPrSession ${label}: failed: ${(e && e.message) || e}`); return 'none'; }
+  }
+
+  /** Show a tab and give it the focus, wherever it lives; the sidebar view is opened if it is not. */
+  focusTab(s) {
+    if (s.location === 'editor') { this.activate(s.id); return; }   // its panel is revealed with the focus
+    this.activate(s.id);
+    if (this.sidebar.view && this.sidebar.view.show) this.sidebar.view.show(false);
+    else Promise.resolve(vscode.commands.executeCommand('perch.main.focus')).catch(() => {});
   }
 
   /**
@@ -1612,7 +1699,7 @@ class PerchView {
     const root = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
     const picked = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFolders: false, openLabel: 'Mention', defaultUri: root && root.uri, title: `Mention files in ${s.title}` });
     if (!picked || !picked.length) return;
-    const rel = (u) => { const p = u.fsPath, base = cwd(); const r = require('path').relative(base, p); return r && !r.startsWith('..') && !require('path').isAbsolute(r) ? r : p; };
+    const rel = (u) => { const p = u.fsPath, base = s.workdir(); const r = require('path').relative(base, p); return r && !r.startsWith('..') && !require('path').isAbsolute(r) ? r : p; };
     this.sendEvent(sid, { kind: 'insert', text: picked.map((u) => '@' + rel(u)).join(' ') + ' ' });
   }
 
@@ -1988,18 +2075,20 @@ class PerchView {
 
   // ---- session management
   /** @param {object} [o]  `resume` opens the tab on a session the agent has already recorded, under the name it has there;
-   *  `gateway` puts a Claude tab on the gateway */
-  addSession(kind, { fill, location, resume, title, gateway } = {}) {
+   *  `gateway` puts a Claude tab on the gateway; `dir` runs its agent in that folder rather than the window's; `note` opens
+   *  its transcript with a line of perch's own */
+  addSession(kind, { fill, location, resume, title, gateway, dir, note } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
     if (gateway === undefined && kind === 'claude' && !resume) gateway = this.context.globalState.get(GATEWAY_DEFAULT_KEY) === true;   // where the last Claude tab was put
     const vendor = kind === 'claude' ? 'Claude' : 'Codex';
     // a machine where Codex's sandbox cannot start (codexNoSandbox): new Codex tabs run without one, and say so
     const mode = kind === 'codex' && this.codexUnsandboxedHere() ? 'danger-full-access' : undefined;
     const s = new Session(this, resume
-      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where(), gateway }
-      : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where(), gateway });
+      ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where(), gateway, dir }
+      : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where(), gateway, dir });
     this.sessions.push(s);
     if (mode) s.history.push({ kind: 'note', text: `Codex runs without a sandbox on ${require('os').hostname()}: the kernel forbids the user namespaces its sandbox needs.` });
+    if (note) s.history.unshift({ kind: 'note', text: note });   // ahead of the resumed transcript, which loads in place of its own note
     if (fill) s.prefill = fill;
     if (s.location === 'editor') { this.openPanel(s); this.sendTabs(); return s; }     // its page asks for the replay when it is ready
     this.activeId = s.id;
@@ -2078,7 +2167,7 @@ class PerchView {
   async syncTitle(s) {
     if (!s || s.kind !== 'claude' || s.named || s.unsaved || !s.agentSessionId) return;
     let t = null;
-    try { t = await titleOf(s.kind, s.agentSessionId, { dir: cwd() }); } catch (_) { return; }
+    try { t = await titleOf(s.kind, s.agentSessionId, { dir: s.workdir() }); } catch (_) { return; }
     this.adoptTitle(s, t);
   }
   /** Give an open tab the title of its record, unless the name is the user's. @returns {boolean} whether it changed */
@@ -2100,7 +2189,7 @@ class PerchView {
     const records = []; for (const p of s.periods) if (p.resume && !records.some((r) => r.kind === p.kind && r.id === p.resume)) records.push({ kind: p.kind, id: p.resume });
     if (!records.some((r) => r.kind === s.kind && r.id === s.agentSessionId)) records.push({ kind: s.kind, id: s.agentSessionId });
     for (const r of records) {
-      try { await renameSession(r.kind, r.id, s.title, { dir: cwd() }); }
+      try { await renameSession(r.kind, r.id, s.title, { dir: s.workdir() }); }
       catch (e) { vscode.window.showWarningMessage(`Perch: this tab keeps its name, but ${r.kind === 'claude' ? 'Claude Code' : 'Codex'}'s record of the session could not be given it. ${e.message}`); }
     }
   }
@@ -2331,6 +2420,8 @@ function activate(context) {
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
     vscode.commands.registerCommand('perch.insertText', (text) => perch.insertText(text)),
     vscode.commands.registerCommand('perch.notePrMerged', (url) => perch.notePrMerged(url)),
+    vscode.commands.registerCommand('perch.findPrSession', (url) => perch.findPrSession(url)),
+    vscode.commands.registerCommand('perch.openPrSession', (spec) => perch.openPrSession(spec)),
     vscode.commands.registerCommand('perch.continueInCodex', () => perch.continueIn('codex')),
     vscode.commands.registerCommand('perch.continueInClaude', () => perch.continueIn('claude')),
     vscode.commands.registerCommand('perch.sessions', () => perch.pickSession()),

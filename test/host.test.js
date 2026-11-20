@@ -1081,6 +1081,122 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     g.perch.dispose();
   }
   {
+    // perch.findPrSession and perch.openPrSession: kestrel asks which session made a PR, and opens it when its line is
+    // clicked. Records in a throwaway Claude folder; the window's folder is process.cwd(), the sessions ran elsewhere.
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-open-pr-')), work = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-open-pr-work-'));
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-open-pr-other-')), loose = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-open-pr-loose-'));
+    const projects = path.join(claudeDir, 'projects'), PR = (n) => `https://github.com/seanahn/kestrel/pull/${n}`;
+    const made = (id, n, cwd = work, dir = '-w') => { const d = path.join(projects, dir); fs.mkdirSync(d, { recursive: true }); const f = path.join(d, id + '.jsonl'); fs.writeFileSync(f, [
+      { type: 'assistant', timestamp: '2026-11-19T10:00:00Z', cwd, message: { content: [{ type: 'tool_use', id: 'tu-' + n, name: 'Bash', input: { command: 'gh pr create --fill' } }] } },
+      { type: 'user', timestamp: '2026-11-19T10:00:05Z', cwd, message: { content: [{ type: 'tool_result', tool_use_id: 'tu-' + n, content: PR(n) + '\n' }] } }].map((e) => JSON.stringify(e)).join('\n') + '\n'); return f; };
+    const openFile = made('sess-open', 31); made('sess-closed', 32); made('sess-searched', 33); made('sess-gone', 35, path.join(work, 'deleted'));
+    made('sess-origin', 0, other, '-other');   // mentions no PR of these: found only by its id, from the PR's own record
+    fs.renameSync(made('sess-loose', 0, other, '-tmp'), path.join(loose, 'sess-loose.jsonl'));   // a record outside the projects folder, named for its session
+    const saved = { active: 'tab-other', counters: { claude: 2, codex: 0 }, sessions: [
+      { id: 'tab-pr', kind: 'claude', title: 'PR work', titled: true, resume: 'sess-open', location: 'sidebar' },
+      { id: 'tab-other', kind: 'claude', title: 'Other', titled: true, location: 'sidebar' },
+    ] };
+    const m = install({ 'perch.sessions.v1': saved }, { meter: { claudeDir }, past: { sessions: [{ kind: 'claude', id: 'sess-closed', title: 'Ship the panel' }] } }); await flush();
+    const v = fakeView(); const shows = []; v.view.show = (p) => { shows.push(p); }; m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const tabs = () => m.perch.sessions.length;
+
+    // ---- findPrSession: the shape; a URL that is no PR's, or that no session made, is null
+    assert.deepStrictEqual(await m.commands['perch.findPrSession'](PR(31)), { session: 'sess-open', cwd: work, transcript: openFile, host: os.hostname(), created: true });
+    for (const bad of [undefined, 7, PR(31) + '/files']) assert.strictEqual(await m.commands['perch.findPrSession'](bad), null, String(bad));
+    // kept per URL: asked again, nothing is searched; the copy handed out is the caller's to change
+    const real = m.perch.prSearch.bind(m.perch); let searches = [];
+    m.perch.prSearch = (url) => { searches.push(url); return real(url); };
+    const first = await m.commands['perch.findPrSession'](PR(31)); first.session = 'changed';
+    assert.strictEqual((await m.commands['perch.findPrSession'](PR(31))).session, 'sess-open');
+    assert.deepStrictEqual(searches, [], 'answered from what was found before');
+    // none found: kept for 10 minutes, then looked for again
+    let now = Date.now(); m.perch.clock = () => now;
+    assert.strictEqual(await m.commands['perch.findPrSession'](PR(98)), null);
+    now += 9 * 60000; assert.strictEqual(await m.commands['perch.findPrSession'](PR(98)), null);
+    assert.deepStrictEqual(searches, [PR(98)], 'not looked for again within 10 minutes');
+    now += 60000; assert.strictEqual(await m.commands['perch.findPrSession'](PR(98)), null);
+    assert.deepStrictEqual(searches, [PR(98), PR(98)], 'looked for again after 10');
+    // a session found stays found, however long after
+    now += 24 * 3600000; await m.commands['perch.findPrSession'](PR(31)); assert.strictEqual(searches.length, 2);
+    // one search at a time, the others queued; the same URL asked while it is looked for waits for that search
+    {
+      const held = []; let running = 0, most = 0; searches = [];
+      m.perch.prSearch = (url) => { searches.push(url); running++; most = Math.max(most, running); return new Promise((resolve) => held.push(() => { running--; resolve(url === PR(42) ? { id: 'sess-q', cwd: work, file: '/x/sess-q.jsonl', created: false } : null); })); };
+      const asks = [PR(41), PR(42), PR(41), PR(43)].map((u) => m.commands['perch.findPrSession'](u));
+      for (let i = 0; i < 6; i++) { await flush(); if (held.length) held.shift()(); }
+      for (let i = 0; i < 6; i++) { await flush(); if (held.length) held.shift()(); }
+      const got = await Promise.all(asks);
+      assert.deepStrictEqual([most, searches], [1, [PR(41), PR(42), PR(43)]], 'one at a time, each URL once');
+      assert.deepStrictEqual(got.map((r) => r && r.session), [null, 'sess-q', null, null]);
+      assert.deepStrictEqual(got[1], { session: 'sess-q', cwd: work, transcript: '/x/sess-q.jsonl', host: os.hostname(), created: false });
+      // a search that fails is null, written to the output channel, never thrown
+      m.perch.prSearch = async () => { throw new Error('EMFILE'); };
+      assert.strictEqual(await m.commands['perch.findPrSession'](PR(44)), null);
+      assert(m.ui.traces.some((l) => /findPrSession seanahn\/kestrel#44: the search failed: EMFILE/.test(l)));
+      m.perch.prSearch = real;
+    }
+
+    // ---- openPrSession: open in a tab: that tab is shown and focused, and no tab is made
+    const n0 = tabs(), a0 = created.length;
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(31) }), 'tab');
+    assert.deepStrictEqual([v.lastTabs().active, shows.pop(), tabs(), created.length], ['tab-pr', false, n0, a0], 'shown with the focus; nothing made or started');
+
+    // not open: a new Claude tab resumes it, in the folder it ran in, focused; nothing is sent
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(32) }), 'resumed');
+    const s1 = m.perch.sessions[m.perch.sessions.length - 1];
+    assert.deepStrictEqual([s1.kind, s1.agentSessionId, s1.title, s1.dir, s1.workdir(), v.lastTabs().active, shows.pop(), tabs()], ['claude', 'sess-closed', 'Ship the panel', work, work, s1.id, false, n0 + 1]);
+    assert.strictEqual(created.length, a0, 'no agent started, nothing sent');
+    assert.deepStrictEqual(m.store.loads.filter((l) => l[1] === 'sess-closed').pop()[2].dir, work, 'its transcript is read from the folder it ran in');
+    assert.strictEqual(m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === s1.id).dir, work, 'saved with the tab');
+    v.fire({ type: 'send', sid: s1.id, text: 'where were we?' });
+    assert.deepStrictEqual([created[created.length - 1].o.cwd, created[created.length - 1].o.resume], [work, 'sess-closed'], "its process runs in the session's folder, on that session");
+    { const r = install(m.memento._dump(), { meter: { claudeDir } }); await flush(); assert.strictEqual(r.perch.get(s1.id).workdir(), work, 'and still after a reload'); r.perch.dispose(); }
+    // clicked again: now it is that tab
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(32) }), 'tab'); assert.strictEqual(tabs(), n0 + 1);
+
+    // spec.session, from the PR's own record, comes before the search: PR 31's search finds sess-open, the spec names another
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(31), session: 'sess-origin' }), 'resumed');
+    const s2 = m.perch.sessions[m.perch.sessions.length - 1];
+    assert.deepStrictEqual([s2.agentSessionId, s2.dir], ['sess-origin', other], 'the folder its record names');
+    // its cwd and transcript, when given: the file need not be under the projects folder
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(31), session: 'sess-loose', transcript: path.join(loose, 'sess-loose.jsonl'), cwd: work }), 'resumed');
+    assert.deepStrictEqual([m.perch.sessions[m.perch.sessions.length - 1].agentSessionId, m.perch.sessions[m.perch.sessions.length - 1].dir], ['sess-loose', work], "spec.cwd before the record's");
+    // a session not on this machine: the search decides
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(33), session: 'sess-elsewhere', transcript: '/nowhere/sess-elsewhere.jsonl', cwd: '/nowhere' }), 'resumed');
+    assert.deepStrictEqual([m.perch.sessions[m.perch.sessions.length - 1].agentSessionId, m.perch.sessions[m.perch.sessions.length - 1].dir], ['sess-searched', work]);
+    // the session's folder is the window's: the tab follows the window
+    made('sess-here', 36, process.cwd());
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(36) }), 'resumed');
+    assert.strictEqual(m.perch.sessions[m.perch.sessions.length - 1].dir, null);
+
+    // nothing on this machine: 'none', and nothing done
+    const n1 = tabs(), act = v.lastTabs().active, sh = shows.length;
+    // found, and kept, before its record went: not on this machine now
+    made('sess-vanished', 37); assert.strictEqual((await m.commands['perch.findPrSession'](PR(37))).session, 'sess-vanished'); fs.unlinkSync(path.join(projects, '-w', 'sess-vanished.jsonl'));
+    for (const spec of [{ url: PR(37) }, { url: PR(99) }, { url: PR(99), session: 'sess-nowhere' }, { url: 'https://example.com/x' }, undefined, 'x'])
+      assert.strictEqual(await m.commands['perch.openPrSession'](spec), 'none', JSON.stringify(spec));
+    assert.deepStrictEqual([tabs(), v.lastTabs().active, shows.length], [n1, act, sh]);
+
+    // the folder it ran in is gone: the window's folder, and the tab says so
+    assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(35) }), 'resumed');
+    const s3 = m.perch.sessions[m.perch.sessions.length - 1];
+    assert.deepStrictEqual([s3.agentSessionId, s3.dir, s3.workdir()], ['sess-gone', null, process.cwd()]);
+    assert.strictEqual(v.events(s3.id).filter((e) => e.kind === 'note')[0].text, `this chat ran in ${path.join(work, 'deleted')}, which isn't on this machine now`);
+    v.fire({ type: 'send', sid: s3.id, text: 'hi' }); assert.strictEqual(created[created.length - 1].o.cwd, process.cwd());
+    m.perch.dispose();
+
+    // an editor tab open on the session: its panel is revealed with the focus
+    const e = install({ 'perch.sessions.v1': { active: null, counters: { claude: 1, codex: 0 }, sessions: [{ id: 'tab-ed', kind: 'claude', title: 'In the editor', titled: true, resume: 'sess-open', location: 'editor', paneled: true }] } }, { meter: { claudeDir } }); await flush();
+    const ev = fakeView(); e.registered['perch.main'].resolveWebviewView(ev.view); ev.fire({ type: 'ready' }); await flush();
+    const p0 = e.ui.panels.length;
+    assert.strictEqual(await e.commands['perch.openPrSession']({ url: PR(31) }), 'tab');
+    const panel = e.ui.panels.filter((p) => !p.disposed).pop();
+    assert(panel && panel.active && (e.ui.panels.length > p0 || panel.reveals > 0), 'its panel is in front, with the focus');
+    assert.strictEqual(e.perch.sessions.length, 1);
+    e.perch.dispose();
+  }
+  {
     // no microphone where the user sits, and no companion at all
     const NOMIC = 'No microphone is connected to this computer: nothing is plugged into its audio input. Plug in a microphone or a headset, or dictate from a computer that has one, connected to this workspace over Remote-SSH with Perch Audio installed there.';
     const m = install(undefined, { audio: { available: { ok: false, code: 'no-microphone', error: NOMIC, api: 1 } } }); await flush();

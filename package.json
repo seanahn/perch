@@ -94,6 +94,14 @@
         "title": "Perch: Note a Merged Pull Request in the Session That Made It"
       },
       {
+        "command": "perch.findPrSession",
+        "title": "Perch: Find the Session That Made a Pull Request"
+      },
+      {
+        "command": "perch.openPrSession",
+        "title": "Perch: Open the Session That Made a Pull Request"
+      },
+      {
         "command": "perch.continueInCodex",
         "title": "Perch: Continue This Tab in Codex…",
         "icon": "$(arrow-swap)"
@@ -199,6 +207,14 @@
         },
         {
           "command": "perch.notePrMerged",
+          "when": "false"
+        },
+        {
+          "command": "perch.findPrSession",
+          "when": "false"
+        },
+        {
+          "command": "perch.openPrSession",
           "when": "false"
         }
       ],
