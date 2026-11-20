@@ -1653,9 +1653,12 @@ class PerchView {
       if (!this.owner('claude', id)) { try { const t = await titleOf('claude', id, { dir: gone || !dir ? here : dir }); title = (t && t.title) || ''; } catch (_) { /* untitled: its id */ } }
       // asked again after every wait: a tab may have opened on it meanwhile (a second click), and two must not write one record
       const open = this.owner('claude', id);
-      if (open) { this.focusTab(open); this.trace(`openPrSession ${label}: shown tab ${open.id.slice(0, 8)} "${open.title}" for session ${id.slice(0, 8)}`); return 'tab'; }
+      // fill: a prompt for that chat (a reason link in kestrel), at the end of its box, never sent
+      const fill = typeof o.fill === 'string' && o.fill ? o.fill : '';
+      if (open) { this.focusTab(open); if (fill) this.deliver(open.id, fill, 'append'); this.trace(`openPrSession ${label}: shown tab ${open.id.slice(0, 8)} "${open.title}" for session ${id.slice(0, 8)}`); return 'tab'; }
       const s = this.addSession('claude', { resume: id, title, dir: !gone && dir && dir !== here ? dir : undefined, note: gone ? `this chat ran in ${dir}, which isn't on this machine now` : undefined });
       this.focusTab(s);
+      if (fill) this.deliver(s.id, fill, 'append');
       this.trace(`openPrSession ${label}: resumed session ${id.slice(0, 8)} in a new tab, in ${s.workdir()}${gone ? ` (${dir} is gone)` : ''}`);
       return 'resumed';
     } catch (e) { this.trace(`openPrSession ${label}: failed: ${(e && e.message) || e}`); return 'none'; }

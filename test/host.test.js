@@ -1175,6 +1175,21 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(36) }), 'resumed');
     assert.strictEqual(m.perch.sessions[m.perch.sessions.length - 1].dir, null);
 
+    // with fill (a reason link in kestrel): the prompt goes at the end of that chat's box, unsent
+    {
+      const a1 = created.length;
+      assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(31), fill: 'check the blocking review comments' }), 'tab');
+      assert.strictEqual(v.events('tab-pr').filter((e) => e.kind === 'append').pop().text, 'check the blocking review comments');
+      made('sess-fill', 38);
+      assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(38), fill: 'fix the conflicts' }), 'resumed');
+      const sf = m.perch.sessions[m.perch.sessions.length - 1];
+      assert.strictEqual(sf.agentSessionId, 'sess-fill');
+      assert.ok((sf.prefill || '').includes('fix the conflicts') || v.events(sf.id).some((e) => (e.kind === 'append' || e.kind === 'fill') && e.text.includes('fix the conflicts')), 'waits in the new tab\'s box');
+      assert.strictEqual(created.length, a1, 'nothing sent, no agent started');
+      // a fill that is not text is ignored
+      assert.strictEqual(await m.commands['perch.openPrSession']({ url: PR(31), fill: 42 }), 'tab');
+    }
+
     // nothing on this machine: 'none', and nothing done
     const n1 = tabs(), act = v.lastTabs().active, sh = shows.length;
     // found, and kept, before its record went: not on this machine now
