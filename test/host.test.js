@@ -1273,6 +1273,37 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  // ---- the sidebar lists this folder's past sessions, both agents', when it holds no tab of its own: the list the Sessions
+  // command shows, as rows to click. Sent when the sidebar is ready, when it comes into view, and when asked again
+  {
+    const NOW = Date.now(), MIN = 60000;
+    const past = { sessions: [
+      { kind: 'claude', id: 'c-old', title: 'gate run', named: true, updatedAt: NOW - 2 * MIN },
+      { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
+    ] };
+    const m = install(undefined, { past }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
+    assert.deepStrictEqual(v.past(), { type: 'past', sessions: [
+      { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false },
+      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false }], failed: [] }, 'newest first, by name, agent and age');
+    assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
+    // a row clicked: the session opens in a tab, as from the Sessions command, and the list says it is open
+    const made = created.length;
+    v.fire({ type: 'openPast', key: 'claude:c-old' }); await flush(); await flush();
+    const opened = m.perch.sessions.find((s) => s.kind === 'claude');
+    assert(opened && opened.title === 'gate run', 'a tab for it, under its name');
+    assert.strictEqual(v.past().sessions[0].open, true, 'the list, sent again, marks it open');
+    v.fire({ type: 'openPast', key: 'claude:nope' }); await flush();
+    assert.strictEqual(m.perch.sessions.length, 1, 'a row no longer listed opens nothing');
+    // in view again, or asked: the list is read again
+    const n = m.store.lists.length;
+    v.reveal(); await flush(); await flush();
+    v.fire({ type: 'pastRefresh' }); await flush(); await flush();
+    assert.strictEqual(m.store.lists.length, n + 2);
+    assert.strictEqual(created.length, made, 'listing starts no agent');
+    m.perch.dispose();
+  }
+
   // ---- background tasks: the tab carries what runs on between turns, for the page to show; a new process starts with none
   {
     const m = install(); await flush();

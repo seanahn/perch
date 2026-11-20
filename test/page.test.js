@@ -780,6 +780,24 @@ assert.deepStrictEqual([$('#composer').className, $('#t-model .m').textContent, 
 assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
 assert.deepStrictEqual($$('#empty .k').map((i) => i.className), ['k glyph claude', 'k glyph codex'], 'empty state carries the vendor glyphs');
 $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
+// the sidebar with no tab: the past sessions of this folder under the two buttons, to search and open
+assert.strictEqual($$('#past .row').length, 0, 'none until the host sends them');
+host({ type: 'past', failed: [], sessions: [
+  { key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false },
+  { key: 'codex:x1', kind: 'codex', title: 'hello', when: '26m', open: true },
+  { key: 'claude:c2', kind: 'claude', title: 'supertrend', when: '1mo', open: false }] });
+const rows = () => $$('#past .row').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent, r.querySelector('.k').className]);
+assert.deepStrictEqual(rows(), [['gate run', '2m', 'k glyph claude'], ['hello', 'open · 26m', 'k glyph codex'], ['supertrend', '1mo', 'k glyph claude']], 'each by name, agent and age; an open one says so');
+assert.strictEqual($('#past .h').textContent, 'Sessions in this folder');
+$('#past input').value = 'SUPER'; $('#past input').dispatchEvent(new window.Event('input'));
+assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters by name');
+$$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');
+$('#past input').value = ''; $('#past input').dispatchEvent(new window.Event('input'));
+$('#past .refresh').click(); assert.deepStrictEqual(out.pop(), { type: 'pastRefresh' });
+host({ type: 'past', failed: ['codex'], sessions: [] });
+assert.deepStrictEqual([rows().length, $('#past .none').textContent], [0, 'The sessions of Codex could not be read.'], 'nothing to list says why');
+host({ type: 'past', failed: [], sessions: [] });
+assert.strictEqual($('#past .none').textContent, 'No past sessions in this folder.');
 host({ type: 'tabs', tabs: [A], active: 'a' });
 assert(!shown($('#empty')), 'empty state hides once a tab exists');
 assert.strictEqual(out.length, 0, 'nothing was sent that the tests did not ask for');

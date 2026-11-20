@@ -1785,6 +1785,8 @@ class PerchView {
     this.mount(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((msg) => this.onMessage(msg, null));
     webviewView.onDidDispose(() => { if (this.sidebar.view === webviewView) this.sidebar = { view: null, ready: false }; });
+    // in view again: the list of past sessions it shows when it holds no tab may have changed meanwhile
+    if (webviewView.onDidChangeVisibility) webviewView.onDidChangeVisibility(() => { if (webviewView.visible !== false) this.sendPast(); });
   }
 
   /** The column new editor tabs open in: beside the other Perch tabs if there are any, otherwise beside the editor. */
@@ -1864,7 +1866,7 @@ class PerchView {
     switch (msg.type) {
       case 'ready': {
         const mine = from ? this.sessions.filter((x) => x.id === from) : this.sessions.filter((x) => x.location === 'sidebar');
-        if (from) { const e = this.panels.get(from); if (!e) return; e.ready = true; } else this.sidebar.ready = true;
+        if (from) { const e = this.panels.get(from); if (!e) return; e.ready = true; } else { this.sidebar.ready = true; this.sendPast(); }
         this.sendTabs();                 // no tabs are created for you: a fresh workspace starts empty
         const to = from ? this.panels.get(from).panel.webview : this.sidebar.view.webview;
         to.postMessage({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
@@ -1918,6 +1920,8 @@ class PerchView {
         return;
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
+      case 'pastRefresh': this.sendPast(); return;
+      case 'openPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) { this.resumeSession(p); this.sendPast(); } return; }
       case 'subagentUsage': this.subagentUsage(s); return;
       case 'indexStatus': this.indexStatus(s); return;
       case 'searchToggle': this.toggleSearch(true).then(() => this.indexStatus(s), () => this.indexStatus(s)); return;
@@ -2176,6 +2180,25 @@ class PerchView {
     else if (missing) qp.title = `Perch sessions · those of ${missing} could not be read`;
     qp.busy = false;
     return qp;
+  }
+
+  /**
+   * The sidebar's list of past sessions, both agents', of this folder: what it shows when it holds no tab of its own, so the
+   * Perch icon in the activity bar opens on the sessions to go back to. The rows are the Sessions command's; a click opens one
+   * (openPast). Read when the sidebar is ready, comes into view, or asks again; only the latest read is sent.
+   */
+  async sendPast() {
+    if (!this.sidebar.view || !this.sidebar.ready) return;
+    const gen = this.pastGen = (this.pastGen || 0) + 1;
+    let res; try { res = await listSessions({ dir: cwd(), limit: 200 }); } catch (_) { res = { sessions: [], failed: ['claude', 'codex'] }; }
+    if (gen !== this.pastGen || !this.sidebar.view) return;
+    this.pastByKey = new Map();
+    const sessions = res.sessions.map((p) => {
+      const key = p.kind + ':' + p.id, open = this.owner(p.kind, p.id);
+      this.pastByKey.set(key, p);
+      return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open };
+    });
+    this.sidebar.view.webview.postMessage({ type: 'past', sessions, failed: res.failed || [] });
   }
 
   /** The way back in when no tab is on screen: the tab last used, or the sessions list, which starts a new tab too. */

@@ -296,8 +296,9 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
 }
 
 function fakeView() {
-  const got = []; let onMsg, onDispose;
-  return { got, fire: (m) => onMsg(m), destroy: () => onDispose(),
+  const got = []; let onMsg, onDispose, onVisible;
+  return { got, fire: (m) => onMsg(m), destroy: () => onDispose(), reveal: () => { if (onVisible) onVisible(); },
+    past: () => (got.filter((m) => m.type === 'past').pop() || null),
     events: (sid) => got.filter((m) => m.type === 'event' && m.sid === sid).map((m) => m.ev),
     lastTabs: () => got.filter((m) => m.type === 'tabs').pop(),
     lastMeter: () => (got.filter((m) => m.type === 'meter').pop() || {}).meter,
@@ -305,7 +306,7 @@ function fakeView() {
     lastCodex: () => (got.filter((m) => m.type === 'meter').pop() || {}).codex,
     commands: (kind) => got.filter((m) => m.type === 'commands' && m.kind === kind).map((m) => m.list),
     tab: (id) => (got.filter((m) => m.type === 'tabs').pop().tabs.find((x) => x.id === id)),
-    view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, show() {} } };
+    view: { webview: { options: {}, cspSource: 'x', html: '', asWebviewUri: (u) => ({ toString: () => 'vscode-resource://host' + u.path }), postMessage: (m) => got.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage: (f) => { onMsg = f; } }, onDidDispose: (f) => { onDispose = f; }, onDidChangeVisibility: (f) => { onVisible = f; }, visible: true, show() {} } };
 }
 
 module.exports = { install, fakeView, created, engines, FakeAgent, flush, CATALOGS, CODEX_LIMITS, knobs, PRICES };

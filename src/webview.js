@@ -211,6 +211,16 @@ ${glyphCss}
   .empty { padding: 32px 16px; text-align: center; color: var(--vscode-descriptionForeground); }
   .empty .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
   .empty button { font-size: 12px; padding: 4px 12px; display: inline-flex; gap: 6px; align-items: center; }
+  #past { margin-top: 20px; text-align: left; }
+  #past .hd { display: flex; align-items: center; gap: 6px; margin: 0 2px 6px; }
+  #past .h { flex: 1; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  #past .refresh { font-size: 11px; padding: 0 6px; }
+  #past input { width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 3px 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; }
+  #past .row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; color: var(--vscode-foreground); }
+  #past .row:hover { background: var(--vscode-list-hoverBackground); }
+  #past .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #past .row .w { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  #past .none { padding: 4px; }
 
   /* composer: the message on top, the tools in a row beneath. Each kind of tab takes its own vendor's look. */
   #composer { --accent: #D97757; margin: 0 8px 4px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 10px; background: var(--vscode-input-background); flex: none; display: flex; flex-direction: column; }
@@ -322,7 +332,7 @@ ${glyphCss}
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
-  <div id="panes"><div class="empty" id="empty"><div>No sessions yet.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div></div></div>
+  <div id="panes"><div class="empty" id="empty"><div>No tab open here.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
   <div id="composer" class="off">
     <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
@@ -455,6 +465,25 @@ ${glyphCss}
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
   const VNAME = { claude: 'Claude', codex: 'Codex' };
   function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
+  // The sidebar with no tab of its own: this folder's past sessions, both agents', to search and open (the host's sendPast)
+  let pastFilter = '';
+  function drawPast(list, failed) {
+    const box = $('past'); box.hidden = false; box.textContent = '';
+    const hd = el('div', 'hd'); hd.append(el('span', 'h', 'Sessions in this folder'));
+    const again = el('button', 'refresh', '↻'); again.title = 'Read the list again'; again.addEventListener('click', () => vscode.postMessage({ type: 'pastRefresh' })); hd.append(again);
+    const find = document.createElement('input'); find.placeholder = 'Search sessions…'; find.value = pastFilter;
+    const rows = el('div', 'rows');
+    const show = () => { const q = find.value.trim().toLowerCase(); pastFilter = find.value; for (const r of rows.children) if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q); };
+    find.addEventListener('input', show);
+    for (const p of list) {
+      const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title;
+      r.append(badge(p.kind), el('span', 't', p.title || '(untitled)'), el('span', 'w', (p.open ? 'open · ' : '') + (p.when || '')));
+      r.addEventListener('click', () => vscode.postMessage({ type: 'openPast', key: p.key }));
+      rows.append(r);
+    }
+    if (!list.length) rows.append(el('div', 'none', failed.length ? 'The sessions of ' + failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ') + ' could not be read.' : 'No past sessions in this folder.'));
+    box.append(hd, find, rows); show();
+  }
   function badge(kind) {
     const i = ICONS[kind];
     if (i && i.glyph) { const s = document.createElement('span'); s.className = 'k glyph ' + kind; return s; }
@@ -1447,6 +1476,7 @@ ${glyphCss}
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
     if (m.type === 'tabs') { if (m.gateway) gatewayInfo = m.gateway; applyTabs(m.tabs, m.active, m.single); }
+    if (m.type === 'past') drawPast(m.sessions || [], m.failed || []);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }

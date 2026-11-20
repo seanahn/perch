@@ -151,6 +151,11 @@ editor tab closes the session.
 **`sidebar`**: sessions are tabs inside the Perch view, under the Perch
 icon in the activity bar.
 
+With no tab of its own, the Perch view lists the past sessions of the
+workspace folder, Claude's and Codex's together, newest first, under the
+two buttons that start a new tab. Type to search; click one to open it,
+or to go to the tab already open on it.
+
 Both can be used at once. `Perch: Move Tab to the Editor Area` and
 `Perch: Move Tab to the Sidebar` move the active tab; the session, its
 agent, and its transcript are untouched. There are `Move All` versions of
