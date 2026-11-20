@@ -329,6 +329,11 @@ ${glyphCss}
 
   /* last on purpose: an author display rule (.pane is flex) would otherwise override the hidden attribute */
   [hidden] { display: none !important; }
+  /* last, so they win over the rules for a page with tabs: the sidebar with no tab of its own */
+  body.bare #tabs, body.bare #composer { display: none; }
+  body.bare .empty { padding: 10px 12px 0; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
+  body.bare #past { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 14px; }
+  body.bare #past .rows { flex: 1; min-height: 0; overflow-y: auto; }
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
@@ -820,6 +825,7 @@ ${glyphCss}
     for (const [id, p] of panes) if (!ids.has(id)) { p.root.remove(); panes.delete(id); voice.delete(id); if (p.ixTimer) clearInterval(p.ixTimer); }
     for (const t of tabs) { const p = panes.get(t.id) || makePane(t); p.root.hidden = t.id !== active; syncWork(t.id); if (!t.index && p.ixOpen) toggleIndex(t.id, false); }
     $empty.hidden = tabs.length > 0 || single;
+    document.body.classList.toggle('bare', !tabs.length && !single);   // the sidebar with no tab of its own: the list of past sessions, top to bottom
     renderTabs();
     const p = panes.get(active);
     if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) { p.stick = true; pin(p); } }

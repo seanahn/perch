@@ -799,7 +799,11 @@ host({ type: 'past', failed: ['codex'], sessions: [] });
 assert.deepStrictEqual([rows().length, $('#past .none').textContent], [0, 'The sessions of Codex could not be read.'], 'nothing to list says why');
 host({ type: 'past', failed: [], sessions: [] });
 assert.strictEqual($('#past .none').textContent, 'No past sessions in this folder.');
+// with no tab of its own, the sidebar is the list: no tab bar (its + is the buttons'), no message box (nothing to send to)
+const shownAs = (sel) => window.getComputedStyle($(sel)).display;
+assert.deepStrictEqual([d.body.classList.contains('bare'), shownAs('#tabs'), shownAs('#composer')], [true, 'none', 'none'], 'the bare sidebar: the list, from the top to the bottom');
 host({ type: 'tabs', tabs: [A], active: 'a' });
+assert.deepStrictEqual([d.body.classList.contains('bare'), shownAs('#tabs'), shownAs('#composer')], [false, 'flex', 'flex'], 'a tab brings the tab bar and the message box back');
 assert(!shown($('#empty')), 'empty state hides once a tab exists');
 assert.strictEqual(out.length, 0, 'nothing was sent that the tests did not ask for');
 assert.deepStrictEqual([d.body.classList.contains('single'), P.states], [false, []], 'the sidebar page keeps its tab bar and stores nothing');
