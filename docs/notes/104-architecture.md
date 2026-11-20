@@ -453,6 +453,10 @@ const b = 2;
   context stays synchronous. If both have been in front, the most recent
   wins; a file focused after either clears it. Perch's own tabs don't
   count as a change, and without the extension installed nothing changes.
+  jay opens tickets in the Atlassian extension's issue page by default, a
+  webview of type `react` titled with the key. Perch asks jay about that
+  tab too, and jay answers only for a key it opened, so other `react`
+  webviews leave the context unchanged.
 
 ---
 

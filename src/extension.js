@@ -176,6 +176,8 @@ let lastFile = null;
 const WEBVIEW_FILES = [
   { viewType: 'chirp.conversation', command: 'chirp.activeConversationFile', label: 'Teams conversation' },
   { viewType: 'jay.ticket', command: 'jay.activeIssueFile', label: 'Jira ticket' },
+  // the Atlassian extension's issue page, which jay opens by default; jay answers only for a tab it tracks (titled with the key)
+  { viewType: 'react', command: 'jay.activeIssueFile', label: 'Jira ticket' },
 ];
 let front = null, frontFile = null;   // the WEBVIEW_FILES entry in front, and the file it answered
 function watchEditors(context) {

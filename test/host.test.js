@@ -698,6 +698,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       await tabsChanged();
       v2.fire({ type: 'send', sid: x, text: 'no jay' }); await flush();
       assert.strictEqual(cx.sent.pop(), 'no jay', 'without jay installed, context is unchanged');
+      // the Atlassian extension's issue page (webview type "react", titled with the key) is jay's ticket too: jay names its file, or null
+      m.ui.editor = editor(path.join(process.cwd(), 'src', 'b.js'), 'javascript', '', sel(0, 0, 0, 0)); for (const f of m.ui.listeners.editor) f(m.ui.editor);   // a file first: nothing webview is in front
+      m.ui.editor = undefined; m.ui.visible = [];
+      m.ui.answers = { 'jay.activeIssueFile': () => JAY };
+      m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'PLAT-123', input: { viewType: 'mainThreadWebview-react' } }, tabs: [] });
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'atlassian page' }); await flush();
+      assert(/Active file: .*PLAT-123\.jira \(Jira ticket\)/.test(cx.sent.pop()), 'an Atlassian issue page in front is jay\'s ticket file');
+      m.ui.answers = { 'jay.activeIssueFile': () => null };
+      m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'Some React Tool', input: { viewType: 'mainThreadWebview-react' } }, tabs: [] });
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'other react tab' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'other react tab', 'another react webview jay does not track leaves the context unchanged');
       m.ui.answers = undefined; m.ui.group = undefined; m.ui.visible = undefined;
     }
 
