@@ -1001,6 +1001,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const a = created[created.length - 1];
     assert.strictEqual(a.sent[0], want.join(' ') + '\n\nhold on, what next?');
     assert.strictEqual(v.events('tab-pr').filter((e) => e.kind === 'user').pop().text, 'hold on, what next?');
+    // the same merge told again (another window saw it too): claimed already, so it stands aside
+    assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(11)), { result: 'duplicate', sessionId: 'sess-tab' });
+    assert.ok(fs.readdirSync(path.join(claudeDir, 'perch-noted-merges')).length >= 2, 'one claim per merge, next to the projects folder');
+    fs.rmSync(path.join(claudeDir, 'perch-noted-merges'), { recursive: true, force: true });   // forget the claims, to note #11 again below
     // busy: a merge noted now waits for the message after, and is not sent mid-turn; a message queued meanwhile does not carry the ones on their way
     assert.deepStrictEqual(await m.commands['perch.notePrMerged'](PR(11)), { result: 'tab', sessionId: 'sess-tab' });
     assert.deepStrictEqual([a.sent.length, a.interrupted, v.lastTabs().active, shows], [1, 0, 'tab-other', 0], 'nothing sent, nothing interrupted, the tab left alone');
@@ -1069,6 +1073,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
 
     // a machine that pins a gateway for every Claude Code: the run is taken off it, as a plain tab's process is, hooks still off
+    fs.rmSync(path.join(claudeDir, 'perch-noted-merges'), { recursive: true, force: true });   // a fresh machine: no claims yet
     const settingsPath = path.join(claudeDir, 'settings.json');
     fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example' }, apiKeyHelper: '/bin/gw-key' }));
     const g = install(undefined, { meter: { claudeDir, settingsPath }, config: { 'claude.executable': '/opt/claude' } }); await flush();

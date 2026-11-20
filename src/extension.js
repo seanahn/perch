@@ -1555,18 +1555,36 @@ class PerchView {
     let hit = null;
     try { hit = await this.searchPr(url); } catch (e) { this.trace(`notePrMerged ${pr.ref}: the search failed: ${e.message}`); }
     if (!hit) return { result: 'none' };
-    const s = this.owner('claude', hit.id);
-    if (s) { s.noteMerged(pr, hhmm); this.trace(`notePrMerged ${pr.ref}: noted in tab ${s.id.slice(0, 8)} "${s.title}" for session ${hit.id.slice(0, 8)}`); return { result: 'tab', sessionId: hit.id }; }
     // one run at a time; the same URL asked again while it waits or runs is that run, not another
     this.noting = this.noting || new Map();
     if (this.noting.has(url)) return this.noting.get(url);
-    const run = (this.noteChain || Promise.resolve()).then(() => this.noteInBackground(pr, hit, hhmm)).finally(() => this.noting.delete(url));
+    // every window on this machine may be told of the same merge (kestrel sees a PR merged on GitHub leave each
+    // window's list): the first to claim it notes it, the rest stand aside
+    const claim = this.claimMerge(url);
+    if (claim === null) { this.trace(`notePrMerged ${pr.ref}: already noted from another window`); return { result: 'duplicate', sessionId: hit.id }; }
+    const s = this.owner('claude', hit.id);
+    if (s) { s.noteMerged(pr, hhmm); this.trace(`notePrMerged ${pr.ref}: noted in tab ${s.id.slice(0, 8)} "${s.title}" for session ${hit.id.slice(0, 8)}`); return { result: 'tab', sessionId: hit.id }; }
+    const run = (this.noteChain || Promise.resolve()).then(() => this.noteInBackground(pr, hit, hhmm))
+      .then((r) => { if (r && r.result === 'failed' && claim) { try { require('fs').unlinkSync(claim); } catch (_) { /* gone already */ } } return r; })   // a failed run can be tried again
+      .finally(() => this.noting.delete(url));
     this.noteChain = run.catch(() => {});
     this.noting.set(url, run);
     return run;
   }
 
   /** Claude Code's projects folder, where its sessions are recorded. */
+  /**
+   * This machine's claim on noting a merge: a file per PR next to Claude Code's projects folder, created only if absent.
+   * Returns its path, null when another window already claimed it, or '' when claims can't be written (then: no dedupe).
+   */
+  claimMerge(url) {
+    const fs = require('fs'), path = require('path');
+    const dir = path.join(path.dirname(this.claudeProjects()), 'perch-noted-merges');
+    const file = path.join(dir, require('crypto').createHash('sha256').update(url).digest('hex').slice(0, 24));
+    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, url + '\n', { flag: 'wx' }); return file; }
+    catch (e) { return e && e.code === 'EEXIST' ? null : ''; }
+  }
+
   claudeProjects() {
     const dir = this.meter && this.meter.meter && this.meter.meter.claudeDir;
     return require('path').join(dir || require('path').join(require('os').homedir(), '.claude'), 'projects');
