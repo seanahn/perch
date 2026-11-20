@@ -180,6 +180,10 @@ const WEBVIEW_FILES = [
   { viewType: 'react', command: 'jay.activeIssueFile', label: 'Jira ticket' },
 ];
 let front = null, frontFile = null;   // the WEBVIEW_FILES entry in front, and the file it answered
+// jay's Jira ticket keys, which the pages make links of: a project, and a key in it (note 108)
+const TICKET_PROJECT = /^[A-Z][A-Z0-9_]+$/;
+const TICKET_KEY = /^([A-Z][A-Z0-9_]+)-\d+$/;
+const TICKET_PROJECTS_MS = 5 * 60 * 1000;
 function watchEditors(context) {
   const note = (ed) => { if (ed && ed.document && ed.document.uri.scheme === 'file') { lastFile = ed.document.uri.fsPath; front = null; frontFile = null; } };
   note(vscode.window.activeTextEditor);
@@ -1126,6 +1130,8 @@ class PerchView {
     this.catalog = { claude: null, codex: null };   // filled from the agents; tabs fall back to static lists until then
     this.loading = null;
     this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
+    this.ticketProjects = [];        // the Jira projects jay knows, whose ticket keys the pages link (note 108)
+    this.ticketTimer = null;
     this.closing = false;
     this.graceTimer = null;
     this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
@@ -1179,6 +1185,24 @@ class PerchView {
       if (s.busy) { s.restartWhenIdle = true; s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab moves to it after the current turn; the conversation continues, the prompt cache starts over.` }); }
       else { s.restart(); s.post({ kind: 'note', text: `Claude backend is now ${state.backendName}. This tab continues on it from the next message; the prompt cache starts over.` }); }
     }
+  }
+  /**
+   * Ask jay (a separate extension) which Jira projects it knows, and tell every page when that changes. Without jay the
+   * command is not found, which is no projects: the pages then link nothing.
+   */
+  refreshTicketProjects() {
+    return Promise.resolve().then(() => vscode.commands.executeCommand('jay.projectKeys')).then((v) => v, () => null).then((v) => {
+      const next = Array.isArray(v) ? [...new Set(v.filter((k) => typeof k === 'string' && TICKET_PROJECT.test(k)))].sort() : [];
+      if (JSON.stringify(next) === JSON.stringify(this.ticketProjects)) return;
+      this.ticketProjects = next;
+      this.raw({ type: 'ticketProjects', projects: next });
+    });
+  }
+  /** A key the page asks to open: only one of a project jay knows, and only through jay; what jay makes of it is its own. */
+  openTicket(key) {
+    const m = TICKET_KEY.exec(String(key === undefined || key === null ? '' : key));
+    if (!m || !this.ticketProjects.includes(m[1])) return;
+    Promise.resolve().then(() => vscode.commands.executeCommand('jay.openTicket', m[0])).catch(() => { /* jay could not, or is gone */ });
   }
   setCommands(kind, list) {
     const next = normalizeCommands(list);
@@ -1904,7 +1928,7 @@ class PerchView {
     webviewView.webview.onDidReceiveMessage((msg) => this.onMessage(msg, null));
     webviewView.onDidDispose(() => { if (this.sidebar.view === webviewView) this.sidebar = { view: null, ready: false }; });
     // in view again: the list of past sessions it shows when it holds no tab may have changed meanwhile
-    if (webviewView.onDidChangeVisibility) webviewView.onDidChangeVisibility(() => { if (webviewView.visible !== false) this.sendPast(); });
+    if (webviewView.onDidChangeVisibility) webviewView.onDidChangeVisibility(() => { if (webviewView.visible !== false) { this.sendPast(); this.refreshTicketProjects(); } });
   }
 
   /** The column new editor tabs open in: beside the other Perch tabs if there are any, otherwise beside the editor. */
@@ -1931,7 +1955,7 @@ class PerchView {
     const icon = tabIcon(s.kind); if (icon) panel.iconPath = icon;
     this.mount(panel.webview);
     panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg, s.id));
-    panel.onDidChangeViewState(() => { if (panel.active) this.lockGroup(); if (panel.visible && s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } });
+    panel.onDidChangeViewState(() => { if (panel.active) this.lockGroup(); if (panel.visible) this.refreshTicketProjects(); if (panel.visible && s.attention && !s.pending.size) { s.attention = false; this.sendTabs(); } });
     if (panel.active) setImmediate(() => { if (panel.active && this.panels.get(s.id) === entry) this.lockGroup(); });
     // closing the editor tab closes the session, unless the tab is going away for another reason (a move, or shutdown)
     panel.onDidDispose(() => { if (this.panels.get(s.id) !== entry) return; this.panels.delete(s.id); if (!this.closing && this.get(s.id) && s.location === 'editor') this.closeSession(s.id); });
@@ -1989,6 +2013,7 @@ class PerchView {
         const to = from ? this.panels.get(from).panel.webview : this.sidebar.view.webview;
         to.postMessage({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
         for (const k of Object.keys(this.commands)) if (this.commands[k].length) to.postMessage({ type: 'commands', kind: k, list: this.commands[k] });
+        if (this.ticketProjects.length) to.postMessage({ type: 'ticketProjects', projects: this.ticketProjects });
         this.loadCatalogs();
         for (const x of mine) { this.replay(x); this.voice.resend(x.id); }
         return;
@@ -2020,6 +2045,7 @@ class PerchView {
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
       case 'copy': vscode.env.clipboard.writeText(String(msg.text || '')); return;
+      case 'openTicket': this.openTicket(msg.key); return;   // a Jira ticket key in a message, a link for a project jay knows
       case 'noteAction':             // a button under a note: the gateway file, or this tab off the gateway. Old notes keep their buttons, so each is safe to press again
         if (msg.action === 'gatewayFile') this.openGatewayFile();
         else if (msg.action === 'gatewayLeave') { if (s && s.gateway) s.setGateway(false); }
@@ -2425,6 +2451,7 @@ class PerchView {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
     clearTimeout(this.unlockTimer);
+    clearInterval(this.ticketTimer);
     for (const s of this.sessions) s.dispose();
     this.meter.dispose();
     this.voice.dispose();
@@ -2479,6 +2506,10 @@ function activate(context) {
     { dispose: () => perch.dispose() },
   );
   perch.start();
+  // jay's Jira projects: now, and again every few minutes, as jay learns of more (and as a page comes into view)
+  perch.refreshTicketProjects();
+  perch.ticketTimer = setInterval(() => perch.refreshTicketProjects(), TICKET_PROJECTS_MS);
+  if (perch.ticketTimer.unref) perch.ticketTimer.unref();
   return perch;   // exposed for tests
 }
 

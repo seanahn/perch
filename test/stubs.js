@@ -102,7 +102,8 @@ class FakeAgent {
   setBackend(b) { (this.apiKeys = this.apiKeys || []).push(b.apiKey || null); (this.backends = this.backends || []).push(b); this.o.apiKey = b.apiKey || undefined; this.o.bedrock = b.bedrock || undefined; }
 }
 
-function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders, codeIndex } = {}) {
+// commandAnswers: what other extensions' commands answer, by id, from activation on (ui.commandAnswers, which a test may change)
+function install(state, { extensions, config, catalogs, meter, globals, voice, audio, remote, past, workspaceFolders, codeIndex, commandAnswers } = {}) {
   // the agents' own records of past sessions: what they list, and every name written to them
   const store = Object.assign({ sessions: [], failed: [], renamed: [], deleted: [], failDelete: null, lists: [], failRename: null, transcripts: {}, loads: [], claudeUsage: {} }, past);
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
@@ -165,7 +166,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     promptCacheMinutes: (backend) => (box.cacheMinutes || ((backend || (box.bedrock ? 'api' : 'subscription')) === 'subscription' ? 60 : 5)),
     setBedrockSetting: (on, stash) => { if (box.failWrite) throw new Error(box.failWrite); box.writes.push(on); box.bedrock = on; stash.set('model', on ? undefined : 'stashed'); },
   };
-  const ui = { traces: [], statusMessages: [], pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], forwarded: [], external: [], copied: [] };
+  const ui = { traces: [], statusMessages: [], pendingInputs: [], bars: [], warnings: [], infos: [], errors: [], terminals: [], executed: [], contexts: [], answers: [], dialogs: [], picked: undefined, editor: undefined, progress: [], details: [], panels: [], serializers: {}, listeners: { config: [], extensions: [], editor: [], tabs: [], closeTerminal: [], folders: [] }, folderConfig: {}, visible: undefined, inputs: [], asked: [], lists: [], opened: [], waiting: [], closedTabs: [], columns: [], group: null, groups: null, version: undefined, editorSettings: {}, configUpdates: [], executedWith: [], commandAnswers: commandAnswers || null, forwarded: [], external: [], copied: [] };
   // a list with a search box: the test chooses a row, or presses the button on one
   const makeList = () => {
     const on = { accept: [], button: [], hide: [] };
@@ -234,8 +235,9 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
       createTerminal: (o) => { const t = { o, sent: [], shows: 0, exitStatus: undefined, show() { this.shows++; }, sendText(x) { this.sent.push(x); }, dispose() { if (this.exitStatus) return; this.exitStatus = { code: undefined }; for (const f of ui.listeners.closeTerminal.slice()) f(this); } }; ui.terminals.push(t); return t; },
       onDidCloseTerminal: (f) => { ui.listeners.closeTerminal.push(f); return { dispose() { const i = ui.listeners.closeTerminal.indexOf(f); if (i >= 0) ui.listeners.closeTerminal.splice(i, 1); } }; },
     },
-    // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for
-    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (ui.answers && id in ui.answers) return ui.answers[id](...args); if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
+    // setContext is bookkeeping for the menus (perch.gateway), kept apart from the commands a test watches for; jay is not
+    // installed unless a test's commandAnswers say it is, so asking it for its projects fails as a missing command does
+    commands: { registerCommand: (id, fn) => { commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...args) => { if (ui.commandAnswers && id in ui.commandAnswers) { ui.executedWith.push([id, ...args]); return ui.commandAnswers[id](...args); } if (ui.answers && id in ui.answers) return ui.answers[id](...args); if (id.startsWith('_perch.audio.')) return companion(id, ...args); if (id === 'setContext') { ui.contexts.push(args); return; } if (id === 'jay.projectKeys') throw new Error("command 'jay.projectKeys' not found"); ui.executed.push(id); ui.executedWith.push([id, ...args]); } },
     env: { clipboard: { writeText: async (t) => { ui.copied.push(t); } }, remoteName: remote, asExternalUri: async (u) => { ui.forwarded.push(u.path); return u; }, openExternal: async (u) => { ui.external.push(u.path); return true; } },
     ProgressLocation: { Notification: 15 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },

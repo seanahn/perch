@@ -3411,5 +3411,47 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     } finally { if (was === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = was; }
   }
 
+  // jay's Jira projects (note 108): asked for at activation and as a page comes into view, told to every page, and the
+  // only projects whose ticket keys the page may ask jay to open
+  {
+    const m = install(undefined, { config: { newTabs: 'editor' }, commandAnswers: { 'jay.projectKeys': () => ['PLAT', 'DEMO', 'PLAT', 'bad key', 7] } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const told = (got) => got.filter((x) => x.type === 'ticketProjects').map((x) => x.projects);
+    assert.deepStrictEqual(told(v.got), [['DEMO', 'PLAT']], 'a page that becomes ready is told the projects jay knows, once each, in order');
+    const opened = () => m.ui.executedWith.filter(([id]) => id === 'jay.openTicket').map(([, k]) => k);
+    v.fire({ type: 'openTicket', key: 'DEMO-16542' }); await flush();
+    assert.deepStrictEqual(opened(), ['DEMO-16542'], 'a key of a known project opens through jay');
+    for (const key of ['SEC-044', 'UTF-8', 'demo-1', 'DEMO-12 ', 'DEMO-', 'PLAT-1; rm', 42, undefined, null]) v.fire({ type: 'openTicket', key });
+    await flush();
+    assert.deepStrictEqual(opened(), ['DEMO-16542'], 'an unknown project or anything not a key is not passed on');
+    m.ui.commandAnswers['jay.openTicket'] = () => { throw new Error('jay could not open it'); };
+    v.fire({ type: 'openTicket', key: 'PLAT-3' }); await flush();
+    assert.deepStrictEqual(opened(), ['DEMO-16542', 'PLAT-3'], 'asked; a failure in jay is ignored');
+    // an editor tab is told too, and coming into view asks jay again; a list that has not changed is not sent again
+    await m.commands['perch.newClaude']();
+    const p1 = m.ui.panels[0]; p1.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(p1.got), [['DEMO', 'PLAT']], 'an editor tab is told when it is ready');
+    m.ui.commandAnswers['jay.projectKeys'] = () => ['PLAT'];
+    p1.show(false); p1.show(true, true); await flush();
+    assert.deepStrictEqual([told(p1.got).pop(), told(v.got).pop()], [['PLAT'], ['PLAT']], 'a tab coming into view asks again; every page is told the change');
+    v.reveal(); await flush();
+    assert.strictEqual(told(v.got).length, 2, 'the same list is not sent again');
+    v.fire({ type: 'openTicket', key: 'DEMO-1' }); await flush();
+    assert.deepStrictEqual(opened().slice(2), [], 'a project jay no longer knows is not opened');
+    // jay uninstalled: the command is not found, which is no projects
+    m.ui.commandAnswers['jay.projectKeys'] = () => { throw new Error("command 'jay.projectKeys' not found"); };
+    v.reveal(); await flush();
+    assert.deepStrictEqual([told(v.got).pop(), told(p1.got).pop()], [[], []], 'no jay: no projects');
+    v.fire({ type: 'openTicket', key: 'PLAT-3' }); await flush();
+    assert.deepStrictEqual(opened().slice(2), [], 'and nothing opens');
+    m.perch.dispose();
+    // jay not installed at activation: a page is told nothing, and nothing fails
+    const n = install(undefined, { commandAnswers: { 'jay.projectKeys': () => Promise.reject(new Error("command 'jay.projectKeys' not found")) } }); await flush();
+    const nv = fakeView(); n.registered['perch.main'].resolveWebviewView(nv.view); nv.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(nv.got), [], 'without jay a page is told nothing');
+    assert.deepStrictEqual(n.ui.executedWith.map(([id]) => id).filter((id) => id.startsWith('jay.')), ['jay.projectKeys'], 'jay was asked at activation');
+    n.perch.dispose();
+  }
+
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

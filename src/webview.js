@@ -2,7 +2,7 @@
 // The Perch page: a tab bar, one pane per session, a composer modelled on Claude Code's, and the Claude usage footer.
 // The host owns all state; this page renders what it is sent and can be rebuilt from a replay at any time.
 
-const { renderMarkdown } = require('./markdown');
+const { renderMarkdown, linkTicketKeys } = require('./markdown');
 
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -145,6 +145,7 @@ ${glyphCss}
   .tool { position: relative; }
   .md pre code { background: none; padding: 0; font-size: 12px; }
   .md a { color: var(--vscode-textLink-foreground); text-decoration: none; } .md a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+  a.jira-key { color: var(--vscode-textLink-foreground); text-decoration: none; } a.jira-key:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
   .md blockquote { padding: 0 0 0 10px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border)); color: var(--vscode-descriptionForeground); }
   .md hr { border: none; border-top: 1px solid var(--vscode-panel-border); }
   .md .tbl { overflow-x: auto; }
@@ -396,6 +397,11 @@ ${glyphCss}
   ${renderMarkdown.toString()}
   const openTarget = (target) => vscode.postMessage({ type: 'open', target });
   const drawn = (text) => renderMarkdown(text, document, openTarget);
+  ${linkTicketKeys.toString()}
+  // the Jira projects jay knows, from the host: their ticket keys in what is said open the ticket through jay (note 108)
+  let ticketProjects = [];
+  const openTicket = (key) => vscode.postMessage({ type: 'openTicket', key });
+  const ticketed = (node) => linkTicketKeys(node, ticketProjects, document, openTicket);
   /** A copy button for a piece of text: the host puts it on the clipboard, the button says so for a moment. */
   function copyButton(getText) {
     const b = el('button', 'cp', 'copy'); b.type = 'button'; b.title = 'Copy';
@@ -1204,9 +1210,9 @@ ${glyphCss}
         }
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
         if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; i.title = 'Click to see it larger'; i.addEventListener('click', () => { i.classList.toggle('big'); i.title = i.classList.contains('big') ? 'Click to shrink it' : 'Click to see it larger'; }); row.append(i); } d.append(row); }
-        d.append(m.text); break; }
-      case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); break;
-      case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); break; }
+        d.append(m.text); ticketed(d); break; }
+      case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); ticketed(p.live); break;
+      case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); ticketed(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;
       case 'tool_use': { endLive(p); if (m.name === 'AskUserQuestion' && m.input && Array.isArray(m.input.questions)) { answered(add(p, 'ask done', ''), m.input.questions, null); break; }   // the question itself follows, or its answers did
         // a call said again once it is known in full (a Codex web search, on completing) is drawn again in its own place
@@ -1488,6 +1494,7 @@ ${glyphCss}
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
     else if (m.type === 'indexStatus') { const p = panes.get(m.sid); if (p) { p.ixData = m; if (p.ixOpen) drawIndex(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
+    else if (m.type === 'ticketProjects') { ticketProjects = Array.isArray(m.projects) ? m.projects : []; for (const p of panes.values()) p.log.querySelectorAll('.msg.assistant.md, .msg.user').forEach(ticketed); }
   });
   $send.innerHTML = SVG.up;
   vscode.postMessage({ type: 'ready' });

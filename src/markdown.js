@@ -123,4 +123,44 @@ function renderMarkdown(text, doc, onOpen) {
   return out;
 }
 
-module.exports = { renderMarkdown };
+/**
+ * Jira ticket keys in drawn text become links: `PROJECT-123` as a whole word, for a PROJECT in `projects` (the ones jay
+ * knows). Text in code, in a link, or in a button is left alone. Links an earlier pass made are undone first, so it can be
+ * run again as the list changes; with no projects the text is as it was. Like renderMarkdown it is written into the page as
+ * source, and every key becomes a text node: no markup is parsed.
+ * @param {Element} root
+ * @param {string[]} projects
+ * @param {Document} doc
+ * @param {(key: string) => void} onTicket
+ */
+function linkTicketKeys(root, projects, doc, onTicket) {
+  const known = new Set(projects || []);
+  const made = root.querySelectorAll('a.jira-key');
+  if (!known.size && !made.length) return root;      // nothing to link and nothing to undo: without jay, no cost per delta
+  for (const a of [...made]) a.replaceWith(doc.createTextNode(a.textContent));
+  root.normalize();
+  if (!known.size) return root;
+  const KEY = /(?<![A-Za-z0-9_-])([A-Z][A-Z0-9_]+)-(\d+)(?![A-Za-z0-9_])/g;
+  const skip = (n) => /^(A|CODE|PRE|BUTTON|KBD|SAMP)$/.test(n.nodeName) || (n.classList && n.classList.contains('tag'));
+  const split = (t) => {
+    const s = t.nodeValue; let at = 0, m, f = null;
+    const re = new RegExp(KEY.source, 'g');
+    while ((m = re.exec(s))) {
+      if (!known.has(m[1])) continue;
+      f = f || doc.createDocumentFragment();
+      if (m.index > at) f.append(doc.createTextNode(s.slice(at, m.index)));
+      const key = m[0], a = doc.createElement('a');
+      a.className = 'jira-key'; a.href = '#'; a.title = 'Open ' + key + ' in jay'; a.textContent = key;
+      a.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onTicket(key); });
+      f.append(a); at = m.index + key.length;
+    }
+    if (!f) return;
+    if (at < s.length) f.append(doc.createTextNode(s.slice(at)));
+    t.replaceWith(f);
+  };
+  const walk = (n) => { for (const c of [...n.childNodes]) { if (c.nodeType === 3) split(c); else if (c.nodeType === 1 && !skip(c)) walk(c); } };
+  walk(root);
+  return root;
+}
+
+module.exports = { renderMarkdown, linkTicketKeys };

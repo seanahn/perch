@@ -1265,5 +1265,51 @@ window.close();
     assert.deepStrictEqual([p9.shown(btn), p9.shown(box()), btn.getAttribute('aria-pressed')], [false, false, 'false'], 'no folder any more: the panel closes with the button');
     p9.w.close();
   }
+  // ---- Jira ticket keys in what is said, for the projects jay knows, open the ticket through jay (note 108)
+  {
+    const pj = page(ICONS); pj.out.length = 0;
+    pj.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+    const ej = (e, sid) => pj.host({ type: 'event', sid: sid || 'a', ev: e });
+    const keys = (n) => [...n.querySelectorAll('a.jira-key')].map((a) => a.textContent);
+    const all = () => keys(pj.d.body);
+    ej({ kind: 'text', text: 'See DEMO-16542, and UTF-8, SEC-044, XDEMO-1, xDEMO-1, _DEMO-1, 1DEMO-1, DEMO-12a, `DEMO-1`, [the fix for DEMO-2](https://x.example/DEMO-2), https://x.example/browse/DEMO-4 and **PLAT-7**.\n\n```\nDEMO-3\n```' });
+    ej({ kind: 'text', text: 'codex on PLAT-8' }, 'b');
+    const ans = pj.$$('.msg.assistant')[0], before = ans.innerHTML;
+    assert.deepStrictEqual(all(), [], 'no projects from jay: no links');
+    {
+      // with no projects and no links made before, the drawn text is not touched at all: not even merged by normalize()
+      const Node = pj.w.Node, was = Node.prototype.normalize; let merged = 0;
+      Node.prototype.normalize = function () { merged++; return was.call(this); };
+      const kids = [...ans.childNodes];   // the other tab is drawn to meanwhile, so the counts below stay this tab's
+      pj.host({ type: 'ticketProjects', projects: [] });
+      ej({ kind: 'delta', text: 'still PLAT-1' }, 'b'); ej({ kind: 'text', text: 'still PLAT-1' }, 'b'); ej({ kind: 'user', text: 'PLAT-2' }, 'b');
+      Node.prototype.normalize = was;
+      assert.deepStrictEqual([merged, ans.innerHTML, kids.every((k, i) => ans.childNodes[i] === k)], [0, before, true], 'an empty list costs nothing and leaves the DOM as it was');
+    }
+    pj.host({ type: 'ticketProjects', projects: ['DEMO', 'PLAT'] });
+    assert.deepStrictEqual(keys(ans), ['DEMO-16542', 'PLAT-7'], 'answers already drawn are linked when the list comes: whole keys of known projects, not in code or links');
+    assert.deepStrictEqual(keys(pj.$$('.msg.assistant')[1]), ['PLAT-8'], 'in every tab of the page');
+    assert.deepStrictEqual([ans.querySelector('p code').textContent, ans.querySelector('pre code').textContent], ['DEMO-1', 'DEMO-3'], 'code is left as it was');
+    assert.deepStrictEqual([...ans.querySelectorAll('a:not(.jira-key)')].map((a) => a.textContent), ['the fix for DEMO-2', 'https://x.example/browse/DEMO-4'], 'links are left as they were');
+    const a = ans.querySelector('a.jira-key');
+    assert.deepStrictEqual([a.title, a.getAttribute('href'), a.parentNode.nodeName], ['Open DEMO-16542 in jay', '#', 'P']);
+    assert.strictEqual(ans.querySelector('strong a.jira-key').textContent, 'PLAT-7', 'inside emphasis too');
+    const click = new pj.w.MouseEvent('click', { bubbles: true, cancelable: true }); a.dispatchEvent(click);
+    assert.deepStrictEqual([click.defaultPrevented, pj.out.pop()], [true, { type: 'openTicket', key: 'DEMO-16542' }], 'a click asks the host to open it through jay');
+    // what arrives later, as it arrives, and what the user wrote
+    ej({ kind: 'delta', text: 'working on PLAT-9' });
+    assert.deepStrictEqual(keys(pj.$('.live')), ['PLAT-9'], 'an answer as it arrives');
+    ej({ kind: 'text', text: 'done with PLAT-9' });
+    assert.deepStrictEqual(keys([...pj.$$('.pane')[0].querySelectorAll('.msg.assistant')].pop()), ['PLAT-9'], 'and once it is done');
+    ej({ kind: 'user', text: 'and DEMO-5? <b>no</b>' });
+    const u = [...pj.$$('.pane')[0].querySelectorAll('.msg.user')].pop();
+    assert.deepStrictEqual([keys(u), u.textContent], [['DEMO-5'], 'and DEMO-5? <b>no</b>'], 'what the user wrote, still as written');
+    // the list changes: every message follows it
+    pj.host({ type: 'ticketProjects', projects: ['DEMO'] });
+    assert.deepStrictEqual(all(), ['DEMO-16542', 'DEMO-5'], 'a project jay no longer knows is plain text again');
+    pj.host({ type: 'ticketProjects', projects: [] });
+    assert.deepStrictEqual([all(), ans.innerHTML], [[], before], 'an empty list: the page as it was without jay');
+    pj.w.close();
+  }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });

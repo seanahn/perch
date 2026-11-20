@@ -329,6 +329,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `searchFolder` | `sid`, `root`, `on` | Turn codebase search on or off for one folder, in its own settings (`.vscode/settings.json`, the WorkspaceFolder target); answered with `indexStatus` |
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
+| `openTicket` | `key` | A Jira ticket key clicked in a message: opened through jay if its project is one jay knows ([IDE context](#n108)) |
 
 ### Host to page
 
@@ -340,6 +341,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `indexStatus` | `sid`, `at`, `on`, `usable`, `folders`, and `meaning`, or `why`, `error` | The answer: `on` is the workspace's setting, `usable` whether a Python here can run the search; every folder its `name`, `root` and `on` (its own setting as it resolves) and, read from the indexes' files by `server.py --status` (nothing is built), `files`, `sections`, `vectors`, `built`, `updating`, `embedding`, `off`, `ignore`, `updated`; `meaning` says whether search by meaning is installed on the Python the server runs on; `why` when no folder is open or no Python can run it, `error` when the read failed |
 | `subagentUsage` | `sid`, `at`, and `main`, `subagents`, `prices`, `backend`, or `error` | The answer: each thread's model, effort, turns, tokens, and `cost` at list prices (null, with `unpriced` naming the model, when the table has no price for one it ran on); a sub-agent's `name`, `thread`, `state`, `first`, `last`, and `missing` when its file is not found |
 | `commands` | `kind`, `list` | Slash commands |
+| `ticketProjects` | `projects` | The Jira projects jay knows, whose ticket keys the page links; empty without jay |
 
 ### Event kinds
 
@@ -457,6 +459,19 @@ const b = 2;
   webview of type `react` titled with the key. Perch asks jay about that
   tab too, and jay answers only for a key it opened, so other `react`
   webviews leave the context unchanged.
+
+**Ticket keys open through jay.** The host asks jay for the Jira projects
+it knows (`jay.projectKeys`, a list such as `["DEMO","PLAT"]`) at
+activation, every 5 minutes, and as a page comes into view, and sends
+the list to every page as `ticketProjects` when it changes (and to a page
+when it is ready). Without jay the command is not found, which is no
+projects. The page links each whole-word `<PROJECT>-<digits>` of a known
+project in answers and in the user's messages (`linkTicketKeys` in
+`src/markdown.js`, a pass over the drawn text nodes): not in code, not in
+a link already there, so `UTF-8` and an unknown `SEC-044` stay text. A
+new list re-links every message already drawn; an empty one leaves the
+page as it is without jay. A click sends `openTicket`; the host passes
+only a key of a known project to `jay.openTicket` and ignores a failure.
 
 ---
 
