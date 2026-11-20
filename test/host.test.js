@@ -711,6 +711,17 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       await tabsChanged();
       v2.fire({ type: 'send', sid: x, text: 'other react tab' }); await flush();
       assert.strictEqual(cx.sent.pop(), 'other react tab', 'another react webview jay does not track leaves the context unchanged');
+      // a jay Confluence page in front is the active file too, named by jay
+      const PAGE = '/home/u/.jay/pages/DEMO/1001.confluence';
+      m.ui.answers = { 'jay.activePageFile': () => PAGE };
+      m.ui.group = () => ({ viewColumn: 1, activeTab: { label: 'Demo plan', input: { viewType: 'mainThreadWebview-jay.page' } }, tabs: [] });
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'what is this page?' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'what is this page?\n\n<ide_context>\nActive file: ' + PAGE + ' (Confluence page)\n</ide_context>', 'a jay Confluence page in front is the active file');
+      m.ui.answers = { 'jay.activePageFile': () => null };
+      await tabsChanged();
+      v2.fire({ type: 'send', sid: x, text: 'page closed' }); await flush();
+      assert.strictEqual(cx.sent.pop(), 'page closed', 'a page jay no longer shows leaves the context unchanged');
       m.ui.answers = undefined; m.ui.group = undefined; m.ui.visible = undefined;
     }
 
@@ -3450,6 +3461,62 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const nv = fakeView(); n.registered['perch.main'].resolveWebviewView(nv.view); nv.fire({ type: 'ready' }); await flush();
     assert.deepStrictEqual(told(nv.got), [], 'without jay a page is told nothing');
     assert.deepStrictEqual(n.ui.executedWith.map(([id]) => id).filter((id) => id.startsWith('jay.')), ['jay.projectKeys'], 'jay was asked at activation');
+    n.perch.dispose();
+  }
+
+  // jay's Confluence site (note 108): asked for with the projects, told to every page when it changes, and the only site
+  // whose /wiki/ links the page may ask jay to open; a link jay cannot open goes to the browser
+  {
+    const answers = { 'jay.siteUrl': () => 'https://example.atlassian.net', 'jay.openPage': () => true };
+    const m = install(undefined, { config: { newTabs: 'editor' }, commandAnswers: answers }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const told = (got) => got.filter((x) => x.type === 'confluenceSite').map((x) => x.url);
+    assert.deepStrictEqual(told(v.got), ['https://example.atlassian.net'], 'a page that becomes ready is told the site, once');
+    const URL1 = 'https://example.atlassian.net/wiki/spaces/DEMO/pages/1001/Demo+plan';
+    const opened = () => m.ui.executedWith.filter(([id]) => id === 'jay.openPage').map(([, u]) => u);
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.deepStrictEqual([opened(), m.ui.external.length], [[URL1], 0], 'a page of the site opens through jay, not the browser');
+    for (const url of ['https://example.atlassian.net/browse/DEMO-1', 'https://other.example.com/wiki/spaces/DEMO', 'https://example.atlassian.net.evil.example/wiki/x', 'https://example.atlassian.net@evil.example/wiki/x', 'http://example.atlassian.net/wiki/x', 'javascript:alert(1)', 'https://example.atlassian.net/wikis/x', 42, undefined, null]) v.fire({ type: 'openPage', url });
+    await flush();
+    assert.deepStrictEqual([opened(), m.ui.external.length], [[URL1], 0], 'another site, another path, another scheme, or not a URL: neither jay nor the browser');
+    // jay could not open it: the browser does
+    answers['jay.openPage'] = () => false;
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.deepStrictEqual(m.ui.external, [URL1], 'false from jay: the browser');
+    answers['jay.openPage'] = () => { throw new Error('jay broke'); };
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.strictEqual(m.ui.external.length, 2, 'an error from jay: the browser');
+    answers['jay.openPage'] = () => Promise.reject(new Error('rejected'));
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.strictEqual(m.ui.external.length, 3, 'a rejection from jay: the browser');
+    delete answers['jay.openPage'];
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.strictEqual(m.ui.external.length, 4, 'command not found: the browser');
+    // a changed site is told to every page, the same one is not told again, and the old site no longer opens
+    await m.commands['perch.newClaude']();
+    const p1 = m.ui.panels[0]; p1.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(p1.got), ['https://example.atlassian.net'], 'an editor tab is told when it is ready');
+    answers['jay.siteUrl'] = () => 'https://example.atlassian.net/';
+    v.reveal(); await flush();
+    assert.strictEqual(told(v.got).length, 1, 'the same site (a trailing slash aside) is not sent again');
+    answers['jay.siteUrl'] = () => 'https://demo.example.com';
+    p1.show(false); p1.show(true, true); await flush();
+    assert.deepStrictEqual([told(p1.got).pop(), told(v.got).pop()], ['https://demo.example.com', 'https://demo.example.com'], 'a tab coming into view asks again; every page is told');
+    v.fire({ type: 'openPage', url: URL1 }); await flush();
+    assert.strictEqual(m.ui.external.length, 4, 'the old site is not the site any more: nothing opens');
+    // jay signed out, or gone
+    answers['jay.siteUrl'] = () => null;
+    v.reveal(); await flush();
+    assert.deepStrictEqual([told(v.got).pop(), told(p1.got).pop()], [null, null], 'signed out: no site');
+    v.fire({ type: 'openPage', url: 'https://demo.example.com/wiki/x' }); await flush();
+    assert.strictEqual(m.ui.external.length, 4, 'and nothing opens');
+    answers['jay.siteUrl'] = () => 'ftp://nonsense';
+    v.reveal(); await flush();
+    assert.strictEqual(told(v.got).length, 3, 'a site that is not https is no site');
+    m.perch.dispose();
+    const n = install(undefined, {}); await flush();
+    const nv = fakeView(); n.registered['perch.main'].resolveWebviewView(nv.view); nv.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(nv.got), [], 'without jay a page is told nothing');
     n.perch.dispose();
   }
 

@@ -401,6 +401,14 @@ ${glyphCss}
   // the Jira projects jay knows, from the host: their ticket keys in what is said open the ticket through jay (note 108)
   let ticketProjects = [];
   const openTicket = (key) => vscode.postMessage({ type: 'openTicket', key });
+  // jay's Confluence site, from the host: a plain click on a link to one of its /wiki/ pages opens the page through jay
+  let confluenceSite = null;
+  document.addEventListener('click', (e) => {
+    if (!confluenceSite || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const a = e.target && e.target.closest && e.target.closest('a[href]'), href = a && a.getAttribute('href');
+    if (!href || !href.startsWith(confluenceSite + '/wiki/')) return;
+    e.preventDefault(); vscode.postMessage({ type: 'openPage', url: href });
+  }, true);
   const ticketed = (node) => linkTicketKeys(node, ticketProjects, document, openTicket);
   /** A copy button for a piece of text: the host puts it on the clipboard, the button says so for a moment. */
   function copyButton(getText) {
@@ -1494,6 +1502,7 @@ ${glyphCss}
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
     else if (m.type === 'indexStatus') { const p = panes.get(m.sid); if (p) { p.ixData = m; if (p.ixOpen) drawIndex(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
+    else if (m.type === 'confluenceSite') { confluenceSite = typeof m.url === 'string' ? m.url.replace(/[/]+$/, '') : null; }
     else if (m.type === 'ticketProjects') { ticketProjects = Array.isArray(m.projects) ? m.projects : []; for (const p of panes.values()) p.log.querySelectorAll('.msg.assistant.md, .msg.user').forEach(ticketed); }
   });
   $send.innerHTML = SVG.up;

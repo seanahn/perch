@@ -178,12 +178,18 @@ const WEBVIEW_FILES = [
   { viewType: 'jay.ticket', command: 'jay.activeIssueFile', label: 'Jira ticket' },
   // the Atlassian extension's issue page, which jay opens by default; jay answers only for a tab it tracks (titled with the key)
   { viewType: 'react', command: 'jay.activeIssueFile', label: 'Jira ticket' },
+  // a Confluence page jay shows: jay names its agent file, or null when no page of its own is in front
+  { viewType: 'jay.page', command: 'jay.activePageFile', label: 'Confluence page' },
 ];
 let front = null, frontFile = null;   // the WEBVIEW_FILES entry in front, and the file it answered
 // jay's Jira ticket keys, which the pages make links of: a project, and a key in it (note 108)
 const TICKET_PROJECT = /^[A-Z][A-Z0-9_]+$/;
 const TICKET_KEY = /^([A-Z][A-Z0-9_]+)-\d+$/;
 const TICKET_PROJECTS_MS = 5 * 60 * 1000;
+/** The Confluence site jay is signed in to, as an origin: https only, anything else is no site. */
+function siteOrigin(v) {
+  try { const u = new URL(String(v)); return typeof v === 'string' && u.protocol === 'https:' && !u.username && !u.password ? u.origin : null; } catch (e) { return null; }
+}
 function watchEditors(context) {
   const note = (ed) => { if (ed && ed.document && ed.document.uri.scheme === 'file') { lastFile = ed.document.uri.fsPath; front = null; frontFile = null; } };
   note(vscode.window.activeTextEditor);
@@ -1132,6 +1138,7 @@ class PerchView {
     this.commands = { claude: [], codex: [] };                 // slash commands, from the agent
     this.ticketProjects = [];        // the Jira projects jay knows, whose ticket keys the pages link (note 108)
     this.ticketTimer = null;
+    this.confluenceSite = null;      // the Confluence site jay is signed in to (an origin), whose /wiki/ links open in jay (note 108)
     this.closing = false;
     this.graceTimer = null;
     this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
@@ -1191,12 +1198,29 @@ class PerchView {
    * command is not found, which is no projects: the pages then link nothing.
    */
   refreshTicketProjects() {
+    this.refreshConfluenceSite();
     return Promise.resolve().then(() => vscode.commands.executeCommand('jay.projectKeys')).then((v) => v, () => null).then((v) => {
       const next = Array.isArray(v) ? [...new Set(v.filter((k) => typeof k === 'string' && TICKET_PROJECT.test(k)))].sort() : [];
       if (JSON.stringify(next) === JSON.stringify(this.ticketProjects)) return;
       this.ticketProjects = next;
       this.raw({ type: 'ticketProjects', projects: next });
     });
+  }
+  /** Ask jay for its Confluence site (null when it is not signed in, or not installed) and tell every page when that changes. */
+  refreshConfluenceSite() {
+    return Promise.resolve().then(() => vscode.commands.executeCommand('jay.siteUrl')).then((v) => v, () => null).then((v) => {
+      const next = siteOrigin(v);
+      if (next === this.confluenceSite) return;
+      this.confluenceSite = next;
+      this.raw({ type: 'confluenceSite', url: next });
+    });
+  }
+  /** A page link the page asks to open: only a https /wiki/ page of jay's site, through jay, and in the browser when jay cannot. */
+  openPage(url) {
+    const site = this.confluenceSite;
+    if (!site || typeof url !== 'string' || !url.startsWith(site + '/wiki/') || siteOrigin(url) !== site) return;
+    const browser = () => { vscode.env.openExternal(vscode.Uri.parse(url)); };
+    Promise.resolve().then(() => vscode.commands.executeCommand('jay.openPage', url)).then((ok) => { if (ok !== true) browser(); }, browser);
   }
   /** A key the page asks to open: only one of a project jay knows, and only through jay; what jay makes of it is its own. */
   openTicket(key) {
@@ -2014,6 +2038,7 @@ class PerchView {
         to.postMessage({ type: 'meter', meter: this.meter.state(), codex: this.meter.codexState() });
         for (const k of Object.keys(this.commands)) if (this.commands[k].length) to.postMessage({ type: 'commands', kind: k, list: this.commands[k] });
         if (this.ticketProjects.length) to.postMessage({ type: 'ticketProjects', projects: this.ticketProjects });
+        if (this.confluenceSite) to.postMessage({ type: 'confluenceSite', url: this.confluenceSite });
         this.loadCatalogs();
         for (const x of mine) { this.replay(x); this.voice.resend(x.id); }
         return;
@@ -2045,6 +2070,7 @@ class PerchView {
       case 'rename': if (s) this.renameTab(s.id); return;
       case 'open': this.openTarget(msg.target); return;
       case 'copy': vscode.env.clipboard.writeText(String(msg.text || '')); return;
+      case 'openPage': this.openPage(msg.url); return;   // a link to a page of jay's Confluence site
       case 'openTicket': this.openTicket(msg.key); return;   // a Jira ticket key in a message, a link for a project jay knows
       case 'noteAction':             // a button under a note: the gateway file, or this tab off the gateway. Old notes keep their buttons, so each is safe to press again
         if (msg.action === 'gatewayFile') this.openGatewayFile();

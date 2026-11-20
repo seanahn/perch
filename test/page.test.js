@@ -1311,5 +1311,28 @@ window.close();
     assert.deepStrictEqual([all(), ans.innerHTML], [[], before], 'an empty list: the page as it was without jay');
     pj.w.close();
   }
+  // ---- a plain click on a link to jay's Confluence site (its /wiki/ pages) opens the page through jay (note 108)
+  {
+    const pc = page(ICONS); pc.out.length = 0;
+    pc.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' })], active: 'a' });
+    const W = 'https://example.atlassian.net/wiki/spaces/DEMO/pages/1001/Demo+plan';
+    pc.host({ type: 'event', sid: 'a', ev: { kind: 'text', text: `Read [the plan](${W}), ${W}/edit, [a ticket](https://example.atlassian.net/browse/DEMO-1), [elsewhere](https://other.example.com/wiki/spaces/DEMO), [lookalike](https://example.atlassian.net.evil.example/wiki/x) and [a file](src/a.js).` } });
+    const link = (t) => [...pc.d.querySelectorAll('a')].find((a) => a.textContent === t);
+    const click = (a, init) => { const e = new pc.w.MouseEvent('click', Object.assign({ bubbles: true, cancelable: true, button: 0 }, init)); a.dispatchEvent(e); return e; };
+    const sent = () => pc.out.splice(0).filter((m) => m.type === 'openPage');
+    click(link('the plan')); assert.deepStrictEqual(sent(), [], 'no site known: a link keeps its behaviour');
+    pc.host({ type: 'confluenceSite', url: 'https://example.atlassian.net' });
+    let e = click(link('the plan'));
+    assert.deepStrictEqual([sent(), e.defaultPrevented], [[{ type: 'openPage', url: W }], true], 'a plain click on a page of the site asks the host to open it through jay');
+    e = click(link(W + '/edit'));
+    assert.deepStrictEqual([sent(), e.defaultPrevented], [[{ type: 'openPage', url: W + '/edit' }], true], 'a bare URL too');
+    for (const init of [{ ctrlKey: true }, { metaKey: true }, { button: 1 }, { shiftKey: true }]) { e = click(link('the plan'), init); assert.deepStrictEqual([sent(), e.defaultPrevented], [[], false], 'a modified click keeps its behaviour: ' + JSON.stringify(init)); }
+    for (const t of ['a ticket', 'elsewhere', 'lookalike', 'a file']) { e = click(link(t)); assert.deepStrictEqual([sent(), e.defaultPrevented && t !== 'a file'], [[], false], t + ' is not a page of the site'); }
+    pc.host({ type: 'confluenceSite', url: 'https://example.atlassian.net/' });
+    click(link('the plan')); assert.strictEqual(sent().length, 1, 'a trailing slash on the site is no matter');
+    pc.host({ type: 'confluenceSite', url: null });
+    click(link('the plan')); assert.deepStrictEqual(sent(), [], 'signed out of jay: a link keeps its behaviour');
+    pc.w.close();
+  }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });
