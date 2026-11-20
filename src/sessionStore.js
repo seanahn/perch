@@ -35,18 +35,37 @@ function ago(then, now = Date.now()) {
 }
 
 // ---- Claude
+/** Where Claude Code keeps its sessions: CLAUDE_CONFIG_DIR, else ~/.claude. */
+function claudeConfigDir() { return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'); }
+/** The folder of a directory's sessions: its path with every character but letters and digits made a dash. */
+function claudeProjectDir(dir, home = claudeConfigDir()) { return path.join(home, 'projects', String(dir || '').replace(/[^a-zA-Z0-9]/g, '-')); }
+/**
+ * A finder for the file a Claude session is kept in: in the folder named for the directory it ran in, else in whichever
+ * project folder has it (Claude Code shortens a long path's folder name). '' when none has it.
+ */
+function claudeFiles(home = claudeConfigDir()) {
+  let folders = null;
+  return (id, dir) => {
+    const direct = path.join(claudeProjectDir(dir, home), id + '.jsonl');
+    if (fs.existsSync(direct)) return direct;
+    if (folders === null) { try { folders = fs.readdirSync(path.join(home, 'projects')); } catch (_) { folders = []; } }
+    for (const f of folders) { const p = path.join(home, 'projects', f, id + '.jsonl'); if (fs.existsSync(p)) return p; }
+    return '';
+  };
+}
 let sdkLoad = null;
 function claudeSdk() { return sdkLoad || (sdkLoad = import('@anthropic-ai/claude-agent-sdk')); }
 
 /** @returns {Promise<object[]>} sessions of this directory, newest first */
-async function listClaude({ dir, limit = 100, sdk } = {}) {
+async function listClaude({ dir, limit = 100, sdk, claudeHome } = {}) {
   const api = sdk || await claudeSdk();
   const got = await api.listSessions({ dir, limit });
   const out = [];
+  const find = claudeFiles(claudeHome);
   for (const s of got || []) {
     const title = cleanTitle(s.customTitle || s.summary || s.firstPrompt);
     if (!s.sessionId || !title) continue;
-    out.push({ kind: 'claude', id: s.sessionId, title, named: !!s.customTitle, updatedAt: Number(s.lastModified) || 0 });
+    out.push({ kind: 'claude', id: s.sessionId, title, named: !!s.customTitle, updatedAt: Number(s.lastModified) || 0, file: find(s.sessionId, s.cwd || dir) });
   }
   return out;
 }
@@ -131,7 +150,7 @@ function listCodex({ dir, home = path.join(os.homedir(), '.codex'), limit = 100 
     if (!got || (dir && got.cwd !== dir)) continue;
     const name = names.get(got.id), title = name || cleanTitle(got.first);
     if (!title) continue;                                                      // nothing was ever said in it
-    out.push({ kind: 'codex', id: got.id, title, named: !!name, updatedAt: Math.round(f.mtime) });
+    out.push({ kind: 'codex', id: got.id, title, named: !!name, updatedAt: Math.round(f.mtime), file: f.file });
   }
   return out;
 }
@@ -743,4 +762,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { claudeProjectDir, codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

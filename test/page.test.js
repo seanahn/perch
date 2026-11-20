@@ -783,12 +783,13 @@ $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new',
 // the sidebar with no tab: the past sessions of this folder under the two buttons, to search and open
 assert.strictEqual($$('#past .row').length, 0, 'none until the host sends them');
 host({ type: 'past', failed: [], sessions: [
-  { key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false },
+  { key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false, file: '/home/me/.claude/projects/-w/c1.jsonl' },
   { key: 'codex:x1', kind: 'codex', title: 'hello', when: '26m', open: true },
   { key: 'claude:c2', kind: 'claude', title: 'supertrend', when: '1mo', open: false }] });
 const rows = () => $$('#past .row').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent, r.querySelector('.k').className]);
 assert.deepStrictEqual(rows(), [['gate run', '2m', 'k glyph claude'], ['hello', 'open · 26m', 'k glyph codex'], ['supertrend', '1mo', 'k glyph claude']], 'each by name, agent and age; an open one says so');
 assert.strictEqual($('#past .h').textContent, 'Sessions in this folder');
+assert.deepStrictEqual($$('#past .row').map((r) => r.title), ['gate run\n/home/me/.claude/projects/-w/c1.jsonl', 'hello', 'supertrend'], 'the name and, on hover, the file the transcript is in');
 $('#past input').value = 'SUPER'; $('#past input').dispatchEvent(new window.Event('input'));
 assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters by name');
 $$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');

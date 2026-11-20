@@ -1394,14 +1394,14 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
   {
     const NOW = Date.now(), MIN = 60000;
     const past = { sessions: [
-      { kind: 'claude', id: 'c-old', title: 'gate run', named: true, updatedAt: NOW - 2 * MIN },
+      { kind: 'claude', id: 'c-old', title: 'gate run', named: true, updatedAt: NOW - 2 * MIN, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
       { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
     ] };
     const m = install(undefined, { past }); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
     assert.deepStrictEqual(v.past(), { type: 'past', sessions: [
-      { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false },
-      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false }], failed: [] }, 'newest first, by name, agent and age');
+      { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
+      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in');
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     // a row clicked: the session opens in a tab, as from the Sessions command, and the list says it is open
     const made = created.length;

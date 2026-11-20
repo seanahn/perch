@@ -47,6 +47,7 @@ function rollout(home, day, id, lines, mtime) {
   let got = S.listCodex({ dir: '/w', home });
   assert.deepStrictEqual(got.map((s) => [s.kind, s.id, s.title, s.named, s.updatedAt]), [['codex', 'bbb', 'newest one', false, NOW - M], ['codex', 'fff', 'x'.repeat(S.MAX_TITLE), false, NOW - 3 * H], ['codex', 'aaa', 'oldest one', false, NOW - 2 * D]], 'this directory\'s own threads, newest first');
   assert.deepStrictEqual(S.listCodex({ dir: '/w', home, limit: 2 }).map((s) => s.id), ['bbb', 'fff']);
+  assert.deepStrictEqual(got.map((s) => path.relative(home, s.file)), ['sessions/2026/09/29/rollout-2026-09-29T12-00-00-bbb.jsonl', 'sessions/2026/09/28/rollout-2026-09-28T12-00-00-fff.jsonl', 'sessions/2026/09/27/rollout-2026-09-27T12-00-00-aaa.jsonl'], 'each with the file it is read from');
   assert.deepStrictEqual(S.listCodex({ home }).map((s) => s.id), ['bbb', 'fff', 'ccc', 'aaa'], 'every directory, when none is given');
 
   // a first message further in than the instructions are long is still found
@@ -81,11 +82,17 @@ function rollout(home, day, id, lines, mtime) {
     ]; },
     renameSession: async (...a) => { calls.push(['rename', ...a]); },
   };
-  assert.deepStrictEqual(await S.listClaude({ dir: '/w', limit: 7, sdk }), [
-    { kind: 'claude', id: 'c-1', title: 'Perch session name and loading', named: true, updatedAt: NOW - 2 * M },
-    { kind: 'claude', id: 'c-2', title: 'continue', named: false, updatedAt: NOW - 4 * H },
-    { kind: 'claude', id: 'c-3', title: 'only a first prompt', named: false, updatedAt: NOW - 9 * D },
+  // each with the file Claude Code keeps it in: under projects/, in the folder named for the directory it ran in, else found
+  // in whichever project folder has it (a long path's folder name is shortened); '' when none has
+  const claudeHome = mk();
+  const proj = (name, id) => { const d = path.join(claudeHome, 'projects', name); fs.mkdirSync(d, { recursive: true }); const f = path.join(d, id + '.jsonl'); fs.writeFileSync(f, '{}\n'); return f; };
+  const f1 = proj('-w', 'c-1'), f2 = proj('-w-shortened-abc123', 'c-2');
+  assert.deepStrictEqual(await S.listClaude({ dir: '/w', limit: 7, sdk, claudeHome }), [
+    { kind: 'claude', id: 'c-1', title: 'Perch session name and loading', named: true, updatedAt: NOW - 2 * M, file: f1 },
+    { kind: 'claude', id: 'c-2', title: 'continue', named: false, updatedAt: NOW - 4 * H, file: f2 },
+    { kind: 'claude', id: 'c-3', title: 'only a first prompt', named: false, updatedAt: NOW - 9 * D, file: '' },
   ], 'a session with nothing to call it is left out');
+  assert.strictEqual(S.claudeProjectDir('/git/my.repo_x', claudeHome), path.join(claudeHome, 'projects', '-git-my-repo-x'), 'the folder name: every character but letters and digits a dash');
   assert.deepStrictEqual(calls.pop(), ['list', { dir: '/w', limit: 7 }]);
   assert.strictEqual(await S.renameSession('claude', 'c-2', ' TLT  flush ', { dir: '/w', sdk }), 'TLT flush');
   assert.deepStrictEqual(calls.pop(), ['rename', 'c-2', 'TLT flush', { dir: '/w' }]);

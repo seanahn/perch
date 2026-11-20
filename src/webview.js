@@ -476,7 +476,7 @@ ${glyphCss}
     const show = () => { const q = find.value.trim().toLowerCase(); pastFilter = find.value; for (const r of rows.children) if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q); };
     find.addEventListener('input', show);
     for (const p of list) {
-      const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title;
+      const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title + (p.file ? '\\n' + p.file : '');   // on hover, the file the transcript is in
       r.append(badge(p.kind), el('span', 't', p.title || '(untitled)'), el('span', 'w', (p.open ? 'open · ' : '') + (p.when || '')));
       r.addEventListener('click', () => vscode.postMessage({ type: 'openPast', key: p.key }));
       rows.append(r);

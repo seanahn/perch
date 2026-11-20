@@ -313,7 +313,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `ready` | | The page has loaded and wants a replay |
 | `send` | `sid`, `text` | A message. Queued if the agent is working |
 | `stop` | `sid` | Stop the turn and drop what is queued |
-| `openPast`, `pastRefresh` | `key` for the first | The sidebar's list of past sessions: open one (a tab on it, or the tab open on it already), or read the list again. The host sends the list as `past` (`sessions`: `key`, `kind`, `title`, `when`, `open`; `failed`: agents whose records could not be read) when the sidebar is ready, comes into view, or asks; the page shows it under the empty state's two buttons, so a sidebar with no tab of its own opens on the sessions to go back to (2026-11-20). The rows are the Sessions command's, from `listSessions` |
+| `openPast`, `pastRefresh` | `key` for the first | The sidebar's list of past sessions: open one (a tab on it, or the tab open on it already), or read the list again. The host sends the list as `past` (`sessions`: `key`, `kind`, `title`, `when`, `open`, `file`, the transcript's path, shown when a row is hovered; `failed`: agents whose records could not be read) when the sidebar is ready, comes into view, or asks; the page shows it under the empty state's two buttons, so a sidebar with no tab of its own opens on the sessions to go back to (2026-11-20). The rows are the Sessions command's, from `listSessions` |
 | `unqueue` | `sid`, `qid` | Take a queued message back (the × on its bubble) |
 | `permission` | `sid`, `id`, `decision` | `allow`, `always`, or `deny` |
 | `setModel`, `setEffort`, `setMode` | `sid`, `value` | A choice from a menu |

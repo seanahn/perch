@@ -2285,7 +2285,7 @@ class PerchView {
     const sessions = res.sessions.map((p) => {
       const key = p.kind + ':' + p.id, open = this.owner(p.kind, p.id);
       this.pastByKey.set(key, p);
-      return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open };
+      return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open, file: p.file || '' };
     });
     this.sidebar.view.webview.postMessage({ type: 'past', sessions, failed: res.failed || [] });
   }
