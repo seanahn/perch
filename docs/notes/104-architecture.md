@@ -330,6 +330,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `meterToggle`, `meterLogin` | | Claude backend switch, login |
 | `voiceStart`, `voiceStop`, `voiceCancel` | `sid` | Dictation |
 | `openTicket` | `key` | A Jira ticket key clicked in a message: opened through jay if its project is one jay knows ([IDE context](#n108)) |
+| `openPage` | `url` | A link to a Confluence page of jay's site clicked in a message: opened through jay, in the browser when jay cannot |
 
 ### Host to page
 
@@ -342,6 +343,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `subagentUsage` | `sid`, `at`, and `main`, `subagents`, `prices`, `backend`, or `error` | The answer: each thread's model, effort, turns, tokens, and `cost` at list prices (null, with `unpriced` naming the model, when the table has no price for one it ran on); a sub-agent's `name`, `thread`, `state`, `first`, `last`, and `missing` when its file is not found |
 | `commands` | `kind`, `list` | Slash commands |
 | `ticketProjects` | `projects` | The Jira projects jay knows, whose ticket keys the page links; empty without jay |
+| `confluenceSite` | `url` | The Confluence site jay is signed in to (null without jay), whose `/wiki/` links the page opens through jay |
 
 ### Event kinds
 
@@ -472,6 +474,16 @@ a link already there, so `UTF-8` and an unknown `SEC-044` stay text. A
 new list re-links every message already drawn; an empty one leaves the
 page as it is without jay. A click sends `openTicket`; the host passes
 only a key of a known project to `jay.openTicket` and ignores a failure.
+
+**Confluence links open through jay.** The host asks jay for its site
+(`jay.siteUrl`, such as `https://example.atlassian.net`, null when jay is
+not signed in) at the same moments as the projects and sends `confluenceSite`
+when it changes. A plain click on a link whose address starts with the
+site and `/wiki/` sends `openPage`; Ctrl/Cmd-click, or no site, leaves the
+link as it was. The host passes only an `https:` address on that site to
+`jay.openPage`, and opens it with `openExternal` when jay answers false,
+fails, or is not installed. A Confluence page jay shows is IDE context like
+a ticket (`jay.page`, answered by `jay.activePageFile`).
 
 ---
 
