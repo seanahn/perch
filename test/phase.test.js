@@ -19,6 +19,9 @@ for (const bad of ['test-driven-development', '', undefined]) assert.strictEqual
 // ---- skillOfSlash
 assert.strictEqual(skillOfSlash('/brainstorming the thing'), 'brainstorming');
 assert.strictEqual(skillOfSlash('/trivialpowers:writing-plans'), 'trivialpowers:writing-plans');
+assert.strictEqual(skillOfSlash('/writing-plans'), 'writing-plans');
+// a path is not a command name
+assert.strictEqual(skillOfSlash('/writing-plans/notes.md please'), null);
 for (const bad of ['brainstorming', ' /x', '/', undefined]) assert.strictEqual(skillOfSlash(bad), null, String(bad));
 
 // ---- phaseFromEvents
@@ -30,5 +33,7 @@ assert.deepStrictEqual(phaseFromEvents(base), { phase: 'Plan', skill: 'trivialpo
 assert.deepStrictEqual(phaseFromEvents([...ok('a', 'brainstorming'), use('b', 'writing-plans'), res('b', true)]), { phase: 'Design', skill: 'brainstorming' });
 assert.deepStrictEqual(phaseFromEvents([...ok('a', 'brainstorming'), use('b', 'writing-plans', { sub: true }), res('b', false)]), { phase: 'Design', skill: 'brainstorming' });
 assert.deepStrictEqual(phaseFromEvents([...base, { kind: 'user', text: '/finishing-a-development-branch' }]), { phase: 'Finish', skill: 'finishing-a-development-branch' });
+// a Skill call with no result yet does not count (live waits for the ok result too)
+assert.deepStrictEqual(phaseFromEvents([...ok('a', 'brainstorming'), use('b', 'writing-plans')]), { phase: 'Design', skill: 'brainstorming' });
 assert.strictEqual(phaseFromEvents([]), null);
 console.log('phase ok');

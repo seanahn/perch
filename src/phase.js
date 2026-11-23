@@ -15,21 +15,21 @@ function phaseOfSkill(name) {
   return Object.prototype.hasOwnProperty.call(PHASE_OF, base) ? PHASE_OF[base] : null;
 }
 
-// The skill a message names by starting with /name or /plugin:name (first token only).
+// The skill a message names by starting with /name or /plugin:name (first token only; /name/path is a path, not a command).
 function skillOfSlash(text) {
-  const m = typeof text === 'string' ? /^\/([^\s/]+)/.exec(text) : null;
+  const m = typeof text === 'string' ? /^\/([^\s/]+)(?=\s|$)/.exec(text) : null;
   return m ? m[1] : null;
 }
 
-// The last workflow skill in the main conversation: a Skill call whose result succeeded, or a user slash command.
+// The last workflow skill in the main conversation: a Skill call once its result has come back ok, or a user slash command.
 function phaseFromEvents(events) {
-  const failed = new Set();
-  for (const e of events || []) if (e && e.kind === 'tool_result' && e.isError) failed.add(e.id);
+  const calls = new Map();   // Skill calls waiting for their result, by tool_use id
   let found = null;
   for (const e of events || []) {
     if (!e) continue;
     let skill = null;
-    if (e.kind === 'tool_use' && e.name === 'Skill' && !e.sub && !failed.has(e.id)) skill = e.input && e.input.skill;
+    if (e.kind === 'tool_use' && e.name === 'Skill' && !e.sub) calls.set(e.id, e.input && e.input.skill);
+    else if (e.kind === 'tool_result' && calls.has(e.id)) { const s = calls.get(e.id); calls.delete(e.id); if (!e.isError) skill = s; }
     else if (e.kind === 'user') skill = skillOfSlash(e.text);
     const phase = phaseOfSkill(skill);
     if (phase) found = { phase, skill };
