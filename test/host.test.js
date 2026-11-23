@@ -1472,11 +1472,13 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       { kind: 'claude', id: 'c-old', title: 'gate run', named: true, updatedAt: NOW - 2 * MIN, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
       { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
     ] };
-    const m = install(undefined, { past }); await flush();
+    const SKILL = { name: 'c3-acls', source: 'folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md' };
+    const m = install(undefined, { past }); await flush(); m.box.skills = [SKILL];
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
-    assert.deepStrictEqual(v.past(), { type: 'past', sessions: [
+    assert.deepStrictEqual(v.past(), { type: 'past', skills: [SKILL], sessions: [
       { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
-      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in');
+      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in; and the skills Claude Code loads here');
+    assert.deepStrictEqual(m.box.skillLists.pop(), { dir: process.cwd() }, 'the skills of the workspace folder');
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     // a row clicked: the session opens in a tab, as from the Sessions command, and the list says it is open
     const made = created.length;

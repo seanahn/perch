@@ -778,6 +778,7 @@ assert(shown($('#empty')), 'empty state is visible with no tabs'); assert.strict
 assert(!shown($('#meter')), 'with no tab there is no agent to report on');
 assert.deepStrictEqual([$('#composer').className, $('#t-model .m').textContent, $('#t-mode').textContent], ['off', '', '']);
 assert.deepStrictEqual($$('#empty button').map((x) => x.textContent), ['New Claude tab', 'New Codex tab'], 'empty state offers both kinds');
+assert(!/No tab open here/.test($('#empty').textContent), 'the two buttons say it: no line above them');
 assert.deepStrictEqual($$('#empty .k').map((i) => i.className), ['k glyph claude', 'k glyph codex'], 'empty state carries the vendor glyphs');
 $$('#empty button')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'new', kind: 'claude' });
 // the sidebar with no tab: the past sessions of this folder under the two buttons, to search and open
@@ -803,6 +804,23 @@ assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters 
 $$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');
 $('#past input').value = ''; $('#past input').dispatchEvent(new window.Event('input'));
 $('#past .refresh').click(); assert.deepStrictEqual(out.pop(), { type: 'pastRefresh' });
+// the skills Claude Code loads here, under the sessions: folded at first, by name and where each comes from; the description
+// and the file on hover; a click opens the file
+host({ type: 'past', failed: [], sessions: [{ key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false }], skills: [
+  { name: 'c3-acls', source: 'folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md' },
+  { name: 'trivialpowers:brainstorming', source: 'trivialpowers', description: 'Before creative work.', file: '/p/skills/brainstorming/SKILL.md' }] });
+const skillRows = () => $$('#skills .skill').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent]);
+assert.deepStrictEqual([$('#skills .h').textContent, skillRows()], ['Skills · 2', []], 'folded at first, with how many');
+$('#skills .hd').click();
+assert.deepStrictEqual(skillRows(), [['c3-acls', 'folder'], ['trivialpowers:brainstorming', 'trivialpowers']], 'opened: each by name and where it comes from');
+assert.strictEqual($$('#skills .skill')[0].title, 'c3-acls\nACLs on C3.\n/w/.claude/skills/c3-acls/SKILL.md');
+$$('#skills .skill')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/p/skills/brainstorming/SKILL.md' }, 'a click opens its SKILL.md');
+$('#past input').value = 'brain'; $('#past input').dispatchEvent(new window.Event('input'));
+assert.deepStrictEqual([skillRows().map((r) => r[0]), $$('#past .row').filter(shown).length], [['trivialpowers:brainstorming'], 0], 'the search finds skills too');
+$('#past input').value = ''; $('#past input').dispatchEvent(new window.Event('input'));
+host({ type: 'past', failed: [], sessions: [], skills: [{ name: 'x', source: 'yours', description: '', file: '/x' }] });
+assert.deepStrictEqual(skillRows(), [['x', 'yours']], 'stays open when the list comes again');
+$('#skills .hd').click(); assert.deepStrictEqual(skillRows(), [], 'and folds again');
 host({ type: 'past', failed: ['codex'], sessions: [] });
 assert.deepStrictEqual([rows().length, $('#past .none').textContent], [0, 'The sessions of Codex could not be read.'], 'nothing to list says why');
 host({ type: 'past', failed: [], sessions: [] });

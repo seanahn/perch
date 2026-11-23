@@ -222,6 +222,13 @@ ${glyphCss}
   #past .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #past .row .w { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #past .none { padding: 4px; }
+  #skills .hd { display: flex; align-items: center; gap: 4px; margin: 0 2px 4px; cursor: pointer; }
+  #skills .h { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  #skills .chev { width: 10px; font-size: 10px; }
+  #skills .row { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 18px; border-radius: 3px; cursor: pointer; color: var(--vscode-foreground); }
+  #skills .row:hover { background: var(--vscode-list-hoverBackground); }
+  #skills .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #skills .row .w { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #past .row .fork, #past .row .rename { flex: none; visibility: hidden; font-size: 12px; padding: 0 5px; line-height: 16px; border: none; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
   #past .row:hover .fork, #past .row:hover .rename { visibility: visible; }
   #past .row .fork:hover, #past .row .rename:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); border-radius: 3px; }
@@ -334,6 +341,9 @@ ${glyphCss}
   /* last on purpose: an author display rule (.pane is flex) would otherwise override the hidden attribute */
   [hidden] { display: none !important; }
   /* last, so they win over the rules for a page with tabs: the sidebar with no tab of its own */
+  body.bare #skills { flex: none; max-height: 45%; display: flex; flex-direction: column; text-align: left; margin-top: 8px; }
+  body.bare #skills[hidden] { display: none; }
+  body.bare #skills .rows { overflow-y: auto; min-height: 0; }
   body.bare #tabs, body.bare #composer { display: none; }
   body.bare .empty { padding: 10px 12px 0; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
   body.bare #past { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 14px; }
@@ -341,7 +351,7 @@ ${glyphCss}
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
-  <div id="panes"><div class="empty" id="empty"><div>No tab open here.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
+  <div id="panes"><div class="empty" id="empty"><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div><div id="skills" hidden></div></div></div>
   <div id="composer" class="off">
     <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
@@ -495,7 +505,7 @@ ${glyphCss}
     const again = el('button', 'refresh', '↻'); again.title = 'Read the list again'; again.addEventListener('click', () => vscode.postMessage({ type: 'pastRefresh' })); hd.append(again);
     const find = document.createElement('input'); find.placeholder = 'Search sessions…'; find.value = pastFilter;
     const rows = el('div', 'rows');
-    const show = () => { const q = find.value.trim().toLowerCase(); pastFilter = find.value; for (const r of rows.children) if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q); };
+    const show = () => { const q = find.value.trim().toLowerCase(); pastFilter = find.value; for (const r of rows.children) if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q); filterSkills(); };
     find.addEventListener('input', show);
     for (const p of list) {
       const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title + (p.file ? '\\n' + p.file : '');   // on hover, the file the transcript is in
@@ -513,6 +523,27 @@ ${glyphCss}
     }
     if (!list.length) rows.append(el('div', 'none', failed.length ? 'The sessions of ' + failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ') + ' could not be read.' : 'No past sessions in this folder.'));
     box.append(hd, find, rows); show();
+  }
+  // The skills Claude Code loads here (the host's src/skills.js), under the sessions: folded at first; the search above finds
+  // them too; a click opens the skill's SKILL.md
+  let skillsOpen = false;
+  function filterSkills() {
+    const q = pastFilter.trim().toLowerCase(), box = $('skills');
+    for (const r of box.querySelectorAll('.skill')) r.hidden = (!skillsOpen && !q) || (!!q && !r.dataset.t.includes(q));
+  }
+  function drawSkills(list) {
+    const box = $('skills'); box.textContent = ''; box.hidden = !list.length;
+    const hd = el('div', 'hd'); hd.append(el('span', 'chev', skillsOpen ? '▾' : '▸'), el('span', 'h', 'Skills · ' + list.length));
+    hd.addEventListener('click', () => { skillsOpen = !skillsOpen; hd.firstChild.textContent = skillsOpen ? '▾' : '▸'; filterSkills(); });
+    const rows = el('div', 'rows');
+    for (const k of list) {
+      const r = el('div', 'row skill'); r.dataset.t = (k.name + ' ' + (k.description || '')).toLowerCase();
+      r.title = [k.name, k.description, k.file].filter(Boolean).join('\\n');
+      r.append(el('span', 't', k.name), el('span', 'w', k.source));
+      r.addEventListener('click', () => vscode.postMessage({ type: 'open', target: k.file }));
+      rows.append(r);
+    }
+    box.append(hd, rows); filterSkills();
   }
   function badge(kind) {
     const i = ICONS[kind];
@@ -1507,7 +1538,7 @@ ${glyphCss}
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
     if (m.type === 'tabs') { if (m.gateway) gatewayInfo = m.gateway; applyTabs(m.tabs, m.active, m.single); }
-    if (m.type === 'past') drawPast(m.sessions || [], m.failed || []);
+    if (m.type === 'past') { drawPast(m.sessions || [], m.failed || []); drawSkills(m.skills || []); }
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }

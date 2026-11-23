@@ -161,6 +161,12 @@ named "… (fork)", with the settings of the tab open on the original, and
 the original is left as it is. Codex rows have none: Codex forks only in
 its own terminal (`codex fork`).
 
+Under the sessions, **Skills** lists the skills Claude Code loads in this
+folder: the folder's own (`.claude/skills`), yours (`~/.claude/skills`),
+those synced from claude.ai, and each enabled plugin's, each marked with
+where it comes from. It starts folded; the search box finds skills too.
+Hover one for its description and file; click it to open its `SKILL.md`.
+
 Both can be used at once. `Perch: Move Tab to the Editor Area` and
 `Perch: Move Tab to the Sidebar` move the active tab; the session, its
 agent, and its transcript are untouched. There are `Move All` versions of

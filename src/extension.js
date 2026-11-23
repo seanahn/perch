@@ -2357,7 +2357,7 @@ class PerchView {
   }
 
   /**
-   * The sidebar's list of past sessions, both agents', of this folder: what it shows when it holds no tab of its own, so the
+   * The sidebar's list of past sessions, both agents', of this folder, and the skills Claude Code loads here (src/skills.js): what it shows when it holds no tab of its own, so the
    * Perch icon in the activity bar opens on the sessions to go back to. The rows are the Sessions command's; a click opens one
    * (openPast). Read when the sidebar is ready, comes into view, or asks again; only the latest read is sent.
    */
@@ -2372,7 +2372,8 @@ class PerchView {
       this.pastByKey.set(key, p);
       return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open, file: p.file || '' };
     });
-    this.sidebar.view.webview.postMessage({ type: 'past', sessions, failed: res.failed || [] });
+    let skills = []; try { skills = require('./skills').listSkills({ dir: cwd() }); } catch (_) { /* none to show */ }
+    this.sidebar.view.webview.postMessage({ type: 'past', skills, sessions, failed: res.failed || [] });
   }
 
   /**
