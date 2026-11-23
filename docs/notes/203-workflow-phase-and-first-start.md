@@ -38,18 +38,19 @@ unchanged. Before any of these has run there is no phase, and no pill.
 **Hover.** A tooltip lists all four phases in order with the current one highlighted:
 
 ```text
-┌──────────────────────────────┐
-│ Workflow phase               │
-│   Design                     │
-│ ▸ Plan          writing-plans│
-│   Build                      │
-│   Finish                     │
-└──────────────────────────────┘
+┌────────────────────────────────┐
+│ Workflow phase · trivialpowers │
+│   Design                       │
+│ ▸ Plan            writing-plans│
+│   Build                        │
+│   Finish                       │
+└────────────────────────────────┘
 ```
 
 A native `title` cannot highlight one line, so it is a small hover card in the page, styled like the footer's
 other panels, opened on hover and on keyboard focus, closed on leave, blur and Escape. It shows the skill that
-set the phase beside the current one. The pill itself does nothing on click.
+set the phase beside the current one, without its plugin prefix; the header names the plugin
+(`Workflow phase · <plugin>`, the part before the last `:`) and is just `Workflow phase` when the skill has none. The pill itself does nothing on click.
 
 **What counts** *(calls made while planning; the author's)*:
 - The main conversation only. Skill calls inside sub-agents (a builder sub-agent running test-driven
@@ -160,6 +161,9 @@ The phase, live and on reopening a tab:
   SDK returns only what follows the last `compact_boundary`): main-conversation Skill calls with an ok result,
   and slash commands; from the SDK's messages only when there is no file. The host keeps it per session id, so
   a switch back from Codex reads no record again.
+- A bare slash command (`/brainstorming`) is recorded under its full name when Claude Code's command list (the one
+  behind the `/` menu) has exactly one command named `<plugin>:<name>`; with none or several it stays bare. Claude
+  Code records the resolved name itself (`<command-name>/trivialpowers:brainstorming`), so a reload agrees.
 - Tool calls carry whether they came from a sub-agent (`sub`), so the live stream can ignore them as the
   replayed record already does.
 - The first-start check runs after the restore grace period, so a tab VS Code brings back counts as open. When,

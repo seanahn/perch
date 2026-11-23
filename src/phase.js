@@ -21,6 +21,13 @@ function skillOfSlash(text) {
   return m ? m[1] : null;
 }
 
+// A bare name, in full when exactly one command of Claude Code's list is named <plugin>:<name> (Claude Code runs that one); else as it is.
+function resolveSkill(name, commands) {
+  if (typeof name !== 'string' || !name || name.includes(':')) return name;
+  const full = (commands || []).map((c) => c && c.name).filter((n) => typeof n === 'string' && n.length > name.length + 1 && n.endsWith(':' + name));
+  return full.length === 1 ? full[0] : name;
+}
+
 // The last workflow skill in the main conversation: a Skill call once its result has come back ok, or a user slash command.
 function phaseFromEvents(events) {
   const calls = new Map();   // Skill calls waiting for their result, by tool_use id
@@ -37,4 +44,4 @@ function phaseFromEvents(events) {
   return found;
 }
 
-module.exports = { PHASES, phaseOfSkill, skillOfSlash, phaseFromEvents };
+module.exports = { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents };

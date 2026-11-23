@@ -3661,6 +3661,23 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
     assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' });
     const s = m.perch.get(c), id1 = s.agentSessionId;
+    // a bare slash command is named in full when Claude Code's command list has exactly one <plugin>:<name> for it
+    { const cmds = (...names) => s.view.setCommands('claude', names.map((name) => ({ name, description: 'd' })));
+      cmds('clear', 'trivialpowers:finishing-a-development-branch');
+      v.fire({ type: 'send', sid: c, text: '/brainstorming the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'brainstorming' }, 'no command by that name in the list: bare');
+      cmds('clear', 'trivialpowers:brainstorming', 'trivialpowers:writing-plans');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/brainstorming the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' }, 'one plugin offers it: its full name');
+      cmds('trivialpowers:brainstorming', 'other:brainstorming');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/brainstorming' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'brainstorming' }, 'two plugins offer it: bare');
+      cmds('trivialpowers:brainstorming');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/other:brainstorming' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'other:brainstorming' }, 'a name with a prefix is kept as typed');
+      cmds('clear');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }); }
     // the phase follows what was sent: a note kept for the record goes ahead of the message, so it no longer starts with /
     s.records = ['For the record: PR #1 (https://x.example/1) was merged at 10:00.']; s.recordsSent = 0;
     v.fire({ type: 'send', sid: c, text: '/finishing-a-development-branch' }); await flush();

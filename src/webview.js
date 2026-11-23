@@ -1395,10 +1395,11 @@ ${glyphCss}
   let phaseNow = null;
   function drawPhaseCard() {
     $phaseCard.textContent = '';
-    $phaseCard.append(el('div', 'h', 'Workflow phase'));
+    const full = (phaseNow && phaseNow.skill) || '', cut = full.lastIndexOf(':');
+    $phaseCard.append(el('div', 'h', cut > 0 ? 'Workflow phase \\u00b7 ' + full.slice(0, cut) : 'Workflow phase'));
     for (const name of PHASES) {
       const now = !!phaseNow && phaseNow.phase === name, r = el('div', 'ph' + (now ? ' now' : ''));
-      r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', name), el('span', 'sk', now ? phaseNow.skill || '' : ''));
+      r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', name), el('span', 'sk', now ? full.slice(cut + 1) : ''));
       $phaseCard.append(r);
     }
   }

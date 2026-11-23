@@ -1,7 +1,7 @@
 'use strict';
 // The workflow phase from skill names, slash commands and Perch's agent events.
 const assert = require('assert');
-const { PHASES, phaseOfSkill, skillOfSlash, phaseFromEvents } = require('../src/phase');
+const { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents } = require('../src/phase');
 
 assert.deepStrictEqual(PHASES, ['Design', 'Plan', 'Build', 'Finish']);
 
@@ -36,4 +36,12 @@ assert.deepStrictEqual(phaseFromEvents([...base, { kind: 'user', text: '/finishi
 // a Skill call with no result yet does not count (live waits for the ok result too)
 assert.deepStrictEqual(phaseFromEvents([...ok('a', 'brainstorming'), use('b', 'writing-plans')]), { phase: 'Design', skill: 'brainstorming' });
 assert.strictEqual(phaseFromEvents([]), null);
+// ---- resolveSkill
+const L = (...n) => n.map((name) => ({ name }));
+assert.strictEqual(resolveSkill('brainstorming', L('x:brainstorming')), 'x:brainstorming');
+assert.strictEqual(resolveSkill('brainstorming', L('x:brainstorming', 'y:brainstorming')), 'brainstorming');
+assert.strictEqual(resolveSkill('brainstorming', L('brainstorming', 'x:plan-brainstorming')), 'brainstorming');
+assert.strictEqual(resolveSkill('x:brainstorming', L('y:x:brainstorming')), 'x:brainstorming');
+assert.strictEqual(resolveSkill(null, L('x:a')), null);
+assert.strictEqual(resolveSkill('a', undefined), 'a');
 console.log('phase ok');

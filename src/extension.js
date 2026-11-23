@@ -16,7 +16,7 @@ const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
-const { phaseOfSkill, skillOfSlash } = require('./phase');
+const { phaseOfSkill, skillOfSlash, resolveSkill } = require('./phase');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
@@ -893,7 +893,7 @@ class Session {
     if (noted) this.recordsSent = this.records.length;
     const full = carried + noted + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
     // a workflow skill the user starts with its slash command: Claude Code runs it only when what is sent starts with it
-    if (this.kind === 'claude') this.setPhase(skillOfSlash(full));
+    if (this.kind === 'claude') this.setPhase(resolveSkill(skillOfSlash(full), this.view.commands.claude));
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
