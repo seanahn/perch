@@ -1,6 +1,7 @@
 # 203 — The workflow phase pill, and settings an installer can set
 
-Proposal, 2026-11-23. Written against Perch 0.7.36. Three small changes, wanted by an installer that sets up a
+Built 2026-11-23, released in 0.7.37 (see [Built](#built) and [Checked live](#checked-live)). Written against
+Perch 0.7.36. Three small changes, wanted by an installer that sets up a
 whole machine (VS Code, Perch, an LLM gateway, MCP servers, a workflow plugin) in one run, so that the first
 time the user opens VS Code, Perch is already in place and on the right backend. Each is useful without that
 installer too.
@@ -50,14 +51,17 @@ unchanged. Before any of these has run there is no phase, and no pill.
 A native `title` cannot highlight one line, so it is a small hover card in the page, styled like the footer's
 other panels, opened on hover and on keyboard focus, closed on leave, blur and Escape. It shows the skill that
 set the phase beside the current one, without its plugin prefix; the header names the plugin
-(`Workflow phase · <plugin>`, the part before the last `:`) and is just `Workflow phase` when the skill has none. The pill itself does nothing on click.
+(`Workflow phase · <plugin>`, the part before the last `:`) and is just `Workflow phase` when the skill has none. The header is shown in capitals, as the footer's other panels' headings are. The pill itself does nothing on click.
 
-**What counts** *(calls made while planning; the author's)*:
+**What counts:**
 - The main conversation only. Skill calls inside sub-agents (a builder sub-agent running test-driven
   development, say) never move the phase. The live stream carries sub-agent calls too; they are ignored, so the
   pill reads the same live and after a reload (the replayed record already leaves sub-agent turns out).
 - A workflow skill the user starts themselves with its slash command (`/brainstorming`, `/writing-plans`, …)
-  counts like the agent's call.
+  counts like the agent's call. It is read from what is actually sent to the agent (a message that starts
+  with `/name`; `/name/path` is a path), not from what was typed, and a bare name is resolved against Claude
+  Code's command list (the one behind the `/` menu): with exactly one command named `<plugin>:<name>` the
+  skill is recorded under that full name, so the card can name the plugin; with none or several it stays bare.
 - A call that failed (denied, an error result, an unknown skill) does not count: the phase moves when the
   call's result arrives and is not an error.
 
@@ -173,7 +177,25 @@ The phase, live and on reopening a tab:
   tab does not show among the groups within a second, this step is skipped and said in Perch's output.
 - The setting is written back at the scope that held `true` (user, workspace or folder).
 
-Plan: `docs/superpowers/plans/2026-11-23-phase-pill-and-first-start.md` (deleted when the work merges).
+- A tab's phase is read from the raw record across compactions and cached per session id; see the first item.
+- The page cannot `require` modules, so its list of phases is a literal; a test compares it with `PHASES` in
+  `src/phase.js`.
+
+## Built
+
+Branch `feat/phase-pill`, released in 0.7.37 (not yet published). The plan was deleted after commit
+`PLANSHA`. The README lists the two settings and links here: [README](../../README.md).
+
+## Checked live
+
+In a fresh VS Code profile, with both settings set:
+
+- First start opened one Claude tab on the right and kept the left group; in that profile the left group held
+  another extension's welcome page, so neither the empty group nor the untitled fallback was exercised there.
+  The setting read `false` afterwards.
+- The backend pill read the gateway, with the gateway's default model.
+- `/brainstorming` showed Design between the backend pill and the usage button; the card showed the skill and
+  resolved the plugin name in its header.
 
 ## Verification
 
