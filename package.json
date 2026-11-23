@@ -421,6 +421,12 @@
           "default": "~/.config/gateway-claude/env",
           "description": "A file describing a gateway Claude Code can be run through: export KEY=VALUE lines, as a shell reads them, with ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. A Claude tab opened on the gateway runs with these added to its environment; nothing is written to Claude Code's settings. When the file exists, + offers a tab on the gateway."
         },
+        "perch.claude.defaultBackend": {
+          "type": "string",
+          "enum": ["remembered", "gateway"],
+          "default": "remembered",
+          "description": "Where new Claude tabs start before you have chosen a backend for any tab. After you choose one in a tab's backend menu, new tabs follow your choice."
+        },
         "perch.codex.executable": {
           "type": "string",
           "default": "",

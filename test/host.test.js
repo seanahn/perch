@@ -1607,6 +1607,23 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- perch.claude.defaultBackend: where new Claude tabs start while nothing is remembered
+  {
+    const m = install(undefined, { config: { 'claude.defaultBackend': 'gateway' } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const a = v.lastTabs().active;
+    assert.strictEqual(v.tab(a).gateway, true, 'gateway default with nothing remembered');
+    v.fire({ type: 'setBackend', sid: a, value: 'subscription' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const b = v.lastTabs().active;
+    assert.strictEqual(v.tab(b).gateway, false, 'the remembered choice wins over the setting');
+    m.perch.dispose();
+    const r = install(undefined, { config: { 'claude.defaultBackend': 'remembered' } }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    rv.fire({ type: 'new', kind: 'claude' });
+    assert.strictEqual(rv.tab(rv.lastTabs().active).gateway, false, 'remembered with nothing remembered: the window\'s backend');
+    r.perch.dispose();
+  }
+
   // ---- the model pill on the gateway: the gateway's names, from the file; a model of Claude's catalog is let go when a tab moves there
   {
     const fs = require('fs'), os = require('os'), path = require('path');

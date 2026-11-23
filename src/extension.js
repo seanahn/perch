@@ -2200,7 +2200,10 @@ class PerchView {
    *  its transcript with a line of perch's own */
   addSession(kind, { fill, location, resume, title, gateway, dir, note } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
-    if (gateway === undefined && kind === 'claude' && !resume) gateway = this.context.globalState.get(GATEWAY_DEFAULT_KEY) === true;   // where the last Claude tab was put
+    if (gateway === undefined && kind === 'claude' && !resume) {
+      const remembered = this.context.globalState.get(GATEWAY_DEFAULT_KEY);   // where the last Claude tab was put; undefined until a backend is first chosen
+      gateway = remembered === undefined ? cfg('claude.defaultBackend') === 'gateway' : remembered === true;
+    }
     const vendor = kind === 'claude' ? 'Claude' : 'Codex';
     // a machine where Codex's sandbox cannot start (codexNoSandbox): new Codex tabs run without one, and say so
     const mode = kind === 'codex' && this.codexUnsandboxedHere() ? 'danger-full-access' : undefined;
