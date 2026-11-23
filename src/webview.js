@@ -3,6 +3,7 @@
 // The host owns all state; this page renders what it is sent and can be rebuilt from a replay at any time.
 
 const { renderMarkdown, linkTicketKeys } = require('./markdown');
+const { RULES: SECRET_RULES, findSecrets, entropy, sha256Hex } = require('./secretCheck');
 
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -187,8 +188,8 @@ ${glyphCss}
   .perm .diff .del { display: block; background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,.18)); }
   .perm .diff .add { display: block; background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,.14)); }
   .perm .diff .cut { display: block; color: var(--vscode-descriptionForeground); font-style: italic; }
-  .perm button, .empty button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-  .perm button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .perm button, .empty button, #secret button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .perm button.primary, #secret button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   /* a question from the agent: its choices as buttons, a line for an answer of your own, and the answers once given */
   .ask { border: 1px solid var(--accent, var(--vscode-focusBorder)); border-radius: 8px; padding: 8px 10px 10px; white-space: normal; }
   .ask .q { margin: 2px 0 8px; }
@@ -244,6 +245,11 @@ ${glyphCss}
   #input { resize: none; min-height: 22px; max-height: 180px; font-family: inherit; font-size: inherit; line-height: 1.45; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; padding: 9px 12px 7px; }
   #input::placeholder { color: var(--vscode-input-placeholderForeground); }
   /* pasted images wait above the message */
+  /* the secret check: a strip above the composer while a message that looks like it holds a key waits (note 110) */
+  #secret { margin: 0 8px 4px; padding: 6px 10px; border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-charts-yellow)); border-radius: 8px; background: var(--vscode-inputValidation-warningBackground, transparent); flex: none; font-size: 12px; }
+  #secret .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  #secret .why { margin-top: 6px; color: var(--vscode-descriptionForeground); }
+  body.bare #secret { display: none; }
   #shots { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
   .shot { position: relative; flex: none; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editor-background); }
   .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -367,6 +373,7 @@ ${glyphCss}
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
   <div id="panes"><div class="empty" id="empty"><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
+  <div id="secret" role="alert" hidden><div class="say"></div><div class="why" hidden></div><div class="acts"><button type="button" class="primary" data-act="send">Send anyway</button><button type="button" data-act="allow">Not a secret</button><button type="button" data-act="edit">Edit</button><button type="button" data-act="why">Why?</button></div></div>
   <div id="composer" class="off">
     <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
@@ -439,6 +446,10 @@ ${glyphCss}
     e.preventDefault(); vscode.postMessage({ type: 'openPage', url: href });
   }, true);
   const ticketed = (node) => linkTicketKeys(node, ticketProjects, document, openTicket);
+  ${findSecrets.toString()}
+  ${entropy.toString()}
+  ${sha256Hex.toString()}
+  const RULES = ${JSON.stringify(SECRET_RULES)};
   /** A copy button for a piece of text: the host puts it on the clipboard, the button says so for a moment. */
   function copyButton(getText) {
     const b = el('button', 'cp', 'copy'); b.type = 'button'; b.title = 'Copy';
@@ -616,7 +627,7 @@ ${glyphCss}
     const pu = el('div', 'subs mx pu'); pu.hidden = true;  // the vendor's usage: the plan's windows or the cost, opened from the footer
     root.append(log, work, subs, mx, ix, pu); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, pu, puOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], kind: tab.kind, stick: true };
+    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, pu, puOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], sentAnyway: new Set(), kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
     log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
@@ -933,7 +944,7 @@ ${glyphCss}
     document.body.classList.toggle('bare', !tabs.length && !single);   // the sidebar with no tab of its own: the list of past sessions, top to bottom
     renderTabs();
     const p = panes.get(active);
-    if (prev !== active) { closeMenu(); $input.value = p ? p.draft : ''; grow(); if (p) { p.stick = true; pin(p); } }
+    if (prev !== active) { closeMenu(); hideSecret(); $input.value = p ? p.draft : ''; grow(); if (p) { p.stick = true; pin(p); } }
     renderShots();
     syncComposer();
     applyMeter();
@@ -1039,14 +1050,57 @@ ${glyphCss}
   }
 
   // Enter always sends: while the agent is working, the message is queued behind the current turn. The button stops.
+  // The secret check (note 110) comes first: a message that looks like it holds a password or key waits in the box.
   function send() {
     const t = cur(); if (!t) return;
     const p = panes.get(active), shots = p ? p.shots : [];
     const text = $input.value; if (!text.trim() && !shots.length) return;
     closeMenu();
-    vscode.postMessage(Object.assign({ type: 'send', sid: active, text }, shots.length ? { images: shots.map((s) => Object.assign({ mime: s.mime, data: s.data }, s.thumb ? { thumb: s.thumb } : {})) } : {}));
+    if (secretCfg.enabled && p && text && !p.sentAnyway.has(text)) {
+      const hits = findSecrets(text, { ignore: secretCfg.ignore });
+      const left = hits.filter((h) => !secretCfg.allowed.has(sha256Hex(h.value)));
+      if (left.length) { holdSecret(active, text, left); return; }
+    }
+    dispatch(active, text);
+  }
+  function dispatch(sid, text) {
+    const p = panes.get(sid), shots = p ? p.shots : [];
+    hideSecret();
+    vscode.postMessage(Object.assign({ type: 'send', sid, text }, shots.length ? { images: shots.map((s) => Object.assign({ mime: s.mime, data: s.data }, s.thumb ? { thumb: s.thumb } : {})) } : {}));
     $input.value = ''; p.draft = ''; p.shots = []; grow(); renderShots();
   }
+
+  // ---- the secret check's strip. "Send anyway" lets this text through in this tab; "Not a secret" has the host keep the
+  // SHA-256 of each value found (never the value), so it is let through anywhere, until the user clears the list.
+  const $secret = $('secret'), $secretSay = $secret.querySelector('.say'), $secretWhy = $secret.querySelector('.why');
+  let secretCfg = { enabled: true, ignore: [], allowed: new Set() };
+  let held = null;   // the message the strip is about: { sid, text, hits }
+  const mark = (h) => { $input.focus(); try { $input.setSelectionRange(h.start, h.end); } catch (_) { /* not focusable */ } };
+  function hideSecret() { held = null; $secret.hidden = true; $secretWhy.hidden = true; $secretWhy.textContent = ''; }
+  function holdSecret(sid, text, hits) {
+    held = { sid, text, hits };
+    $secretSay.textContent = 'This looks like a password or key (' + [...new Set(hits.map((h) => h.name))].join(', ') + '). It would go to the model and into the session record.';
+    $secretWhy.hidden = true; $secretWhy.textContent = '';
+    $secret.hidden = false;
+    mark(hits[0]);
+  }
+  $secret.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest && e.target.closest('button'); if (!b || !held) return;
+    const h = held, act = b.getAttribute('data-act');
+    if (act === 'why') {
+      $secretWhy.textContent = '';
+      for (const id of new Set(h.hits.map((x) => x.rule))) { const r = RULES.find((x) => x.id === id); if (r) $secretWhy.append(el0('div', r.name + ': ' + r.description)); }
+      $secretWhy.hidden = false; return;
+    }
+    if (act === 'edit') { hideSecret(); mark(h.hits[0]); return; }
+    if (h.sid !== active || $input.value !== h.text) { hideSecret(); return; }   // the text is not the one the strip is about
+    if (act === 'send') { panes.get(h.sid).sentAnyway.add(h.text); dispatch(h.sid, h.text); return; }
+    if (act === 'allow') {   // the hash is worked out here, in plain JavaScript (no crypto.subtle needed): the value never leaves the page this way
+      for (const x of h.hits.map((y) => sha256Hex(y.value))) if (!secretCfg.allowed.has(x)) { secretCfg.allowed.add(x); vscode.postMessage({ type: 'secretAllow', hash: x }); }
+      dispatch(h.sid, h.text);
+    }
+  });
+  $input.addEventListener('input', () => { if (held) hideSecret(); });
 
   // ---- pasted images. They wait above the message and go with it. A large one is scaled down first, to the size the
   // API keeps; a full-screen capture of a large display is several times that.
@@ -1631,6 +1685,7 @@ ${glyphCss}
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
     else if (m.type === 'indexStatus') { const p = panes.get(m.sid); if (p) { p.ixData = m; if (p.ixOpen) drawIndex(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
+    else if (m.type === 'secretCheck') secretCfg = { enabled: m.enabled !== false, ignore: Array.isArray(m.ignore) ? m.ignore.filter((x) => typeof x === 'string') : [], allowed: new Set(Array.isArray(m.allowed) ? m.allowed : []) };
     else if (m.type === 'confluenceSite') { confluenceSite = typeof m.url === 'string' ? m.url.replace(/[/]+$/, '') : null; }
     else if (m.type === 'ticketProjects') { ticketProjects = Array.isArray(m.projects) ? m.projects : []; for (const p of panes.values()) p.log.querySelectorAll('.msg.assistant.md, .msg.user').forEach(ticketed); }
   });

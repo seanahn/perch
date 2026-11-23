@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.7.43",
+  "version": "0.7.44",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -168,6 +168,10 @@
       {
         "command": "perch.codebaseIndex.install",
         "title": "Perch: Install Codebase Search by Meaning"
+      },
+      {
+        "command": "perch.clearSecretExceptions",
+        "title": "Perch: Clear Secret-Check Exceptions"
       },
       {
         "command": "perch.voice.setup",
@@ -442,6 +446,19 @@
           "default": true,
           "description": "New tabs attach the active file and, if there is one, the selection to each message, as the vendors' own panels do. Each tab can turn it on or off; the choice is kept with the tab."
         },
+        "perch.secretCheck.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Before a message is sent, look in it for something that looks like a password or key (a GitHub token, an AWS key, a password in a URL, a long random string…). If one is found the message waits, and you choose: Send anyway, Not a secret, or Edit. The check runs in the page, on the text alone."
+        },
+        "perch.secretCheck.ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Regular expressions for values the secret check never flags, such as a trace-id or build-id format. A value is let through when one of them matches it in full. An invalid expression is skipped, with a note in the tab."
+        },
         "perch.codebaseIndex.enabled": {
           "type": "boolean",
           "default": false,
@@ -622,7 +639,7 @@
     "check": "for f in src/*.js test/*.js audio/src/*.js audio/test/*.js; do node --check \"$f\" || exit 1; done && python3 -m py_compile voice/server.py codeindex/indexer.py codeindex/server.py test/codeindex_test.py",
     "test": "npm run -s test:offline && node test/harness.mjs",
     "package": "vsce package",
-    "test:offline": "node test/meter.test.js && node test/explorer.test.js && node test/claudeAgent.test.js && node test/gateway.test.js && node test/relay.test.js && node test/prices.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codeIndex.test.js && python3 test/codeindex_test.py && node test/codexAuth.test.js && node test/codexBedrock.test.js && node test/codexWatch.test.js && node test/markdown.test.js && node test/sessionStore.test.js && node test/handoff.test.js && node test/prSessions.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
+    "test:offline": "node test/meter.test.js && node test/explorer.test.js && node test/claudeAgent.test.js && node test/gateway.test.js && node test/relay.test.js && node test/prices.test.js && node test/codexMeter.test.js && node test/models.test.js && node test/binaries.test.js && node test/codeIndex.test.js && python3 test/codeindex_test.py && node test/codexAuth.test.js && node test/codexBedrock.test.js && node test/codexWatch.test.js && node test/markdown.test.js && node test/secretCheck.test.js && node test/sessionStore.test.js && node test/handoff.test.js && node test/prSessions.test.js && node test/voice.test.js && node audio/test/recorder.test.js && node audio/test/engine.test.js && node test/host.test.js && node test/page.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"

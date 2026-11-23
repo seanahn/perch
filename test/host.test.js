@@ -3615,6 +3615,55 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     n.perch.dispose();
   }
 
+  // a setting cannot be both a value and the parent of another: VS Code's settings tree drops the child ("Ignoring
+  // perch.secretCheck.ignore as perch.secretCheck is true"). So no contributed setting's name is a prefix of another's.
+  {
+    const props = Object.keys(require('../package.json').contributes.configuration.properties);
+    const clash = props.filter((a) => props.some((b) => b.startsWith(a + '.')));
+    assert.deepStrictEqual(clash, [], 'no setting is the parent of another: ' + clash.join(', '));
+    assert(props.includes('perch.secretCheck.enabled') && props.includes('perch.secretCheck.ignore'), 'the secret check\'s two settings');
+  }
+
+  // the composer's secret check (note 110): the settings and the remembered hashes go to every page; "Not a secret" is
+  // kept as a hash in globalState; the clear command forgets them; an invalid ignore expression is noted once in a tab
+  {
+    const H1 = 'a'.repeat(64), H2 = '0123456789abcdef'.repeat(4);
+    const m = install(undefined, { config: { newTabs: 'editor', 'secretCheck.ignore': ['TRC[0-9a-f]{20}', '(unclosed', 7] } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const told = (got) => got.filter((x) => x.type === 'secretCheck');
+    assert.deepStrictEqual(told(v.got), [{ type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [] }], 'a ready page is told: on by default, the valid expressions only, nothing allowed yet');
+    await m.commands['perch.newClaude']();
+    const p1 = m.ui.panels[0]; p1.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(p1.got).pop(), { type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [] }, 'an editor tab too');
+    // "Not a secret": the hash is stored and every page hears of it
+    p1.fire({ type: 'secretAllow', hash: H1 }); await flush();
+    assert.deepStrictEqual(m.globalState._dump()['perch.secretCheck.allowed'], [H1], 'kept in globalState');
+    assert.deepStrictEqual([told(p1.got).pop().allowed, told(v.got).pop().allowed], [[H1], [H1]], 'every page is told');
+    p1.fire({ type: 'secretAllow', hash: H1 }); v.fire({ type: 'secretAllow', hash: H2.toUpperCase() });
+    for (const bad of ['', 'secret value', 'g'.repeat(64), 'a'.repeat(63), 42, undefined]) v.fire({ type: 'secretAllow', hash: bad });
+    await flush();
+    assert.deepStrictEqual(m.globalState._dump()['perch.secretCheck.allowed'], [H1, H2], 'once each, in lower case; anything not a SHA-256 hex is refused, so no value can be stored');
+    // a reload keeps them
+    const r = install(undefined, { globals: m.globalState._dump() }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    assert.deepStrictEqual(told(rv.got).pop().allowed, [H1, H2], 'remembered across a reload');
+    r.perch.dispose();
+    // the clear command forgets them, and says so to every page
+    await m.commands['perch.clearSecretExceptions']();
+    assert.deepStrictEqual(m.globalState._dump()['perch.secretCheck.allowed'], [], 'emptied');
+    assert.deepStrictEqual([told(p1.got).pop().allowed, told(v.got).pop().allowed], [[], []], 'every page is told');
+    // the invalid expression: one note in the tab, not one per message
+    const sid = p1.lastTabs().tabs[0].id;
+    p1.fire({ type: 'send', sid, text: 'hello' }); await flush(); p1.fire({ type: 'send', sid, text: 'again' }); await flush();
+    const notes = () => p1.events(sid).filter((e) => e.kind === 'note' && /perch\.secretCheck\.ignore/.test(e.text));
+    assert.strictEqual(notes().length, 1, 'one note for the invalid expression');
+    assert(notes()[0].text.includes('(unclosed'), 'naming it: ' + notes()[0].text);
+    // switched off, and the list changed: every page is told at once
+    m.changeConfig({ 'secretCheck.enabled': false, 'secretCheck.ignore': ['BLD-[0-9]+'] }); await flush();
+    assert.deepStrictEqual(told(v.got).pop(), { type: 'secretCheck', enabled: false, ignore: ['BLD-[0-9]+'], allowed: [] }, 'a settings change reaches the pages');
+    m.perch.dispose();
+  }
+
   // jay's Confluence site (note 108): asked for with the projects, told to every page when it changes, and the only site
   // whose /wiki/ links the page may ask jay to open; a link jay cannot open goes to the browser
   {

@@ -605,6 +605,19 @@ turn starts (its words stay in the box's history: press the up arrow to
 get them back); once a turn has taken it up, the tab says it was too
 late. Stop ends the turn and drops what is queued.
 
+**Secret check.** Before a message goes, Send looks in it, in the page
+and on the text alone, for something that looks like a password or key:
+a vendor API key, a GitHub, Slack or AWS token, a Google API key, a JSON
+Web Token, a private key, a password in a URL, `password=…` and the
+like, or a long random string. If it finds one the message stays in the
+box, the value is selected, and a strip above the composer names the
+rule and offers **Send anyway** (this text, in this tab), **Not a
+secret** (never flagged again anywhere; Perch keeps only its SHA-256
+hash), **Edit** and **Why?**. `perch.secretCheck.enabled` turns it off;
+`perch.secretCheck.ignore` lists regular expressions for values never to
+flag, matched in full; `Perch: Clear Secret-Check Exceptions` forgets
+every "Not a secret". The rules are in note 110.
+
 Not included: Codex's microphone. A webview cannot open the microphone;
 Codex does it with a companion extension that records natively. perch could
 do the same, but dictation also needs a speech-to-text service, which is a

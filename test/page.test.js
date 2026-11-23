@@ -1442,5 +1442,100 @@ window.close();
     assert.deepStrictEqual([sent(), e.defaultPrevented], [[], false], 'Ctrl-click keeps the browser');
     pc.w.close();
   }
+  // ---- the secret check on Send (note 110): the message waits, a strip says why, and the user decides
+  {
+    const ps = page(ICONS); ps.out.length = 0;
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    ps.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+    const typeIn = (text) => { ps.$('#input').value = text; ps.$('#input').dispatchEvent(new ps.w.Event('input', { bubbles: true })); };
+    const enter = () => ps.$('#input').dispatchEvent(new ps.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    const sends = () => ps.out.filter((m) => m.type === 'send');
+    const strip = () => ps.$('#secret');
+    const btn = (label) => [...strip().querySelectorAll('button')].find((b) => b.textContent === label);
+    const TOKEN = ['ghp_', 'a1B2c3D4e5F6g7H8i9J0', 'k1L2m3N4o5P6q7R8'].join('');
+    const msg = 'deploy with ' + TOKEN + ' please';
+    const sha = (s) => require('crypto').createHash('sha256').update(s).digest('hex');
+    const hideOf = (n) => !n || n.hidden || !ps.shown(n);
+    assert(hideOf(strip()), 'no strip until something is found');
+    assert(!ps.w.crypto || !ps.w.crypto.subtle, 'no crypto.subtle here, as in a page served over plain http: the check does without it');
+
+    // Send with a GitHub token: nothing goes out, the text stays, the strip names the rule, the token is selected
+    typeIn(msg); enter(); await settle();
+    assert.deepStrictEqual(sends(), [], 'the message is not sent');
+    assert.strictEqual(ps.$('#input').value, msg, 'it stays in the box');
+    assert(!hideOf(strip()), 'the strip shows');
+    assert.strictEqual(strip().querySelector('.say').textContent, 'This looks like a password or key (GitHub token). It would go to the model and into the session record.');
+    assert.deepStrictEqual([...strip().querySelectorAll('button')].map((b) => b.textContent), ['Send anyway', 'Not a secret', 'Edit', 'Why?']);
+    const i = ps.$('#input');
+    assert.deepStrictEqual([i.selectionStart, i.selectionEnd], [msg.indexOf(TOKEN), msg.indexOf(TOKEN) + TOKEN.length], 'the match is selected in the box');
+
+    // Why? names the rule and what it matches
+    btn('Why?').click();
+    const why = strip().querySelector('.why');
+    assert(why && !why.hidden && /^GitHub token: /.test(why.textContent) && why.textContent.length > 'GitHub token: '.length, 'Why? gives the rule\'s name and description');
+    assert.deepStrictEqual(sends(), [], 'and sends nothing');
+
+    // Edit closes the strip and leaves the text for the user
+    btn('Edit').click();
+    assert(hideOf(strip()), 'Edit hides the strip');
+    assert.strictEqual(ps.$('#input').value, msg); assert.deepStrictEqual(sends(), []);
+
+    // Send anyway: sent unchanged; the same text again in this tab is not flagged
+    enter(); await settle(); assert(!hideOf(strip()), 'flagged again before the user decides');
+    btn('Send anyway').click(); await settle();
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'a', text: msg }], 'Send anyway sends the text as it was');
+    assert(hideOf(strip()), 'and the strip goes');
+    assert.strictEqual(ps.out.filter((m) => m.type === 'secretAllow').length, 0, 'nothing is remembered for good');
+    ps.out.length = 0;
+    typeIn(msg); enter(); await settle();
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'a', text: msg }], 'the same text is not flagged twice in a tab');
+    assert(hideOf(strip()));
+    ps.out.length = 0;
+
+    // the other tab, a Codex tab, has not been told: it checks too
+    ps.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'b' });
+    typeIn(msg); enter(); await settle();
+    assert.deepStrictEqual(sends(), [], 'a Codex tab checks too, and its own Send anyway is its own');
+    assert(!hideOf(strip()));
+
+    // Not a secret: the SHA-256 of the value goes to the host, never the value, and the message is sent
+    btn('Not a secret').click(); await settle();
+    assert.deepStrictEqual(ps.out.filter((m) => m.type === 'secretAllow'), [{ type: 'secretAllow', hash: sha(TOKEN) }], 'the hash, in hex');
+    assert(!JSON.stringify(ps.out.filter((m) => m.type === 'secretAllow')).includes(TOKEN), 'the value itself never leaves the page that way');
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'b', text: msg }], 'and it is sent');
+    const order = ps.out.map((m) => m.type).filter((t) => t === 'secretAllow' || t === 'send');
+    assert.deepStrictEqual(order, ['secretAllow', 'send'], 'remembered first, then sent');
+    ps.out.length = 0;
+
+    // the host's list of allowed hashes: a value in it is not flagged, here or in a new text
+    ps.host({ type: 'secretCheck', enabled: true, ignore: [], allowed: [sha(TOKEN)] });
+    typeIn('again: ' + TOKEN); enter(); await settle();
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'b', text: 'again: ' + TOKEN }], 'an allowed value goes straight through');
+    ps.out.length = 0;
+    const AWS = ['AKIA', 'IOSFODNN7', 'EXAMPLE'].join('');
+    typeIn(TOKEN + ' and ' + AWS); enter(); await settle();
+    assert.deepStrictEqual(sends(), [], 'another value in the same text is still flagged');
+    assert(/\(AWS access key\)/.test(strip().querySelector('.say').textContent), 'and named');
+    assert.deepStrictEqual([i.selectionStart, i.selectionEnd], [TOKEN.length + 5, TOKEN.length + 5 + AWS.length], 'the value that is not allowed is selected');
+    btn('Edit').click();
+
+    // the user's ignore list, from the host
+    ps.host({ type: 'secretCheck', enabled: true, ignore: ['AKIA[A-Z0-9]{16}'], allowed: [sha(TOKEN)] });
+    ps.out.length = 0; enter(); await settle();
+    assert.deepStrictEqual(sends().length, 1, 'a value the ignore list matches in full is not flagged');
+    ps.out.length = 0;
+
+    // editing the text closes the strip: what it said was about other text
+    typeIn('one more ' + AWS.replace('AKIA', 'ASIA')); enter(); await settle(); assert(!hideOf(strip()));
+    typeIn('one more, edited'); assert(hideOf(strip()), 'typing closes the strip');
+    ps.out.length = 0;
+
+    // with perch.secretCheck.enabled off, the message goes at once
+    ps.host({ type: 'secretCheck', enabled: false, ignore: [], allowed: [] });
+    typeIn('fresh ' + ['ghu_', 'Z9y8X7w6V5u4T3s2R1q0', 'P9o8N7m6L5k4J3i2'].join('')); enter();
+    assert.strictEqual(sends().length, 1, 'off: sent at once, with no wait');
+    assert(hideOf(strip()));
+    ps.w.close();
+  }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });

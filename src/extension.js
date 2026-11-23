@@ -74,6 +74,7 @@ function vendorIcons(webview) {
 const MAX_HISTORY = 2000;
 const EXPLORER_TABS = ['sessions', 'skills', 'mcp', 'agents', 'commands'];   // the Perch view's explorer, when it holds no tab
 const EXPLORER_TAB_KEY = 'perch.explorer.tab';
+const SECRET_ALLOWED_KEY = 'perch.secretCheck.allowed';   // SHA-256 hex of each value the user said is not a secret (note 110); never the value
 const MAX_PAST_SHOWN = 1000;   // entries of a switched tab's earlier transcript shown, as sessionStore shows of one record
 const MAX_KEPT_BYTES = 1500000;    // thumbnails saved with a tab, all messages together: about fifty screenshots at 320 px
 // what both agents take as an image. The size is of the base64 text, which is what the services measure.
@@ -2085,6 +2086,42 @@ class PerchView {
   surface(s) { if (!s) return null; if (s.location === 'editor') { const e = this.panels.get(s.id); return e ? { webview: e.panel.webview, ready: e.ready } : null; } return this.sidebar.view ? { webview: this.sidebar.view.webview, ready: this.sidebar.ready } : null; }
   isVisible(s) { if (s.location === 'editor') { const e = this.panels.get(s.id); return !!(e && e.panel.visible); } return this.activeId === s.id && !!(this.sidebar.view && this.sidebar.view.visible !== false); }
 
+  /**
+   * The composer's secret check (note 110), as the pages need it: on or off, the user's ignore expressions that compile
+   * (the others are noted in the tabs), and the hashes of values the user said are not secrets.
+   */
+  secretConfig() {
+    const raw = cfg('secretCheck.ignore'), ignore = [], invalid = [];
+    for (const x of Array.isArray(raw) ? raw : []) {
+      if (typeof x !== 'string' || !x) continue;
+      try { new RegExp(x); ignore.push(x); } catch (_) { invalid.push(x); }
+    }
+    const allowed = this.context.globalState.get(SECRET_ALLOWED_KEY);
+    return { enabled: cfg('secretCheck.enabled') !== false, ignore, invalid, allowed: Array.isArray(allowed) ? allowed : [] };
+  }
+  secretMessage() { const c = this.secretConfig(); return { type: 'secretCheck', enabled: c.enabled, ignore: c.ignore, allowed: c.allowed }; }
+  /** An expression in perch.secretCheck.ignore that does not compile: said once in a tab, and again only if the list changes. */
+  secretNote(s) {
+    const { invalid } = this.secretConfig(), key = JSON.stringify(invalid);
+    if (!invalid.length || s.secretNoted === key) return;
+    s.secretNoted = key;
+    s.post({ kind: 'note', level: 'warn', text: `The secret check skips ${invalid.length === 1 ? 'an expression' : 'expressions'} in perch.secretCheck.ignore that ${invalid.length === 1 ? 'is' : 'are'} not valid: ${invalid.map((x) => JSON.stringify(x)).join(', ')}.` });
+  }
+  secretChanged() { this.raw(this.secretMessage()); for (const s of this.sessions) this.secretNote(s); }
+  async secretAllow(hash) {
+    const h = typeof hash === 'string' ? hash.toLowerCase() : '';
+    if (!/^[0-9a-f]{64}$/.test(h)) return;   // a hash and nothing else, so no value can be stored by mistake
+    const list = this.secretConfig().allowed;
+    if (list.includes(h)) return;
+    await this.context.globalState.update(SECRET_ALLOWED_KEY, list.concat(h));
+    this.raw(this.secretMessage());
+  }
+  async clearSecretExceptions() {
+    await this.context.globalState.update(SECRET_ALLOWED_KEY, []);
+    this.raw(this.secretMessage());
+    vscode.window.showInformationMessage('Perch: the secret check has forgotten every value you said was not a secret.');
+  }
+
   /** To every page: things that are not about one session. */
   raw(msg) {
     if (this.sidebar.ready && this.sidebar.view) this.sidebar.view.webview.postMessage(msg);
@@ -2127,11 +2164,13 @@ class PerchView {
         for (const k of Object.keys(this.commands)) if (this.commands[k].length) to.postMessage({ type: 'commands', kind: k, list: this.commands[k] });
         if (this.ticketProjects.length) to.postMessage({ type: 'ticketProjects', projects: this.ticketProjects });
         if (this.confluenceSite) to.postMessage({ type: 'confluenceSite', url: this.confluenceSite });
+        to.postMessage(this.secretMessage());
         this.loadCatalogs();
         for (const x of mine) { this.replay(x); this.voice.resend(x.id); }
         return;
       }
-      case 'send': if (s) s.send(msg.text, msg.images); return;
+      case 'send': if (s) { this.secretNote(s); s.send(msg.text, msg.images); } return;
+      case 'secretAllow': this.secretAllow(msg.hash); return;   // "Not a secret" in the page's secret check: its SHA-256, never the value
       case 'stop': if (s) s.interrupt(); return;
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision, msg.answers); return;
       case 'unqueue': if (s) s.unqueue(String(msg.qid || '')); return;
@@ -2650,7 +2689,8 @@ function activate(context) {
     vscode.commands.registerCommand('perch.voice.unload', () => perch.voice.unload()),
     vscode.commands.registerCommand('perch.codebaseIndex.toggle', () => perch.toggleSearch()),
     vscode.commands.registerCommand('perch.codebaseIndex.install', () => perch.installSearch()),
-    vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('perch.codebaseIndex')) perch.searchChanged(); }),
+    vscode.commands.registerCommand('perch.clearSecretExceptions', () => perch.clearSecretExceptions()),
+    vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('perch.codebaseIndex')) perch.searchChanged(); if (e.affectsConfiguration('perch.secretCheck')) perch.secretChanged(); }),
     ...(vscode.workspace.onDidChangeWorkspaceFolders ? [vscode.workspace.onDidChangeWorkspaceFolders(() => perch.searchChanged())] : []),   // a folder added or removed: the search covers it, or not, from each tab's next process
     { dispose: () => perch.dispose() },
   );
