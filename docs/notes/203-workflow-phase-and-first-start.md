@@ -183,7 +183,7 @@ The phase, live and on reopening a tab:
 
 ## Built
 
-Branch `feat/phase-pill`, released in 0.7.41 (not yet published). The plan was deleted after commit
+Branch `feat/phase-pill`, [PR #1](https://github.com/seanahn/perch/pull/1), released in 0.7.41 (not yet published). The plan was deleted after commit
 `109ca51`. The README lists the two settings and links here: [README](../../README.md).
 
 ## Checked live
