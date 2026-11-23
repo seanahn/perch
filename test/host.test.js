@@ -1497,6 +1497,11 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'forkPast', key: 'codex:x-old' }); await flush(); await flush();
     assert(/Codex sessions cannot be forked here/.test(m.ui.errors.pop()), 'a Codex row says why');
     assert.strictEqual(m.perch.sessions.length, 2);
+    // a row renamed: asked for the name, written to the agent's record, and the list sent again with it
+    m.ui.inputs.push('  greeting  ');
+    v.fire({ type: 'renamePast', key: 'codex:x-old' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.asked.pop().value, m.store.renamed.pop()], ['hello', ['codex', 'x-old', 'greeting', { dir: process.cwd() }]], 'the box opens on the present name; the record takes the new one');
+    assert.strictEqual(v.past().sessions.find((x) => x.key === 'codex:x-old').title, 'greeting', 'the list, sent again, has the new name');
     // in view again, or asked: the list is read again
     const n = m.store.lists.length;
     v.reveal(); await flush(); await flush();

@@ -794,6 +794,10 @@ assert.deepStrictEqual($$('#past .row').map((r) => !!r.querySelector('.fork')), 
 assert.strictEqual($$('#past .row')[0].querySelector('.fork').title, 'Fork: open a copy of this session in a new tab; this one is left as it is');
 $$('#past .row')[0].querySelector('.fork').click();
 assert.deepStrictEqual(out.splice(0), [{ type: 'forkPast', key: 'claude:c1' }], 'the fork, and not the row\'s own open');
+assert.deepStrictEqual($$('#past .row').map((r) => !!r.querySelector('.rename')), [true, true, true], 'every row can be renamed, Codex\'s too');
+assert.strictEqual($$('#past .row')[1].querySelector('.rename').title, 'Rename this session');
+$$('#past .row')[1].querySelector('.rename').click();
+assert.deepStrictEqual(out.splice(0), [{ type: 'renamePast', key: 'codex:x1' }], 'the rename, and not the row\'s own open');
 $('#past input').value = 'SUPER'; $('#past input').dispatchEvent(new window.Event('input'));
 assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters by name');
 $$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');

@@ -2091,6 +2091,7 @@ class PerchView {
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       case 'pastRefresh': this.sendPast(); return;
+      case 'renamePast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.renamePast(p).then(() => this.sendPast()); return; }
       case 'forkPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.forkPast(p); return; }
       case 'openPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) { this.resumeSession(p); this.sendPast(); } return; }
       case 'subagentUsage': this.subagentUsage(s); return;

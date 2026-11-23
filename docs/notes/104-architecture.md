@@ -313,6 +313,7 @@ The page and the host exchange plain JSON with `postMessage`.
 | `ready` | | The page has loaded and wants a replay |
 | `send` | `sid`, `text` | A message. Queued if the agent is working |
 | `stop` | `sid` | Stop the turn and drop what is queued |
+| `renamePast` | `key` | A row's ✎: the name asked for in an input box, written to the agent's record (or to the open tab's title, which writes it there), and the list sent again (2026-11-23) |
 | `forkPast` | `key` | A Claude row's ⑂: `forkSession` in `src/sessionStore.js` copies the whole conversation into a new session through the Agent SDK, named "… (fork)"; it opens in a new tab with the model, effort, mode and backend of the tab open on the original, if one is, and the original is not touched. Codex's SDK cannot fork, so Codex rows have no button (2026-11-23) |
 | `openPast`, `pastRefresh` | `key` for the first | The sidebar's list of past sessions: open one (a tab on it, or the tab open on it already), or read the list again. The host sends the list as `past` (`sessions`: `key`, `kind`, `title`, `when`, `open`, `file`, the transcript's path, shown when a row is hovered; `failed`: agents whose records could not be read) when the sidebar is ready, comes into view, or asks; the page shows it under the empty state's two buttons, so a sidebar with no tab of its own opens on the sessions to go back to (2026-11-20). The rows are the Sessions command's, from `listSessions` |
 | `unqueue` | `sid`, `qid` | Take a queued message back (the × on its bubble) |
