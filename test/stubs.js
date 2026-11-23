@@ -46,7 +46,7 @@ function storageDir() {
   }
   return storage;
 }
-let fakeQueued = 0;
+let fakeQueued = 0, fakeSkill = 0;
 class FakeAgent {
   constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; this.now = o.model ? 'claude-' + o.model + '-resolved' : knobs.startsOn || 'claude-opus-resolved'; created.push(this); }
   send(t, a, b) {
@@ -70,6 +70,8 @@ class FakeAgent {
     this.answer(t);
   }
   answer(t) {
+    // knobs.skills: Skill calls the next Claude turn makes, each { skill, isError, sub }: the call, then its result
+    if (this.claude && knobs.skills) { for (const k of knobs.skills) { const id = 'sk-' + (++fakeSkill); this.emit({ kind: 'tool_use', id, name: 'Skill', input: { skill: k.skill }, sub: !!k.sub }); this.emit({ kind: 'tool_result', id, text: k.isError ? 'Unknown skill' : 'Launching skill: ' + k.skill, truncated: false, isError: !!k.isError }); } knobs.skills = null; }
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
     if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: this.now }); }

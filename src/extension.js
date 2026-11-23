@@ -16,6 +16,7 @@ const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
+const { phaseOfSkill, skillOfSlash } = require('./phase');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
@@ -333,6 +334,8 @@ class Session {
     this.handoff = handoff && typeof handoff.text === 'string' ? handoff : null;   // the earlier conversation, sent ahead of the first message after a switch
     this.records = Array.isArray(records) ? records.filter((r) => typeof r === 'string' && r) : [];   // sentences for the record (a PR merged: perch.notePrMerged), sent with the next message
     this.recordsSent = 0;            // how many of them the running turn carries: let go as it ends, sent again if it never got going
+    this.phase = null;               // claude only: the workflow phase, { phase, skill } (src/phase.js); in memory only, read back from the record
+    this.skillCalls = new Map();     // claude only: the main conversation's workflow Skill calls awaiting their result, id -> skill
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
@@ -368,15 +371,17 @@ class Session {
    * went, each record cut where the tab came back to it (Handoff.stretches), with the divider at each switch.
    */
   async loadPeriods() {
-    const records = new Map();
+    const records = new Map(), phases = new Map();
     try {
       for (const p of this.periods) {
         const key = p.kind + ':' + p.resume;
         if (!p.resume || records.has(key)) continue;
         const past = await loadTranscript(p.kind, p.resume, { dir: this.workdir(), limit: Infinity });
-        records.set(key, Handoff.stretches(past.events));
+        records.set(key, Handoff.stretches(past.events)); phases.set(key, past.phase || null);
       }
     } catch (_) { return; }   // the note stays: the agents have the transcript, the page does not
+    const now = this.periods[this.periods.length - 1];
+    if (!this.disposed && now.kind === this.kind && now.resume === this.agentSessionId) this.recordPhase(phases.get(now.kind + ':' + now.resume));   // the phase of the session the tab is on now
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0) return;
     const events = [];
@@ -439,6 +444,9 @@ class Session {
     this.own = kind === 'claude' && back && (back.own === 'subscription' || back.own === 'api') ? back.own : '';
     this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
     this.context = null; this.respondedAt = 0; this.collab.clear(); this.queue = []; this.shown = []; this.via = {}; this.lastVia = ''; this.viaQueue = [];
+    // no phase on Codex, nor on a new Claude thread; back on a Claude session, the phase its record has
+    this.phase = null; this.skillCalls.clear();
+    if (kind === 'claude' && this.agentSessionId) this.loadPhase(this.agentSessionId);
     this.reconcile();
     // where the conversation goes: from one company's service, or account, to another's. Said on the divider; marked when it
     // leaves an account of the user's own (Bedrock, a gateway) for a vendor's service
@@ -479,6 +487,7 @@ class Session {
   /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
   async loadPast(id) {
     let past; try { past = await loadTranscript(this.kind, id, { dir: this.workdir() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
+    if (!this.disposed && past && this.agentSessionId === id) this.recordPhase(past.phase);
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0 || !past || !past.events.length) return;
     // the transcript speaks for itself; only what is missing from it is said, where it is missing
@@ -494,6 +503,32 @@ class Session {
 
   /** The folder this tab's agent runs in: its own, else the window's. */
   workdir() { return this.dir || cwd(); }
+
+  // ---- the workflow phase (note 203): Claude only, the main conversation only
+
+  /** A workflow skill has run, or the user started one: the phase is its phase. Any other skill leaves the phase as it is. */
+  setPhase(skill) {
+    const phase = this.kind === 'claude' ? phaseOfSkill(skill) : null;
+    if (!phase || (this.phase && this.phase.phase === phase && this.phase.skill === skill)) return;
+    this.phase = { phase, skill };
+    this.view.sendTabs();
+  }
+  /** The phase a session's record has (loadTranscript), unless the tab has one already from what happened since it opened. */
+  recordPhase(found) {
+    if (this.kind !== 'claude' || this.phase || !found || !found.phase) return;
+    this.phase = { phase: found.phase, skill: found.skill };
+    this.view.sendTabs();
+  }
+  /** Back on a Claude session after a stretch on Codex: its phase, read from its whole record. */
+  async loadPhase(id) {
+    let past; try { past = await loadTranscript('claude', id, { dir: this.workdir(), limit: 0 }); } catch (_) { return; }   // no phase shown: the record could not be read
+    if (!this.disposed && this.kind === 'claude' && this.agentSessionId === id && past) this.recordPhase(past.phase);
+  }
+  /** A Skill call of the main conversation counts once its result is in and is not an error. */
+  watchSkill(ev) {
+    if (ev.kind === 'tool_use' && ev.name === 'Skill' && !ev.sub && ev.input && phaseOfSkill(ev.input.skill)) this.skillCalls.set(ev.id, ev.input.skill);
+    else if (ev.kind === 'tool_result' && this.skillCalls.has(ev.id)) { const skill = this.skillCalls.get(ev.id); this.skillCalls.delete(ev.id); if (!ev.isError) this.setPhase(skill); }
+  }
 
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
 
@@ -586,6 +621,7 @@ class Session {
   }
 
   post(ev) {
+    if (this.kind === 'claude' && (ev.kind === 'tool_use' || ev.kind === 'tool_result')) this.watchSkill(ev);   // the workflow phase (note 203)
     // Codex's own word that its ChatGPT login was refused (revoked, invalidated, ended): acted on once the error is shown
     const refusedLogin = ev.kind === 'error' && this.kind === 'codex' && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && codexAuth.refused(ev.text);
     // Codex's Linux sandbox is bubblewrap, which needs user namespaces; a container that forbids them fails every command this way
@@ -838,6 +874,7 @@ class Session {
       return;
     }
     const agent = this.ensureAgent();
+    if (this.kind === 'claude') this.setPhase(skillOfSlash(text));   // a workflow skill the user starts with its slash command
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
     const ctx = this.ide ? ideContext(this.workdir()) : null;
@@ -1073,6 +1110,7 @@ class Session {
       background: this.background || [],   // Claude's tasks that run on between turns (a command or agent in the background)
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
+      phase: this.kind === 'claude' ? this.phase : null,   // the workflow phase, for the footer's pill (note 203)
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : this.own, this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };

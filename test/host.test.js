@@ -3520,5 +3520,55 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     n.perch.dispose();
   }
 
+  // ---- each Claude tab's workflow phase (note 203): from main-thread Skill calls whose result is ok, from the user's slash
+  // commands, and from the session's whole record when the tab reopens or comes back to it; never saved with the tab
+  {
+    const m = install(undefined, { past: { transcripts: {} } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    assert.strictEqual(v.tab(c).phase, null, 'no workflow skill yet: no phase');
+    // skill sets the phase once its result is ok
+    knobs.skills = [{ skill: 'trivialpowers:brainstorming' }];
+    v.fire({ type: 'send', sid: c, text: 'design the flush fix' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' });
+    knobs.skills = [{ skill: 'trivialpowers:writing-plans', isError: true }, { skill: 'trivialpowers:test-driven-development' }];
+    v.fire({ type: 'send', sid: c, text: 'plan it' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' }, 'a failed call, and a skill of no phase, leave it');
+    // sub-agent skill calls do not move the phase
+    knobs.skills = [{ skill: 'trivialpowers:executing-plans', sub: true }];
+    v.fire({ type: 'send', sid: c, text: 'build it with a sub-agent' }); await flush();
+    assert.strictEqual(v.tab(c).phase.phase, 'Design', 'a sub-agent\'s call is its own conversation\'s');
+    // a slash command sets the phase
+    v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' });
+    const s = m.perch.get(c), id1 = s.agentSessionId;
+    assert(!('phase' in m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c)), 'not saved with the tab');
+    // codex stretch hides the pill, return restores it: from the record, as the tab comes back to that session
+    m.store.transcripts[id1] = { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };
+    assert(s.switchVendor('codex')); await flush();
+    assert.deepStrictEqual([v.tab(c).kind, v.tab(c).phase, s.phase], ['codex', null, null], 'Codex has no phase');
+    assert(s.switchVendor('claude')); await flush(); await flush();
+    assert.strictEqual(s.agentSessionId, id1);
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Build', skill: 'executing-plans' }, 'the phase of the session it is back on, from its record');
+    // a new Claude thread starts with no phase
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    const sx = m.perch.get(x); sx.phase = { phase: 'Plan', skill: 'writing-plans' };   // as if left over
+    assert(sx.switchVendor('claude')); await flush();
+    assert.deepStrictEqual([sx.agentSessionId, v.tab(x).phase], [null, null]);
+    // reopened tab gets its phase from the record: one stretch (loadPast), and one that has been on both vendors (loadPeriods)
+    const dump = m.memento._dump(), tabs = dump['perch.sessions.v1'].sessions;
+    tabs.push(Object.assign({}, tabs.find((t) => t.id === c), { id: 'P2', resume: 'cl-2', periods: [{ kind: 'claude', resume: 'cl-2', said: true }, { kind: 'codex', resume: 'cx-2', said: true }, { kind: 'claude', resume: 'cl-2', said: true }] }));
+    const r = install(dump, { past: { transcripts: {
+      [id1]: { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 3, phase: { phase: 'Finish', skill: 'finishing-a-development-branch' } },
+      'cl-2': { events: [{ kind: 'user', text: 'one', queued: false }], earlier: 0, phase: { phase: 'Design', skill: 'brainstorming' } },
+      'cx-2': { events: [{ kind: 'user', text: 'two', queued: false }], earlier: 0, phase: null },
+    } } }); await flush();
+    const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(vr.tab(c).phase, { phase: 'Finish', skill: 'finishing-a-development-branch' });
+    assert.deepStrictEqual(vr.tab('P2').phase, { phase: 'Design', skill: 'brainstorming' });
+    assert.strictEqual(vr.tab(x).phase, null, 'a tab with no workflow skill on record has none');
+    r.perch.dispose(); m.perch.dispose();
+  }
+
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

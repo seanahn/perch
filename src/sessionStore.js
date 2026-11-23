@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const { newestRollouts } = require('./codexMeter');
 const { fallbackNote } = require('./models');
+const { phaseFromEvents } = require('./phase');
 
 const MAX_TITLE = 80;
 const HEAD_BYTES = 256 * 1024;   // a rollout opens with its instructions; the first message follows within this
@@ -618,11 +619,12 @@ function codexRollout(id, home) {
 
 /**
  * What was said in a past session, newest `limit` entries of it.
- * @returns {Promise<{ events: object[], earlier: number }>}  `earlier` counts the entries before those returned
+ * @returns {Promise<{ events: object[], earlier: number, phase: {phase: string, skill: string}|null }>}  `earlier` counts the
+ *   entries before those returned; `phase` is the workflow phase of the whole record (src/phase.js), Claude only
  */
 async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.codex'), claudeDir, sdk, limit = MAX_PAST } = {}) {
   let events = [];
-  if (!id) return { events, earlier: 0 };
+  if (!id) return { events, earlier: 0, phase: null };
   if (kind === 'claude') {
     const messages = await (sdk || await claudeSdk()).getSessionMessages(id, Object.assign(dir ? { dir } : {}, { includeSystemMessages: true }));
     // a notice comes back as its place in the conversation, without its words: those are read from the session's own file
@@ -630,8 +632,9 @@ async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.
     events = claudeEvents(messages, notes);
   }
   else if (kind === 'codex') { const file = codexRollout(id, home); if (file) { const text = fs.readFileSync(file, 'utf8'); events = addSubagentUsage(codexEvents(text), home, { text }); } }
+  const phase = kind === 'claude' ? phaseFromEvents(events) : null;   // read before the cut: the skill may be long before what is shown
   const earlier = Math.max(0, events.length - limit);
-  return { events: earlier ? events.slice(earlier) : events, earlier };
+  return { events: earlier ? events.slice(earlier) : events, earlier, phase };
 }
 
 /**

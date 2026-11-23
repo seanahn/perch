@@ -154,16 +154,26 @@ function rollout(home, day, id, lines, mtime) {
   assert.deepStrictEqual([S.codexEvents(''), S.codexEvents(null), S.claudeEvents(null)], [[], [], []]);
 
   rollout(home, '2026-09-25', 'hhh', roll, NOW - 6 * D);
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home }), { events: expected, earlier: 0 });
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home, limit: 3 }), { events: expected.slice(5), earlier: 5 }, 'the most recent, and how many came before');
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hh', { home }), { events: [], earlier: 0 }, 'an id is matched whole');
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'gone', { home: path.join(home, 'nowhere') }), { events: [], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home }), { events: expected, earlier: 0, phase: null });
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home, limit: 3 }), { events: expected.slice(5), earlier: 5, phase: null }, 'the most recent, and how many came before');
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hh', { home }), { events: [], earlier: 0, phase: null }, 'an id is matched whole');
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'gone', { home: path.join(home, 'nowhere') }), { events: [], earlier: 0, phase: null });
   const asked = [];
   const reader = { getSessionMessages: async (...a) => { asked.push(a); return [U('hi'), A([{ type: 'text', text: 'hello' }])]; } };
-  assert.deepStrictEqual(await S.loadTranscript('claude', 'c-1', { dir: '/w', sdk: reader }), { events: [{ kind: 'user', text: 'hi', queued: false }, { kind: 'text', text: 'hello' }], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('claude', 'c-1', { dir: '/w', sdk: reader }), { events: [{ kind: 'user', text: 'hi', queued: false }, { kind: 'text', text: 'hello' }], earlier: 0, phase: null });
   assert.deepStrictEqual(asked, [['c-1', { dir: '/w', includeSystemMessages: true }]], 'with the system records too: where Claude Code\'s notices were said');
-  assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0, phase: null });
   await assert.rejects(S.loadTranscript('claude', 'c-1', { sdk: { getSessionMessages: async () => { throw new Error('unreadable'); } } }), /unreadable/);
+  // phase found beyond the shown transcript: the phase is the whole record's, read before the cut
+  {
+    const many = [A([{ type: 'tool_use', id: 'sk', name: 'Skill', input: { skill: 'x:writing-plans' } }]), U([{ type: 'tool_result', tool_use_id: 'sk', content: 'Launching skill', is_error: false }])];
+    for (let i = 0; i < 599; i++) many.push(U('step ' + i), A([{ type: 'text', text: 'ok ' + i }]));
+    assert.strictEqual(many.length, 1200);
+    const r = await S.loadTranscript('claude', 'c-long', { sdk: { getSessionMessages: async () => many }, limit: 1000 });
+    assert(r.earlier > 0, 'the skill call is not among the entries shown');
+    assert.deepStrictEqual(r.phase, { phase: 'Plan', skill: 'x:writing-plans' });
+    assert.strictEqual((await S.loadTranscript('codex', 'hhh', { home })).phase, null, 'Codex has no phase');
+  }
 
   // ---- a Claude session's usage, thread by thread: the main thread from the session's file, each sub-agent from its own
   // under <id>/subagents/ with a meta file naming it; a response counts once however many records carry it
@@ -240,7 +250,7 @@ function rollout(home, day, id, lines, mtime) {
       const reader2 = { getSessionMessages: async () => [U('scan this'), Sys('s1'), Sys('s2'), A([{ type: 'text', text: 'Done.' }]), Sys('s9')] };
       assert.deepStrictEqual(await S.loadTranscript('claude', 'c-2', { dir: '/w', sdk: reader2, claudeDir }), { events: [
         { kind: 'user', text: 'scan this', queued: false }, { kind: 'note', level: 'warn', text: NOTICE }, { kind: 'text', text: 'Done.' },
-      ], earlier: 0 }, 'the notice where it was said; any other system record says nothing');
+      ], earlier: 0, phase: null }, 'the notice where it was said; any other system record says nothing');
     } finally { fs.rmSync(claudeDir, { recursive: true, force: true }); }
   }
 
