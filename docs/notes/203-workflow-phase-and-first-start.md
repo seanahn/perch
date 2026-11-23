@@ -102,8 +102,9 @@ A boolean, default `false`. When Perch activates and finds it `true`:
 2. If no Perch tab is open anywhere (in an editor or the sidebar), open a new Claude tab (on the backend item 2 gives it) in an editor group
    to the right of the active one, creating that group; Perch locks it as it locks any group holding only its
    tabs (`perch.lockGroup`).
-3. Keep the left group: if it would be closed for being empty, leave it with VS Code's empty-group watermark;
-   only if VS Code will not keep an empty group, give it one empty, unsaved untitled editor.
+3. Keep a group on the left: if the window has a single group once the tab is open, make an empty group to its
+   left (VS Code's empty-group watermark); only if VS Code keeps no second group, open one empty, unsaved untitled
+   editor and move it to a group on the left. The Perch tab has the focus at the end.
 **Write `false`; never remove the key**, or an installer that rewrites only missing keys would set it back to
 `true` on its next run. Writing before opening also keeps two windows that start together from both opening a
 tab, short of a near-simultaneous start.
@@ -158,8 +159,11 @@ The phase, live and on reopening a tab:
   only; `loadTranscript` computes it over the session's whole record, before the shown transcript is cut.
 - Tool calls carry whether they came from a sub-agent (`sub`), so the live stream can ignore them as the
   replayed record already does.
-- The first-start check runs after the restore grace period, so a tab VS Code brings back counts as open. The
-  untitled editor is opened only when, after the Perch tab opens beside, the window has a single editor group.
+- The first-start check runs after the restore grace period, so a tab VS Code brings back counts as open. When,
+  after the Perch tab opens beside, the window has a single editor group, `workbench.action.newGroupLeft` makes an
+  empty group on its left; only if a single group still remains is an empty untitled editor opened (not a preview)
+  and moved left with `workbench.action.moveEditorToLeftGroup`. Either way the Perch tab is focused last. If the new
+  tab does not show among the groups within a second, this step is skipped and said in Perch's output.
 - The setting is written back at the scope that held `true` (user, workspace or folder).
 
 Plan: `docs/superpowers/plans/2026-11-23-phase-pill-and-first-start.md` (deleted when the work merges).

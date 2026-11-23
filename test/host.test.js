@@ -1645,14 +1645,43 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       m.perch.dispose();
     }
 
-    // the window has a single group once the tab is open: an empty untitled editor on the left, focus back on the Perch tab
+    // the window has a single group once the tab is open: a new empty group on the left, with VS Code's watermark; only
+    // if none is kept, an empty untitled editor moved to the left. The Perch tab has the focus last, and the untitled
+    // editor never stays in its group
+    const watchSteps = (m) => {
+      const steps = [], at = { untitled: null }, run = m.vscode.commands.executeCommand, show = m.vscode.window.showTextDocument, open = m.vscode.window.createWebviewPanel;
+      m.vscode.commands.executeCommand = (id, ...a) => { if (id.includes('Group') && id !== 'workbench.action.lockEditorGroup') steps.push(id); if (id === 'workbench.action.moveEditorToLeftGroup' && at.untitled === 'perch') at.untitled = 'left'; return run(id, ...a); };
+      m.vscode.window.showTextDocument = (doc, o) => { steps.push(doc.isUntitled ? 'show untitled' : 'show file'); if (doc.isUntitled) at.untitled = o && o.viewColumn === m.vscode.ViewColumn.Active ? 'perch' : String(o && o.viewColumn); return show(doc, o); };
+      m.vscode.window.createWebviewPanel = (...a) => { const p = open(...a); const reveal = p.reveal; p.reveal = function (...r) { steps.push('reveal perch'); return reveal.apply(this, r); }; return p; };
+      return { steps, at };
+    };
     {
-      const m = fresh({ config: { [KEY]: true } }); await settle();
+      const m = install(undefined, { config: { [KEY]: true }, commandAnswers: { 'workbench.action.newGroupLeft': () => { m.ui.addedGroups.push({ viewColumn: 1, tabs: [] }); } } });
+      const { steps } = watchSteps(m); await settle();
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.deepStrictEqual(steps, ['workbench.action.newGroupLeft', 'reveal perch'], 'an empty group on the left, then the Perch tab focused');
+      assert.strictEqual(m.ui.untitled.length, 0, 'the kept group needs no untitled editor');
+      assert.strictEqual(m.ui.panels.find((p) => !p.disposed).active, true);
+      m.perch.dispose();
+    }
+    {
+      const m = fresh({ config: { [KEY]: true } }); const { steps, at } = watchSteps(m); await settle(); await wait(1300);   // newGroupLeft adds nothing here: the wait for a second group runs out
       assert.strictEqual(m.perch.sessions.length, 1);
       assert.strictEqual(m.ui.untitled.length, 1, 'one untitled editor');
-      assert.deepStrictEqual(m.ui.shown.map(([d, o]) => [d.isUntitled, o]), [[true, { viewColumn: m.vscode.ViewColumn.One, preview: false }]]);
-      const panel = m.ui.panels.find((p) => !p.disposed);
-      assert.deepStrictEqual([panel.active, panel.reveals], [true, 1], 'the Perch tab has the focus again');
+      assert.deepStrictEqual(m.ui.shown.map(([d, o]) => [d.isUntitled, o.preview]), [[true, false]], 'not a preview');
+      assert.deepStrictEqual(steps.slice(steps.indexOf('show untitled')), ['show untitled', 'workbench.action.moveEditorToLeftGroup', 'reveal perch'], 'moved left, then the Perch tab focused last');
+      assert.strictEqual(steps[0], 'workbench.action.newGroupLeft', 'the empty group was tried first');
+      assert.strictEqual(at.untitled, 'left', 'the untitled editor does not stay in the Perch tab\'s group');
+      assert.strictEqual(m.ui.panels.find((p) => !p.disposed).active, true);
+      m.perch.dispose();
+    }
+    // the tab never shows among the groups within the wait: said in Perch's output, and the groups are left alone
+    {
+      const m = fresh({ config: { [KEY]: true } }); m.ui.groups = [{ viewColumn: 1, tabs: [] }]; const { steps } = watchSteps(m);
+      await settle(); await wait(1300);
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.deepStrictEqual([steps, m.ui.untitled.length], [[], 0], 'no group made, no untitled editor');
+      assert(m.ui.traces.some((l) => /did not show among the editor groups/.test(l)), 'traced');
       m.perch.dispose();
     }
 
@@ -1669,6 +1698,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     {
       const m = fresh({ config: { [KEY]: true } }); m.ui.failConfigUpdate = 'Unable to write to User Settings: a policy sets it'; await settle();
       assert.deepStrictEqual([m.perch.sessions.length, m.ui.panels.length, m.ui.errors.length, m.ui.warnings.length], [0, 0, 0, 0], 'no tab, no message');
+      assert(m.ui.traces.some((l) => l.includes('perch.firstStart.openClaudeTab could not be set back to false') && l.includes('a policy sets it')), 'said in Perch\'s output');
       m.perch.dispose();
     }
 

@@ -1940,15 +1940,22 @@ class PerchView {
     if (this.closing || this.sessions.length) return;
     const s = this.addSession('claude', { location: 'editor' });   // beside the active group: column() has no Perch tab to follow
     if (!s) return;
-    // VS Code tells the extension of the new tab a moment later; then, with a single group left, the left one did not
-    // stay, and an empty untitled editor takes its place
+    // VS Code tells the extension of the new tab, and of a group made or closed, a moment later
     const groups = () => (vscode.window.tabGroups && vscode.window.tabGroups.all) || [];
-    for (let n = 0; n < 20 && !groups().some((g) => (g.tabs || []).some(isPerchTab)); n++) await new Promise((r) => setTimeout(r, 50));
+    const until = async (ok) => { for (let n = 0; n < 20 && !ok(); n++) await new Promise((r) => setTimeout(r, 50)); return ok(); };
+    if (!(await until(() => groups().some((g) => (g.tabs || []).some(isPerchTab))))) { this.trace('the first Claude tab did not show among the editor groups within a second: the left group is left as it is'); return; }
     if (this.closing || groups().length !== 1) return;
+    // the left group did not stay: an empty one, with VS Code's watermark; failing that, an empty untitled editor moved left
+    const focusTab = () => { const e = this.panels.get(s.id); if (e) e.panel.reveal(undefined, false); };
     try {
-      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(), { viewColumn: vscode.ViewColumn.One, preview: false });
-      const e = this.panels.get(s.id); if (e) e.panel.reveal(undefined, false);
-    } catch (e) { this.trace(`no untitled editor beside the first Claude tab: ${(e && e.message) || e}`); }
+      await Promise.resolve(vscode.commands.executeCommand('workbench.action.newGroupLeft')).catch(() => { /* an untitled editor instead */ });
+      if (this.closing) return;
+      if (await until(() => groups().length > 1)) { focusTab(); return; }
+      focusTab();
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(), { viewColumn: vscode.ViewColumn.Active, preview: false });
+      await vscode.commands.executeCommand('workbench.action.moveEditorToLeftGroup');
+      focusTab();
+    } catch (e) { this.trace(`no group kept left of the first Claude tab: ${(e && e.message) || e}`); focusTab(); }
   }
 
   /**
