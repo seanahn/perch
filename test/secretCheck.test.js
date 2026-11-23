@@ -2,7 +2,8 @@
 // The composer's secret check (note 110): which rules match what, what is left alone, and the ignore list. The samples
 // are put together here from pieces, so the source holds no whole key a scanner would stop.
 const assert = require('assert');
-const { RULES, findSecrets, entropy } = require('../src/secretCheck');
+const { RULES, findSecrets, entropy, sha256Hex } = require('../src/secretCheck');
+const nodeSha = (x) => require('crypto').createHash('sha256').update(x, 'utf8').digest('hex');
 
 const j = (...parts) => parts.join('');
 const RANDOM40 = j('Zq8vN2kLp4Rt', 'X7wYb1Hc9Ue3', 'Jm5Gd0Fs6Ka8', 'Qx2T');   // 40 mixed characters, no structure
@@ -29,6 +30,8 @@ const samples = [
   ['Private key', j('-----BEGIN ', 'RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7x', RANDOM40, '\n-----END RSA ', 'PRIVATE KEY-----')],
   ['Private key', j('-----BEGIN ', 'OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU')],
   ['Password in a URL', 'postgres://admin:' + j('hunter', '2Secret') + '@db.internal:5432/app'],
+  ['Password in a URL', 'redis://:' + j('r3dis', 'Pa55') + '@cache.internal:6379/0'],
+  ['Private key', j('-----BEGIN PGP ', 'PRIVATE KEY BLOCK-----\n\nlQOYBF', RANDOM40, '\n-----END PGP ', 'PRIVATE KEY BLOCK-----')],
   ['Secret assignment', 'password=' + j('correct', 'horse')],
   ['Secret assignment', 'export GITHUB_TOKEN="' + j('abc', 'def123') + '"'],
   ['Secret assignment', '{ "api_key": "' + j('k3y-', 'value-99') + '" }'],
@@ -44,7 +47,8 @@ for (const [name, text] of samples) {
 }
 // where the value is part of a larger match, the value is what is marked: the password, the assigned value
 assert.strictEqual(findSecrets(samples[13][1])[0].value, j('hunter', '2Secret'), 'the password in a URL, not the whole URL');
-assert.strictEqual(findSecrets(samples[16][1])[0].value, j('k3y-', 'value-99'), 'the assigned value, without its quotes');
+assert.strictEqual(findSecrets(samples[18][1])[0].value, j('k3y-', 'value-99'), 'the assigned value, without its quotes');
+assert.strictEqual(findSecrets(samples[14][1])[0].value, j('r3dis', 'Pa55'), 'a password with no user name');
 // a token in an assignment is named for what it is, once
 assert.deepStrictEqual(names('GITHUB_TOKEN=' + samples[2][1]), ['GitHub token'], 'the specific rule wins, and the assignment does not repeat it');
 // two different secrets: both, in order
@@ -64,6 +68,33 @@ const clean = [
   ['password: and nothing at all', 'password:'],
   ['a short token', 'token=abc'],
   ['a long identifier', 'ComponentDidUpdateLifecycleHandlerFactoryProvider'],
+  // everyday code that names a secret without holding one
+  ['a type annotation', 'password: string;'],
+  ['a token type', 'token: string'],
+  ['a boolean flag', 'secret: boolean,'],
+  ['an environment read', 'const password = process.env.DB_PASSWORD;'],
+  ['a shell variable', 'curl -H token=${GITHUB_TOKEN} https://api.example.com'],
+  ['a Python Optional', 'def login(user: str, password: Optional[str] = None):'],
+  ['a Python os.environ', 'secret = os.environ["APP_SECRET"]'],
+  ['an env. read', 'api_key: env.OPENAI_API_KEY'],
+  ['a template value', 'token: {{ secrets.DEPLOY_TOKEN }}'],
+  ['a path value', 'pwd: /home/someone/projects'],
+  ['a redacted value', '{ "token": "<redacted>" }'],
+  ['a None value', 'token = None'],
+  ['a List type', 'tokens: List[str]; token: List[str]'],
+  // identifiers and paths that hold a digit
+  ['a camelCase identifier with a digit', 'handleOAuth2CallbackRedirectForProvider'],
+  ['another', 's3BucketNameForArtifactStorageV2'],
+  ['a relative file path', 'see src/components/Dashboard/WidgetContainer2.tsx for it'],
+  ['a node_modules path', 'node_modules/@anthropic-ai/claude-agent-sdk/dist/esm/index2.js'],
+  ['a host and path', 'github.com/seanahn/perch/blob/main/docs/notes/110-features.md'],
+  ['a Kubernetes label', 'app.kubernetes.io/instance=perch-7f9c8d6b5a-x2k4zq9wr7tlm3'],
+  ['a date slug', '2026-11-23-secret-check-review-notes-v2'],
+  ['a snake_case name', 'test_secret_check_handles_snake_case_names_v2'],
+  ['an npm integrity value', '"integrity": "sha512-' + j('Zq8vN2kLp4RtX7wYb1Hc9Ue3Jm5Gd0Fs6Ka8Qx2T', 'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF') + '=="'],
+  ['a sha384 integrity value', 'integrity="sha384-' + RANDOM40 + '"'],
+  ['a data: URI', 'src="data:image/png;base64,' + RANDOM40 + RANDOM40 + '"'],
+  ['sk- in a package name', 'sk-learn-preprocessing-pipeline-docs'],
 ];
 for (const [what, text] of clean) assert.deepStrictEqual(names(text), [], 'not flagged: ' + what);
 
@@ -74,6 +105,11 @@ assert.deepStrictEqual(names(trace, { ignore: ['TRC[0-9A-Za-z]{33}'] }), [], 'ma
 assert.deepStrictEqual(names(trace, { ignore: ['TRC'] }), ['Random-looking string'], 'matched only in part: still flagged');
 assert.deepStrictEqual(names(trace, { ignore: ['(unclosed', 'TRC.*'] }), [], 'an invalid expression is skipped, the others still apply');
 assert.deepStrictEqual(names(samples[2][1], { ignore: ['nothing'] }), ['GitHub token'], 'an ignore that does not match changes nothing');
+assert.deepStrictEqual(names('token=' + RANDOM40, { ignore: [RANDOM40] }), [], 'an ignored value keeps its place: the random rule does not flag it again');
+const long = j('Zq8vN2kLp4Rt', 'X7wYb1Hc9Ue3').repeat(50);   // 1200 characters
+assert.deepStrictEqual(names('x ' + long + ' y', { ignore: ['[A-Za-z0-9]+'] }), ['Random-looking string'], 'a value over 512 characters is not matched against the ignore list');
+// sk- needs a digit or mixed case after it
+assert.deepStrictEqual(names('sk-' + j('abcdefghij', 'klmnopqrst', 'uv1')), ['Anthropic / OpenAI key'], 'with a digit');
 
 // ---- entropy
 assert.strictEqual(entropy(''), 0);
@@ -83,12 +119,21 @@ assert(Math.abs(entropy('0123456789abcdef') - 4) < 1e-9, '16 different character
 const lowButLong = 'ab12'.repeat(10);   // 40 characters, 2 bits each
 assert.deepStrictEqual(names('x ' + lowButLong + ' y'), [], 'long but repetitive: below the threshold');
 assert(entropy(RANDOM40) >= 4, 'the random sample is above it');
-const atThreshold = 'abcdefghijklmn01'.repeat(2);    // 32 characters, 16 different, evenly: 4 bits exactly
+const atThreshold = 'aZ3kQ9xW1mR7pL5t'.repeat(2);    // 32 characters, 16 different, evenly: 4 bits exactly
 assert(Math.abs(entropy(atThreshold) - 4) < 1e-9);
 assert.deepStrictEqual(names('x ' + atThreshold + ' y'), ['Random-looking string'], '4.0 bits per character is enough');
-const underThreshold = 'abcdefghijklmn0'.repeat(3);   // 45 characters, 15 different: about 3.91 bits
+const underThreshold = 'aZ3kQ9xW1mR7pL5'.repeat(3);   // 45 characters, 15 different: about 3.91 bits
 assert(entropy(underThreshold) < 4);
 assert.deepStrictEqual(names('x ' + underThreshold + ' y'), [], 'just under 4.0 is not');
 assert.deepStrictEqual(names('x ' + atThreshold.slice(0, 31) + ' y'), [], 'and 31 characters are too short');
+
+// ---- SHA-256, in plain JavaScript, so the page needs no crypto.subtle (code-server over http has none)
+for (const x of ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'a'.repeat(1000), 'héllo wörld ✓ 🔑', RANDOM40]) assert.strictEqual(sha256Hex(x), nodeSha(x), 'sha256Hex agrees with node for ' + JSON.stringify(x.slice(0, 20)) + ' (' + x.length + ')');
+
+// ---- no slow inputs: long runs of the characters the rules repeat over
+for (const [what, big] of [['dots', 'a.'.repeat(50000)], ['hyphens and pluses', 'a-b+'.repeat(25000)], ['one long word', 'x'.repeat(100000)], ['mixed', 'Ab1-'.repeat(25000)], ['spaces and colons', 'a: '.repeat(33334)]]) {
+  const t0 = Date.now(); findSecrets(big); const ms = Date.now() - t0;
+  assert(ms < 200, '100K characters of ' + what + ' in under 200 ms: ' + ms + ' ms');
+}
 
 console.log('SECRET CHECK OK');
