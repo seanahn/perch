@@ -43,6 +43,7 @@ Each is one file of several former notes, a section each that keeps its number: 
 Proposals:
 
 - [201 — Codebase indexing for Perch tabs](201-codebase-indexing.md)
+- [203 — The workflow phase pill, and settings an installer can set](203-workflow-phase-and-first-start.md)
 
 Guides:
 
