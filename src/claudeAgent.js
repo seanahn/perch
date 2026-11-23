@@ -345,6 +345,12 @@ class ClaudeAgent {
     this._context();
   }
 
+  /** Each MCP server of this process, as Claude Code reports it: [{ name, status }], or [] when it cannot say. */
+  async mcpStatus() {
+    if (!this.query || typeof this.query.mcpServerStatus !== 'function') return [];
+    try { return ((await this.query.mcpServerStatus()) || []).map((x) => ({ name: String(x.name || ''), status: String(x.status || '') })); } catch (_) { return []; }
+  }
+
   dispose() { this.queue.close(); this.abort.abort(); if (this.relay) { this.relay.stop(); this.relay = null; } }
 }
 

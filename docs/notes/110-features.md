@@ -348,7 +348,7 @@ until a button asks (`meterRefresh`, `meterLogin`, `openExternal`). One
 of the footer's three panels is open at a time, and Escape closes it
 before it reaches the composer.
 
-**The workflow phase (0.7.37).** Under a Claude tab, after the backend pill, a pill names the phase
+**The workflow phase (0.7.41).** Under a Claude tab, after the backend pill, a pill names the phase
 (Design, Plan, Build, Finish) of a skill-driven workflow the conversation is in; its hover card lists the
 four with the current one marked. Two settings serve an installer that prepares a machine:
 `perch.claude.defaultBackend` (`gateway` starts new Claude tabs on the gateway until a backend is chosen)

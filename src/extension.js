@@ -13,7 +13,7 @@ const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
-const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
+const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
 const { phaseOfSkill, skillOfSlash, resolveSkill } = require('./phase');
@@ -72,6 +72,8 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+const EXPLORER_TABS = ['sessions', 'skills', 'mcp', 'agents', 'commands'];   // the Perch view's explorer, when it holds no tab
+const EXPLORER_TAB_KEY = 'perch.explorer.tab';
 const MAX_PAST_SHOWN = 1000;   // entries of a switched tab's earlier transcript shown, as sessionStore shows of one record
 const MAX_KEPT_BYTES = 1500000;    // thumbnails saved with a tab, all messages together: about fifty screenshots at 320 px
 // what both agents take as an image. The size is of the base64 text, which is what the services measure.
@@ -2175,6 +2177,9 @@ class PerchView {
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       case 'pastRefresh': this.sendPast(); return;
+      case 'explorerTab': if (EXPLORER_TABS.includes(msg.tab)) this.context.globalState.update(EXPLORER_TAB_KEY, msg.tab); return;   // the tab the explorer shows, for next time
+      case 'renamePast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.renamePast(p).then(() => this.sendPast()); return; }
+      case 'forkPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.forkPast(p); return; }
       case 'openPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) { this.resumeSession(p); this.sendPast(); } return; }
       case 'subagentUsage': this.subagentUsage(s); return;
       case 'indexStatus': this.indexStatus(s); return;
@@ -2442,7 +2447,7 @@ class PerchView {
   }
 
   /**
-   * The sidebar's list of past sessions, both agents', of this folder: what it shows when it holds no tab of its own, so the
+   * The sidebar's list of past sessions, both agents', of this folder, and the skills Claude Code loads here (src/skills.js): what it shows when it holds no tab of its own, so the
    * Perch icon in the activity bar opens on the sessions to go back to. The rows are the Sessions command's; a click opens one
    * (openPast). Read when the sidebar is ready, comes into view, or asks again; only the latest read is sent.
    */
@@ -2457,7 +2462,35 @@ class PerchView {
       this.pastByKey.set(key, p);
       return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open, file: p.file || '' };
     });
-    this.sidebar.view.webview.postMessage({ type: 'past', sessions, failed: res.failed || [] });
+    // the explorer's other tabs: what Claude Code (and Codex, for MCP) load in this folder, read from their files
+    const E = require('./explorer'), list = (f) => { try { return f({ dir: cwd() }) || []; } catch (_) { return []; } };
+    const skills = list(E.listSkills), mcp = list(E.listMcp), agents = list(E.listAgents), commands = list(E.listCommands);
+    // a Claude tab's process says how each of its MCP servers is (connected, failed, needs-auth…); Codex's entries are not its
+    const live = this.sessions.find((x) => x.kind === 'claude' && x.agent && typeof x.agent.mcpStatus === 'function');
+    if (live) {
+      const said = await Promise.race([live.agent.mcpStatus(), new Promise((r) => setTimeout(() => r([]), 1500))]);
+      const by = new Map((said || []).map((x) => [x.name, x.status]));
+      for (const x of mcp) if (x.source !== 'codex' && by.has(x.name)) x.status = by.get(x.name);
+      if (gen !== this.pastGen || !this.sidebar.view) return;
+    }
+    const tab = this.context.globalState.get(EXPLORER_TAB_KEY) || 'sessions';
+    this.sidebar.view.webview.postMessage({ type: 'past', tab, skills, mcp, agents, commands, sessions, failed: res.failed || [] });
+  }
+
+  /**
+   * A copy of a past session, opened in a tab of its own: to take the conversation somewhere else without the original seeing
+   * it. Claude Code's whole conversation is copied (sessionStore.forkSession); the new tab has the settings of the tab open
+   * on the original, if one is. Codex's SDK cannot fork, and that is said.
+   */
+  async forkPast(p) {
+    let got;
+    try { got = await forkSession(p.kind, p.id, { dir: cwd(), title: cleanTitle(p.title) + ' (fork)' }); }
+    catch (err) { vscode.window.showErrorMessage('Perch: ' + String((err && err.message) || err)); return; }
+    if (!got || !got.id) return;
+    const from = this.owner(p.kind, p.id);
+    const s = this.addSession(p.kind, { resume: got.id, title: got.title, gateway: from ? from.gateway : undefined });
+    if (s && from) { s.model = from.model; s.effort = from.effort; s.mode = from.mode; s.own = from.own; this.persist(); this.sendTabs(); }
+    this.sendPast();
   }
 
   /** The way back in when no tab is on screen: the tab last used, or the sessions list, which starts a new tab too. */

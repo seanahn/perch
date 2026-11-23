@@ -154,7 +154,31 @@ icon in the activity bar.
 With no tab of its own, the Perch view lists the past sessions of the
 workspace folder, Claude's and Codex's together, newest first, under the
 two buttons that start a new tab. Type to search; click one to open it,
-or to go to the tab already open on it.
+or to go to the tab already open on it. On hover, the ✎ on a row
+renames the session, open or not. The ⑂ on a Claude row forks it: a
+copy of the whole conversation opens in a new tab,
+named "… (fork)", with the settings of the tab open on the original, and
+the original is left as it is. Codex rows have none: Codex forks only in
+its own terminal (`codex fork`).
+
+Tabs across the top of the list show the folder's other parts, each with
+its count, and the search box searches the tab showing:
+
+- **Skills**: the skills Claude Code loads here: the folder's own
+  (`.claude/skills`), yours (`~/.claude/skills`), those synced from
+  claude.ai, and each enabled plugin's. A skill whose folder holds more
+  than its `SKILL.md` opens, with ▸, onto its files.
+- **MCP**: the MCP servers of this folder's `.mcp.json`, of your
+  `~/.claude.json` (for this folder and everywhere), of enabled plugins,
+  and of Codex's `config.toml`, each with what it runs or where it is,
+  never its environment or headers. With a Claude tab running, each of
+  its servers also says how it is: connected, failed, needs-auth.
+- **Agents** and **Commands**: the folder's, yours and plugins' sub-agent
+  definitions (`.claude/agents`) and slash commands (`.claude/commands`).
+
+Each row says where it comes from; hover for what it is and its file;
+click to open the file, at its entry where the file can say. The tab you
+chose is kept.
 
 Both can be used at once. `Perch: Move Tab to the Editor Area` and
 `Perch: Move Tab to the Sidebar` move the active tab; the session, its

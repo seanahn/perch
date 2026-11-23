@@ -104,6 +104,15 @@ function rollout(home, day, id, lines, mtime) {
   const half = await S.listSessions({ dir: '/w', home, sdk: { listSessions: async () => { throw new Error('no claude'); } } });
   assert.deepStrictEqual([half.sessions.map((s) => s.id), half.failed], [['bbb', 'fff', 'aaa', 'ggg'], ['claude']], 'one agent\'s records failing does not hide the other\'s');
 
+  // ---- forking: a Claude session copied into a new one, through the Agent SDK; Codex's SDK has no way to
+  const forks = [];
+  const fsdk = { forkSession: async (id, o) => { forks.push([id, o]); return { sessionId: 'c-9' }; } };
+  assert.deepStrictEqual(await S.forkSession('claude', 'c-2', { dir: '/w', sdk: fsdk, title: '  gate run  (fork) ' }), { id: 'c-9', title: 'gate run (fork)' });
+  assert.deepStrictEqual(forks.pop(), ['c-2', { dir: '/w', title: 'gate run (fork)' }], 'the whole conversation, under the new name');
+  await assert.rejects(S.forkSession('codex', 'x', { dir: '/w' }), /Codex sessions cannot be forked here/);
+  await assert.rejects(S.forkSession('claude', '', { dir: '/w', sdk: fsdk }), /has not started yet/);
+  await assert.rejects(S.forkSession('claude', 'c-2', { dir: '/w', sdk: {} }), /cannot fork a session/);
+
   // ---- what cannot be named
   calls.length = 0;
   await assert.rejects(S.renameSession('claude', 'c-1', '  \n ', { sdk }), /cannot be empty/);

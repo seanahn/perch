@@ -222,6 +222,20 @@ ${glyphCss}
   #past .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #past .row .w { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #past .none { padding: 4px; }
+  #past .row .tw { flex: none; width: 12px; font-size: 10px; color: var(--vscode-descriptionForeground); text-align: center; }
+  #past .row .tw:not(:empty) { cursor: pointer; }
+  #past .file { padding: 2px 4px 2px 26px; border-radius: 3px; cursor: pointer; font-size: 12px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #past .file:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+  #past .etabs { flex-wrap: wrap; gap: 2px; }
+  #past .etab { font-size: 11px; padding: 2px 6px; border: none; border-radius: 3px; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
+  #past .etab:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+  #past .etab.on { color: var(--vscode-foreground); box-shadow: inset 0 -2px var(--vscode-focusBorder, #0078d4); border-radius: 3px 3px 0 0; }
+  #past .etabs .refresh { margin-left: auto; }
+  #past .row .w.st-connected { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
+  #past .row .w.st-failed, #past .row .w.st-needs-auth { color: var(--vscode-charts-orange); }
+  #past .row .fork, #past .row .rename { flex: none; visibility: hidden; font-size: 12px; padding: 0 5px; line-height: 16px; border: none; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
+  #past .row:hover .fork, #past .row:hover .rename { visibility: visible; }
+  #past .row .fork:hover, #past .row .rename:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); border-radius: 3px; }
 
   /* composer: the message on top, the tools in a row beneath. Each kind of tab takes its own vendor's look. */
   #composer { --accent: #D97757; margin: 0 8px 4px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 10px; background: var(--vscode-input-background); flex: none; display: flex; flex-direction: column; }
@@ -345,7 +359,7 @@ ${glyphCss}
 </style></head>
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
-  <div id="panes"><div class="empty" id="empty"><div>No tab open here.</div><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
+  <div id="panes"><div class="empty" id="empty"><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
   <div id="composer" class="off">
     <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
@@ -492,24 +506,86 @@ ${glyphCss}
   // vendor icon when its extension is installed; a letter otherwise, or if the image fails to load
   const VNAME = { claude: 'Claude', codex: 'Codex' };
   function letter(kind) { const s = document.createElement('span'); s.className = 'k ' + kind; s.textContent = LETTER[kind] || '?'; return s; }
-  // The sidebar with no tab of its own: this folder's past sessions, both agents', to search and open (the host's sendPast)
-  let pastFilter = '';
-  function drawPast(list, failed) {
+  // The sidebar with no tab of its own is an explorer (the host's sendPast): tabs for this folder's past sessions, both agents',
+  // and what Claude Code (and Codex, for MCP) load here: skills, MCP servers, agents, commands. A tab shows its list across the
+  // view; the search searches the tab showing; the choice goes to the host, which keeps it for next time.
+  const ETABS = [['sessions', 'Sessions'], ['skills', 'Skills'], ['mcp', 'MCP'], ['agents', 'Agents'], ['commands', 'Commands']];
+  let pastFilter = '', etabOn = 'sessions', explorer = { sessions: [], failed: [] };
+  const openNodes = new Set();   // the skills opened to show their files, by SKILL.md path
+  function drawExplorer(m) {
+    explorer = { sessions: m.sessions || [], failed: m.failed || [], skills: m.skills || [], mcp: m.mcp || [], agents: m.agents || [], commands: m.commands || [] };
+    if (m.tab && ETABS.some((t) => t[0] === m.tab)) etabOn = m.tab;
+    drawPast();
+  }
+  function drawPast() {
     const box = $('past'); box.hidden = false; box.textContent = '';
-    const hd = el('div', 'hd'); hd.append(el('span', 'h', 'Sessions in this folder'));
-    const again = el('button', 'refresh', '↻'); again.title = 'Read the list again'; again.addEventListener('click', () => vscode.postMessage({ type: 'pastRefresh' })); hd.append(again);
-    const find = document.createElement('input'); find.placeholder = 'Search sessions…'; find.value = pastFilter;
+    const hd = el('div', 'hd etabs');
+    for (const [k, label] of ETABS) {
+      const b = el('button', 'etab' + (k === etabOn ? ' on' : ''), label + ' ' + (explorer[k] || []).length);
+      b.addEventListener('click', () => { if (k === etabOn) return; etabOn = k; vscode.postMessage({ type: 'explorerTab', tab: k }); drawPast(); });
+      hd.append(b);
+    }
+    const again = el('button', 'refresh', '↻'); again.title = 'Read the lists again'; again.addEventListener('click', () => vscode.postMessage({ type: 'pastRefresh' })); hd.append(again);
+    const find = document.createElement('input'); find.placeholder = 'Search ' + ETABS.find((t) => t[0] === etabOn)[1].toLowerCase().replace('mcp', 'MCP servers') + '…'; find.value = pastFilter;
     const rows = el('div', 'rows');
-    const show = () => { const q = find.value.trim().toLowerCase(); pastFilter = find.value; for (const r of rows.children) if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q); };
+    const show = () => {
+      const q = find.value.trim().toLowerCase(); pastFilter = find.value; let parent = null;
+      for (const r of rows.children) {
+        if (r.classList.contains('file')) { r.hidden = !parent || parent.hidden || !openNodes.has(parent.dataset.f); continue; }
+        parent = r; if (r.dataset.t !== undefined) r.hidden = !!q && !r.dataset.t.includes(q);
+      }
+    };
     find.addEventListener('input', show);
+    if (etabOn === 'sessions') sessionRows(rows); else itemRows(rows, etabOn);
+    box.append(hd, find, rows); show();
+  }
+  function sessionRows(rows) {
+    const list = explorer.sessions, failed = explorer.failed;
     for (const p of list) {
       const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title + (p.file ? '\\n' + p.file : '');   // on hover, the file the transcript is in
       r.append(badge(p.kind), el('span', 't', p.title || '(untitled)'), el('span', 'w', (p.open ? 'open · ' : '') + (p.when || '')));
+      const rn = el('button', 'rename', '✎'); rn.title = 'Rename this session';
+      rn.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'renamePast', key: p.key }); });
+      r.append(rn);
+      if (p.kind === 'claude') {   // Codex's SDK cannot fork a thread
+        const f = el('button', 'fork', '⑂'); f.title = 'Fork: open a copy of this session in a new tab; this one is left as it is';
+        f.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'forkPast', key: p.key }); });
+        r.append(f);
+      }
       r.addEventListener('click', () => vscode.postMessage({ type: 'openPast', key: p.key }));
       rows.append(r);
     }
     if (!list.length) rows.append(el('div', 'none', failed.length ? 'The sessions of ' + failed.map((k) => (k === 'claude' ? 'Claude Code' : 'Codex')).join(' and ') + ' could not be read.' : 'No past sessions in this folder.'));
-    box.append(hd, find, rows); show();
+  }
+  // skills, MCP servers, agents, commands: by name and where each comes from (an MCP server also how it is, where a running
+  // Claude tab can say); what it is and its file on hover; a click opens the file, at the line its entry starts on where known
+  function itemRows(rows, k) {
+    const list = explorer[k] || [];
+    for (const x of list) {
+      const r = el('div', 'row item'); r.dataset.t = (x.name + ' ' + (x.description || '')).toLowerCase(); r.dataset.f = x.file || '';
+      r.title = [x.name, x.description, x.file ? x.file + (x.line ? ':' + x.line : '') : ''].filter(Boolean).join('\\n');
+      // a skill of more than its SKILL.md is a node: the twisty shows its files under it, each to open
+      const more = Array.isArray(x.files) && x.files.length > 1, kids = [];
+      const tw = el('span', 'tw', more ? (openNodes.has(x.file) ? '▾' : '▸') : '');
+      r.append(tw, el('span', 't', x.name), el('span', 'w' + (x.status ? ' st-' + String(x.status).replace(/[^a-z-]/gi, '') : ''), x.source + (x.status ? ' · ' + x.status : '')));
+      if (x.file) r.addEventListener('click', () => vscode.postMessage({ type: 'open', target: x.file + (x.line ? '#L' + x.line : '') }));
+      rows.append(r);
+      if (more) {
+        const dir = x.file.replace(/[\\/][^\\/]*$/, '');
+        for (const f of x.files) {
+          const c = el('div', 'file', f); c.title = dir + '/' + f; c.hidden = !openNodes.has(x.file);
+          c.addEventListener('click', () => vscode.postMessage({ type: 'open', target: dir + '/' + f }));
+          kids.push(c); rows.append(c);
+        }
+        tw.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (openNodes.has(x.file)) openNodes.delete(x.file); else openNodes.add(x.file);
+          tw.textContent = openNodes.has(x.file) ? '▾' : '▸';
+          for (const c of kids) c.hidden = !openNodes.has(x.file) || r.hidden;
+        });
+      }
+    }
+    if (!list.length) rows.append(el('div', 'none', 'No ' + ETABS.find((t) => t[0] === k)[1].toLowerCase().replace('mcp', 'MCP servers') + ' here.'));
   }
   function badge(kind) {
     const i = ICONS[kind];
@@ -1537,7 +1613,7 @@ ${glyphCss}
   window.addEventListener('message', (e) => {
     const m = e.data; if (!m) return;
     if (m.type === 'tabs') { if (m.gateway) gatewayInfo = m.gateway; applyTabs(m.tabs, m.active, m.single); }
-    if (m.type === 'past') drawPast(m.sessions || [], m.failed || []);
+    if (m.type === 'past') drawExplorer(m);
     else if (m.type === 'event') onEvent(m.sid, m.ev);
     else if (m.type === 'meter') { meters.claude = m.meter || null; if ('codex' in m) meters.codex = m.codex || null; applyMeter(); }
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }

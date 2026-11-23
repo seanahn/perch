@@ -1472,11 +1472,20 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       { kind: 'claude', id: 'c-old', title: 'gate run', named: true, updatedAt: NOW - 2 * MIN, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
       { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
     ] };
-    const m = install(undefined, { past }); await flush();
+    const SKILL = { name: 'c3-acls', source: 'folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md' };
+    const MCP = { name: 'jira', source: 'folder', description: '/bin/jira-mcp', file: '/w/.mcp.json', line: 8 }, AGENT = { name: 'reviewer', source: 'folder', description: 'Reviews.', file: '/w/.claude/agents/reviewer.md' }, CMD = { name: '/ship', source: 'folder', description: 'Ship it.', file: '/w/.claude/commands/ship.md' };
+    const m = install(undefined, { past }); await flush(); Object.assign(m.box, { skills: [SKILL], mcp: [MCP], agents: [AGENT], commands: [CMD] });
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
-    assert.deepStrictEqual(v.past(), { type: 'past', sessions: [
+    assert.deepStrictEqual(v.past(), { type: 'past', tab: 'sessions', skills: [SKILL], mcp: [MCP], agents: [AGENT], commands: [CMD], sessions: [
       { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
-      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in');
+      { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in; and the skills Claude Code loads here');
+    assert.deepStrictEqual(m.box.explorerLists.splice(0).map((x) => x[0] + ' ' + x[1].dir), ['skills ' + process.cwd(), 'mcp ' + process.cwd(), 'agents ' + process.cwd(), 'commands ' + process.cwd()], 'each of the workspace folder');
+    // the explorer's tab, chosen in the page, is kept for the next time
+    v.fire({ type: 'explorerTab', tab: 'mcp' }); v.fire({ type: 'pastRefresh' }); await flush(); await flush();
+    assert.strictEqual(v.past().tab, 'mcp');
+    v.fire({ type: 'explorerTab', tab: 'nonsense' }); v.fire({ type: 'pastRefresh' }); await flush(); await flush();
+    assert.strictEqual(v.past().tab, 'mcp', 'a tab that is not one is ignored');
+    v.fire({ type: 'explorerTab', tab: 'sessions' });
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     // a row clicked: the session opens in a tab, as from the Sessions command, and the list says it is open
     const made = created.length;
@@ -1486,12 +1495,35 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(v.past().sessions[0].open, true, 'the list, sent again, marks it open');
     v.fire({ type: 'openPast', key: 'claude:nope' }); await flush();
     assert.strictEqual(m.perch.sessions.length, 1, 'a row no longer listed opens nothing');
+    // a Claude row forked: a copy of the session, under its name and (fork), opened in a tab of its own with the settings of
+    // the tab open on the original; the original keeps its tab. A Codex row cannot be, and says why
+    opened.model = 'opus'; opened.effort = 'high'; opened.mode = 'acceptEdits';
+    v.fire({ type: 'forkPast', key: 'claude:c-old' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(m.store.forked.pop(), ['claude', 'c-old', { dir: process.cwd(), title: 'gate run (fork)' }]);
+    const fork = m.perch.sessions.find((s) => s !== opened && s.kind === 'claude');
+    assert.deepStrictEqual(fork && [fork.title, fork.agentSessionId, fork.model, fork.effort, fork.mode, m.perch.sessions.length], ['gate run (fork)', 'c-old-fork', 'opus', 'high', 'acceptEdits', 2], 'a tab on the copy, set as the original\'s');
+    assert.strictEqual(v.past().sessions[0].key, 'claude:c-old-fork', 'the list, sent again, has the copy');
+    v.fire({ type: 'forkPast', key: 'codex:x-old' }); await flush(); await flush();
+    assert(/Codex sessions cannot be forked here/.test(m.ui.errors.pop()), 'a Codex row says why');
+    assert.strictEqual(m.perch.sessions.length, 2);
+    // a row renamed: asked for the name, written to the agent's record, and the list sent again with it
+    m.ui.inputs.push('  greeting  ');
+    v.fire({ type: 'renamePast', key: 'codex:x-old' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual([m.ui.asked.pop().value, m.store.renamed.pop()], ['hello', ['codex', 'x-old', 'greeting', { dir: process.cwd() }]], 'the box opens on the present name; the record takes the new one');
+    assert.strictEqual(v.past().sessions.find((x) => x.key === 'codex:x-old').title, 'greeting', 'the list, sent again, has the new name');
+    // with a Claude tab running, each of its MCP servers says how it is, as Claude Code reports; a Codex entry of the same name is not Claude's
+    Object.assign(m.box, { mcp: [MCP, { name: 'jira', source: 'codex', description: 'x', file: '/c/config.toml', line: 3 }, { name: 'quiet', source: 'yours', description: 'q', file: '/u', line: 0 }] });
+    knobs.mcpStatus = [{ name: 'jira', status: 'connected' }, { name: 'ms365', status: 'needs-auth' }];
+    v.fire({ type: 'send', sid: opened.id, text: 'hi' }); await flush();
+    v.fire({ type: 'pastRefresh' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(v.past().mcp.map((x) => [x.name, x.source, x.status]), [['jira', 'folder', 'connected'], ['jira', 'codex', undefined], ['quiet', 'yours', undefined]], 'its word, beside each of its servers');
+    knobs.mcpStatus = null;
     // in view again, or asked: the list is read again
     const n = m.store.lists.length;
     v.reveal(); await flush(); await flush();
     v.fire({ type: 'pastRefresh' }); await flush(); await flush();
     assert.strictEqual(m.store.lists.length, n + 2);
-    assert.strictEqual(created.length, made, 'listing starts no agent');
+    assert.strictEqual(created.length, made + 1, 'listing starts no agent: the one is the tab the MCP check sent a message to');
     m.perch.dispose();
   }
 

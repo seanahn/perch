@@ -1,6 +1,6 @@
 # 203 — The workflow phase pill, and settings an installer can set
 
-Built 2026-11-23, released in 0.7.37 (see [Built](#built) and [Checked live](#checked-live)). Written against
+Built 2026-11-23, released in 0.7.41 (see [Built](#built) and [Checked live](#checked-live)). Written against
 Perch 0.7.36. Three small changes, wanted by an installer that sets up a
 whole machine (VS Code, Perch, an LLM gateway, MCP servers, a workflow plugin) in one run, so that the first
 time the user opens VS Code, Perch is already in place and on the right backend. Each is useful without that
@@ -183,7 +183,7 @@ The phase, live and on reopening a tab:
 
 ## Built
 
-Branch `feat/phase-pill`, released in 0.7.37 (not yet published). The plan was deleted after commit
+Branch `feat/phase-pill`, released in 0.7.41 (not yet published). The plan was deleted after commit
 `109ca51`. The README lists the two settings and links here: [README](../../README.md).
 
 ## Checked live

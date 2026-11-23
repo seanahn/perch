@@ -49,6 +49,7 @@ function storageDir() {
 let fakeQueued = 0, fakeSkill = 0;
 class FakeAgent {
   constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; this.now = o.model ? 'claude-' + o.model + '-resolved' : knobs.startsOn || 'claude-opus-resolved'; created.push(this); }
+  mcpStatus() { return Promise.resolve(knobs.mcpStatus || []); }
   send(t, a, b) {
     const shown = this.claude ? b : a, images = (this.claude ? a : b) || [];   // the two agents take their arguments as the real ones do
     this.sent.push(t); (this.images = this.images || []).push(images);
@@ -111,6 +112,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
   const fakeStore = Object.assign({}, realStore, {
     titleOf: async (kind, id) => { const x = store.sessions.find((r) => r.kind === kind && r.id === id); return x && kind === 'claude' ? { title: x.title, named: !!x.named } : null; },
+    forkSession: async (kind, id, o) => { if (kind !== 'claude') throw new Error('Codex sessions cannot be forked here'); if (store.failFork) throw new Error(store.failFork); (store.forked = store.forked || []).push([kind, id, o]); const nid = id + '-fork'; store.sessions.unshift({ kind, id: nid, title: o.title, named: true, updatedAt: Date.now() }); return { id: nid, title: o.title }; },
     deleteSession: async (kind, id, o) => { if (store.failDelete) throw new Error(store.failDelete); store.deleted.push([kind, id, o]); store.sessions = store.sessions.filter((x) => !(x.kind === kind && x.id === id)); },
     listSessions: async (o) => { store.lists.push(o); return { sessions: store.sessions.map((x) => Object.assign({}, x)), failed: store.failed.slice() }; },
     claudeSessionUsage: async (id) => { const u = store.claudeUsage[id]; if (u instanceof Error) throw u; return u ? JSON.parse(JSON.stringify(u)) : null; },
@@ -269,6 +271,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, or when
     // box.codexLoginHold settles, and is counted. Its sign-in ending first (o.until: its terminal closed) ends it unlogged
+    if (req === './explorer') { const give = (k) => (o) => { (box.explorerLists = box.explorerLists || []).push([k, o]); return (box[k] || []).map((x) => Object.assign({}, x)); }; return { listSkills: give('skills'), listMcp: give('mcp'), listAgents: give('agents'), listCommands: give('commands'), skillHead: () => ({}) }; }
     if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => box.codexHome || '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => {
         box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; box.codexWaitUntil = !!(o && o.until);
         if (box.codexLoginHold) {
