@@ -1,7 +1,7 @@
 # 203 — The workflow phase pill, and settings an installer can set
 
 Built 2026-11-23, released in 0.7.41 (see [Built](#built) and [Checked live](#checked-live)); the pill moved
-right, and reads `no workflow` when there is none, in 0.7.42 ([Changed in 0.7.42](#changed-in-0742)). Written against
+right, and reads `no workflow` when there is none, in 0.7.42 ([Changed in 0.7.42](#changed-in-0742)); a phase reads green in 0.7.43. Written against
 Perch 0.7.36. Three small changes, wanted by an installer that sets up a
 whole machine (VS Code, Perch, an LLM gateway, MCP servers, a workflow plugin) in one run, so that the first
 time the user opens VS Code, Perch is already in place and on the right backend. Each is useful without that
@@ -29,7 +29,8 @@ the name after the `:`, so `superpowers:writing-plans` and `trivialpowers:writin
 | Finish | `finishing-a-development-branch` |
 
 Any other skill (test-driven development, debugging, verification, reviews) runs inside a phase and leaves it
-unchanged. Before any of these has run there is no phase, and the pill reads `no workflow`, dimmed.
+unchanged. Before any of these has run there is no phase, and the pill reads `no workflow`, dimmed. In a workflow the phase
+reads green (the theme's green, as the IDE-context toggle uses for on).
 
 **Where.** In the footer of a Claude tab, on the right, immediately before the session stats; the pill and the
 stats sit together, pushed to the right edge as the stats alone were before:
@@ -217,6 +218,12 @@ phases with none marked and says how to start one, or that no workflow plugin is
 [No workflow](#1-the-phase-pill)). `workflowOf` in `src/phase.js` reads the plugin and command from Claude Code's
 command list; the tab carries the result as `workflow`.
 
+
+## Changed in 0.7.43
+
+In a workflow the pill's text is green (`--vscode-charts-green`, falling back to the testing pass colour), so a
+glance tells a workflow session from one without; `no workflow` keeps the default colour, dimmed. Asked for by the
+author after using 0.7.42.
 ## Built
 
 Branch `feat/phase-pill`, [PR #1](https://github.com/seanahn/perch/pull/1), released in 0.7.41 (not yet published). The plan was deleted after commit

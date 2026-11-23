@@ -738,7 +738,11 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
   host({ type: 'tabs', tabs: [A, with_(B, { phase: PLAN, workflow: TP })], active: 'b' });
   assert.deepStrictEqual([shown($ph()), window.getComputedStyle($mu).marginLeft], [false, 'auto'], 'a Codex tab has no pill, and the stats take the right edge back');
   host({ type: 'tabs', tabs: [A, B], active: 'a' });
-  assert.deepStrictEqual([shown($ph()), $ph().textContent], [true, 'no workflow'], 'a Claude tab with no phase: the pill says so'); }
+  assert.deepStrictEqual([shown($ph()), $ph().textContent], [true, 'no workflow'], 'a Claude tab with no phase: the pill says so');
+  // in a workflow the pill reads green (a rule for the pill without .none); 'no workflow' keeps the default colour
+  { const css = [...window.document.querySelectorAll('style')].map((s) => s.textContent).join('\n');
+    assert(/#meter \.phase:not\(\.none\)[^{]*\{[^}]*color: var\(--vscode-charts-green/.test(css), 'a phase reads green');
+    assert(!/#meter \.phase\.none[^{]*\{[^}]*charts-green/.test(css), "'no workflow' is not green"); } }
 // the usage panel under a Claude tab: no plan is named, since Anthropic's usage endpoint names none; each window; refresh
 $mu.click(); assert(shown(puOf()) && $('#m-use').getAttribute('aria-pressed') === 'true', 'the compact reading opens the usage panel');
 assert.deepStrictEqual([puOf().querySelector('.mxh .what').textContent, puRows()], ['Claude usage', [['Backend', 'subscription (login)'], ['Plan', 'not reported']]]);
