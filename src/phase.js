@@ -44,4 +44,13 @@ function phaseFromEvents(events) {
   return found;
 }
 
-module.exports = { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents };
+// The workflow plugin Claude Code has loaded, from its command list: the first command named <plugin>:brainstorming gives the
+// plugin and the command that starts a workflow, short when it is the only one by that name. Null when no plugin offers it.
+function workflowOf(commands) {
+  const names = (commands || []).map((c) => c && c.name).filter((n) => typeof n === 'string' && n.lastIndexOf(':') > 0 && n.slice(n.lastIndexOf(':') + 1) === 'brainstorming');
+  if (!names.length) return null;
+  const first = names[0];
+  return { plugin: first.slice(0, first.lastIndexOf(':')), command: names.length === 1 ? '/brainstorming' : '/' + first };
+}
+
+module.exports = { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents, workflowOf };
