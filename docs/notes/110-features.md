@@ -68,6 +68,46 @@ A filter of one or two letters matches command **names** only.
 Descriptions are searched from three letters. Otherwise `/c` matched
 `/model`, whose description contains a "c".
 
+### Secret check
+
+Proposed 2026-11-23. A password or key pasted into the composer by mistake would go to the model and into the
+session's record, which Perch cannot take back. So Send first runs a quick check, in the page, on the text alone
+(no network call), for Claude and Codex tabs alike; nothing reaches the agent until it passes or the user says so.
+
+**What counts** (a fixed list of rules, each with a name shown to the user):
+
+| Rule | Matches |
+|---|---|
+| Anthropic / OpenAI key | `sk-` followed by 20+ key characters (`sk-ant-…`, `sk-proj-…`) |
+| GitHub token | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` + 36 characters; `github_pat_…` |
+| AWS access key | `AKIA` or `ASIA` + 16 upper-case letters or digits |
+| Slack token | `xoxb-`, `xoxp-`, `xoxa-`, `xoxr-` … |
+| Google API key | `AIza` + 35 characters |
+| JSON Web Token | `eyJ…` `.` `eyJ…` `.` signature |
+| Private key | `-----BEGIN … PRIVATE KEY-----` |
+| Password in a URL | `scheme://user:password@host` |
+| Secret assignment | `password`, `passwd`, `pwd`, `secret`, `api_key`, `apikey`, `token`, `access_token` then `=` or `:` then a value of 6+ non-space characters (quotes allowed) |
+| Random-looking string | one token of 32+ characters, no spaces, high entropy (≥ 4.0 bits per character over letters, digits and `+/_-=`); not a UUID, not a 40- or 64-hex hash, not a URL without credentials, not a file path |
+
+**What happens.** The message stays in the box; a strip above it names the rule — *"This looks like a password
+or key (GitHub token). It would go to the model and into the session record."* — highlights the matched text in
+the box, and offers:
+
+- **Send anyway** — sends it unchanged; the same text is not flagged again in this tab.
+- **Not a secret** — sends it and remembers the matched value, so it is never flagged again anywhere. Perch keeps
+  only a SHA-256 hash of the value, in its own stored state, never the value; **Perch: Clear Secret-Check
+  Exceptions** forgets them.
+- **Edit** — closes the strip, focus back in the box.
+- **Why?** — the rule's name and a one-line description of what it matches.
+
+**Settings.** `perch.secretCheck` (default `true`) switches the check off. `perch.secretCheck.ignore`: a list of
+regular expressions; a matched value that any of them matches in full is never flagged (a trace-id or
+build-id format, say). An invalid expression is skipped, with one note in the tab.
+
+**Not covered:** pasted images, files the agent reads by itself, text sent by other means (handoffs, kestrel's
+prompts, which the user reviews before pressing Enter), and terminal `claude`. A slash command's own text is
+checked like any message.
+
 ---
 
 <a id="n111"></a>
