@@ -1,6 +1,7 @@
 # 203 — The workflow phase pill, and settings an installer can set
 
-Built 2026-11-23, released in 0.7.41 (see [Built](#built) and [Checked live](#checked-live)). Written against
+Built 2026-11-23, released in 0.7.41 (see [Built](#built) and [Checked live](#checked-live)); the pill moved
+right, and reads `no workflow` when there is none, in 0.7.42 ([Changed in 0.7.42](#changed-in-0742)). Written against
 Perch 0.7.36. Three small changes, wanted by an installer that sets up a
 whole machine (VS Code, Perch, an LLM gateway, MCP servers, a workflow plugin) in one run, so that the first
 time the user opens VS Code, Perch is already in place and on the right backend. Each is useful without that
@@ -28,12 +29,13 @@ the name after the `:`, so `superpowers:writing-plans` and `trivialpowers:writin
 | Finish | `finishing-a-development-branch` |
 
 Any other skill (test-driven development, debugging, verification, reviews) runs inside a phase and leaves it
-unchanged. Before any of these has run there is no phase, and no pill.
+unchanged. Before any of these has run there is no phase, and the pill reads `no workflow`, dimmed.
 
-**Where.** In the footer of a Claude tab, right after the backend pill:
+**Where.** In the footer of a Claude tab, on the right, immediately before the session stats; the pill and the
+stats sit together, pushed to the right edge as the stats alone were before:
 
 ```text
-[Codex icon]  [sub] [Plan]  [usage] [index] [sub-agents]  …  [5h 91%] [week 20%]
+[Codex icon]  [gw] [usage] [index] [sub-agents]  …  [Plan] [13.6h 40%] [fable 91%]
 ```
 
 **Hover.** A tooltip lists all four phases in order with the current one highlighted:
@@ -52,6 +54,29 @@ A native `title` cannot highlight one line, so it is a small hover card in the p
 other panels, opened on hover and on keyboard focus, closed on leave, blur and Escape. It shows the skill that
 set the phase beside the current one, without its plugin prefix; the header names the plugin
 (`Workflow phase · <plugin>`, the part before the last `:`) and is just `Workflow phase` when the skill has none. The header is shown in capitals, as the footer's other panels' headings are. The pill itself does nothing on click.
+
+**No workflow.** With no phase the card lists the four phases with none marked, and a line under them on how to
+start one:
+
+```text
+┌──────────────────────────────────────┐
+│ Workflow phase                       │
+│   Design                             │
+│   Plan                               │
+│   Build                              │
+│   Finish                             │
+│ Not in a trivialpowers workflow.     │
+│ Start one with /brainstorming.       │
+└──────────────────────────────────────┘
+```
+
+The plugin and the command come from Claude Code's command list (the one behind the `/` menu): the first command
+whose name ends in `:brainstorming` (the list is kept sorted by name) gives the plugin, the part before the last
+`:`, and the command is the short `/brainstorming` when exactly one plugin offers it, else
+`/<plugin>:brainstorming`. With no such command, no workflow plugin is loaded, and the line reads `No workflow
+plugin is loaded.`; the pill still reads `no workflow`. The host works this out and sends it with the tab
+(`workflow: { plugin, command }` or `null`, next to `phase`), and sends the tabs again when the list changes; the
+page only draws it.
 
 **What counts:**
 - The main conversation only. Skill calls inside sub-agents (a builder sub-agent running test-driven
@@ -73,12 +98,14 @@ phase is found even when it lies before the part of the transcript that is shown
 for the tab. The phase rides on the tab's existing description sent to the page (one more field), not a message
 of its own.
 
-**Across vendors.** The phase belongs to a Claude stretch of the tab. A Codex stretch has no pill (Codex's skill
+**Across vendors.** The phase belongs to a Claude stretch of the tab. A Codex stretch has no pill, not even
+`no workflow` (Codex's skill
 calls look different, and a Codex workflow has not been tried). Coming back to Claude resumes the earlier Claude
 session, whose record gives its phase back; a handoff into a new Claude session starts with none.
 
-**Not** a setting: the pill appears only once a workflow skill runs, so a user without such a plugin never sees
-it.
+**Not** a setting: every Claude tab shows the pill, `no workflow` until a workflow skill runs, so the footer
+says whether a workflow is going and, if not, how to start one. Without a workflow plugin the card says none is
+loaded.
 
 ## 2. `perch.claude.defaultBackend`
 
@@ -181,6 +208,15 @@ The phase, live and on reopening a tab:
 - The page cannot `require` modules, so its list of phases is a literal; a test compares it with `PHASES` in
   `src/phase.js`.
 
+## Changed in 0.7.42
+
+The pill moved from after the backend pill to the right, immediately before the session stats: it now takes the
+space between the footer's groups (`margin-left: auto`), and the stats take it back when the pill is hidden on a
+Codex tab. A Claude tab with no phase shows a dimmed `no workflow` pill instead of nothing; its card lists the
+phases with none marked and says how to start one, or that no workflow plugin is loaded (see
+[No workflow](#1-the-phase-pill)). `workflowOf` in `src/phase.js` reads the plugin and command from Claude Code's
+command list; the tab carries the result as `workflow`.
+
 ## Built
 
 Branch `feat/phase-pill`, [PR #1](https://github.com/seanahn/perch/pull/1), released in 0.7.41 (not yet published). The plan was deleted after commit
@@ -194,14 +230,18 @@ In a fresh VS Code profile, with both settings set:
   another extension's welcome page, so neither the empty group nor the untitled fallback was exercised there.
   The setting read `false` afterwards.
 - The backend pill read the gateway, with the gateway's default model.
-- `/brainstorming` showed Design between the backend pill and the usage button; the card showed the skill and
-  resolved the plugin name in its header.
+- `/brainstorming` showed Design between the backend pill and the usage button (0.7.41; since 0.7.42 the pill
+  sits before the session stats); the card showed the skill and resolved the plugin name in its header.
 
 ## Verification
 
 - A Claude tab whose agent invokes `…:brainstorming`, then `…:writing-plans`, then
   `…:test-driven-development` shows Design, then Plan, then still Plan; the card highlights Plan.
-- A window reload shows the same pill on the reopened tab; a tab with no workflow skill shows none.
+- The pill sits on the right, immediately before the session stats; the two stay together at the right edge.
+- A window reload shows the same pill on the reopened tab; a tab with no workflow skill shows a dimmed
+  `no workflow`, whose card marks no phase and reads `Not in a <plugin> workflow. Start one with /brainstorming.`
+  (or `/<plugin>:brainstorming` when several plugins offer it), or `No workflow plugin is loaded.` when none does.
+- A Codex tab shows no pill.
 - With `perch.claude.defaultBackend` = `gateway` and nothing remembered, **+** opens a gateway tab; after the
   user puts a tab on the subscription, **+** opens a subscription tab.
 - With `perch.firstStart.openClaudeTab` = `true` and no tabs, one Claude tab opens on the right and the setting

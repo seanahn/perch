@@ -1,7 +1,7 @@
 'use strict';
 // The workflow phase from skill names, slash commands and Perch's agent events.
 const assert = require('assert');
-const { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents } = require('../src/phase');
+const { PHASES, phaseOfSkill, skillOfSlash, resolveSkill, phaseFromEvents, workflowOf } = require('../src/phase');
 
 assert.deepStrictEqual(PHASES, ['Design', 'Plan', 'Build', 'Finish']);
 
@@ -44,4 +44,9 @@ assert.strictEqual(resolveSkill('brainstorming', L('brainstorming', 'x:plan-brai
 assert.strictEqual(resolveSkill('x:brainstorming', L('y:x:brainstorming')), 'x:brainstorming');
 assert.strictEqual(resolveSkill(null, L('x:a')), null);
 assert.strictEqual(resolveSkill('a', undefined), 'a');
+// ---- workflowOf: the workflow plugin Claude Code has loaded, and the command that starts it
+assert.deepStrictEqual(workflowOf(L('clear', 'trivialpowers:brainstorming', 'trivialpowers:writing-plans')), { plugin: 'trivialpowers', command: '/brainstorming' }, 'one plugin offers it: the short command');
+assert.deepStrictEqual(workflowOf(L('x:y:brainstorming')), { plugin: 'x:y', command: '/brainstorming' }, 'the plugin is the part before the last colon');
+assert.deepStrictEqual(workflowOf(L('a:brainstorming', 'b:brainstorming')), { plugin: 'a', command: '/a:brainstorming' }, 'two plugins offer it: the first, in full');
+for (const none of [L('clear', 'brainstorming', 'x:plan-brainstorming', 'x:brainstorming-more'), [], undefined, [null, {}]]) assert.strictEqual(workflowOf(none), null, JSON.stringify(none));
 console.log('phase ok');

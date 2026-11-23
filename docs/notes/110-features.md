@@ -348,9 +348,11 @@ until a button asks (`meterRefresh`, `meterLogin`, `openExternal`). One
 of the footer's three panels is open at a time, and Escape closes it
 before it reaches the composer.
 
-**The workflow phase (0.7.41).** Under a Claude tab, after the backend pill, a pill names the phase
-(Design, Plan, Build, Finish) of a skill-driven workflow the conversation is in; its hover card lists the
-four with the current one marked. Two settings serve an installer that prepares a machine:
+**The workflow phase (0.7.41; moved in 0.7.42).** Under a Claude tab, on the right just before the session
+stats, a pill names the phase (Design, Plan, Build, Finish) of a skill-driven workflow the conversation is in;
+its hover card lists the four with the current one marked. With no phase the pill reads `no workflow`, dimmed,
+and the card marks none and says how to start one (`Start one with /brainstorming.`, the plugin and command
+from Claude Code's command list) or that no workflow plugin is loaded. Codex tabs have no pill. Two settings serve an installer that prepares a machine:
 `perch.claude.defaultBackend` (`gateway` starts new Claude tabs on the gateway until a backend is chosen)
 and `perch.firstStart.openClaudeTab` (opens one Claude tab on the right at the next start, once, then
 writes itself back to `false`). [Note 203](203-workflow-phase-and-first-start.md).

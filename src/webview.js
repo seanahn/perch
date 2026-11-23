@@ -336,14 +336,19 @@ ${glyphCss}
   #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb[aria-pressed="true"] { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
-  /* the workflow phase (note 203): a pill like the backend's, and on hover or focus a card of the four phases, the current one marked */
-  #meter .phase { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); cursor: default; }
+  /* the workflow phase (note 203): a pill like the backend's, on the right just before the session stats, and on hover or
+     focus a card of the four phases, the current one marked. The pill, when shown, takes the space between the groups. */
+  #meter .phase { flex: none; margin-left: auto; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); cursor: default; }
   #meter .phase:hover, #meter .phase:focus { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); outline: none; }
+  #meter .phase.none { opacity: 0.6; font-style: italic; }
+  #meter .phase.none:hover, #meter .phase.none:focus { opacity: 1; }
   .phasecard { pointer-events: none; }
   .phasecard .ph { display: grid; grid-template-columns: 12px auto 1fr; column-gap: 6px; align-items: baseline; padding: 2px 8px; color: var(--vscode-descriptionForeground); }
   .phasecard .ph.now { color: var(--vscode-menu-foreground, var(--vscode-foreground)); font-weight: 600; }
+  .phasecard .none { padding: 4px 8px 2px; color: var(--vscode-descriptionForeground); white-space: normal; max-width: 260px; }
   .phasecard .ph .sk { justify-self: end; padding-left: 12px; font-family: var(--vscode-editor-font-family); font-size: 11px; font-weight: normal; color: var(--vscode-descriptionForeground); }
-  #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
+  #meter .mu { flex: 0 1 auto; margin-left: auto; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
+  #meter .phase:not([hidden]) + .mu { margin-left: 0; }
   #meter .mu:hover { color: var(--vscode-foreground); }
   #meter .mu.stale { font-style: italic; }
   #meter .seg.warn { color: var(--vscode-charts-yellow); }
@@ -377,7 +382,7 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-phase" class="phase" tabindex="0" aria-describedby="m-phasecard" hidden></span><button id="m-use" class="mb" aria-pressed="false">usage</button><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><button id="m-use" class="mb" aria-pressed="false">usage</button><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-phase" class="phase" tabindex="0" aria-describedby="m-phasecard" hidden></span><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
   <div id="m-phasecard" class="pop phasecard" role="tooltip" hidden></div>
 <script nonce="${nonce}">
 (function () {
@@ -1464,11 +1469,12 @@ ${glyphCss}
   $mindex.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleIndex(t.id); });
   $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
   $msubs.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleUsage(t.id); });
-  // the workflow phase, after the backend pill (note 203): what the host found in a Claude tab's main conversation.
+  // the workflow phase, just before the session stats (note 203): what the host found in a Claude tab's main conversation;
+  // with none, 'no workflow', and the card says how to start one, as the host found it in Claude Code's command list.
   // No click action; the card opens on hover and focus, and closes on leave, blur and Escape.
   const PHASES = ['Design', 'Plan', 'Build', 'Finish'];   // src/phase.js's PHASES: the page cannot require it, and a test holds the two equal
   const $mphase = $('m-phase'), $phaseCard = $('m-phasecard');
-  let phaseNow = null;
+  let phaseNow = null, phaseTab = false, workflowNow = null;   // phaseTab: the tab shown is a Claude tab, so the pill is shown
   function drawPhaseCard() {
     $phaseCard.textContent = '';
     const full = (phaseNow && phaseNow.skill) || '', cut = full.lastIndexOf(':');
@@ -1478,9 +1484,10 @@ ${glyphCss}
       r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', name), el('span', 'sk', now ? full.slice(cut + 1) : ''));
       $phaseCard.append(r);
     }
+    if (!phaseNow) $phaseCard.append(el('div', 'none', workflowNow ? 'Not in a ' + workflowNow.plugin + ' workflow. Start one with ' + workflowNow.command + '.' : 'No workflow plugin is loaded.'));
   }
   function showPhaseCard() {
-    if ($mphase.hidden || !phaseNow) return;
+    if ($mphase.hidden || !phaseTab) return;
     drawPhaseCard(); $phaseCard.hidden = false;
     const r = $mphase.getBoundingClientRect();
     $phaseCard.style.bottom = (window.innerHeight - r.top + 4) + 'px';
@@ -1488,9 +1495,12 @@ ${glyphCss}
   }
   function hidePhaseCard() { $phaseCard.hidden = true; }
   function syncPhase(t) {
-    phaseNow = t && t.kind === 'claude' && t.phase ? t.phase : null;
-    $mphase.hidden = !phaseNow; $mphase.textContent = phaseNow ? phaseNow.phase : '';
-    if (!phaseNow) hidePhaseCard(); else if (!$phaseCard.hidden) drawPhaseCard();
+    phaseTab = !!t && t.kind === 'claude';
+    phaseNow = phaseTab && t.phase ? t.phase : null;
+    workflowNow = phaseTab && t.workflow ? t.workflow : null;
+    $mphase.hidden = !phaseTab; $mphase.textContent = phaseNow ? phaseNow.phase : phaseTab ? 'no workflow' : '';
+    $mphase.classList.toggle('none', phaseTab && !phaseNow);
+    if (!phaseTab) hidePhaseCard(); else if (!$phaseCard.hidden) drawPhaseCard();
   }
   $mphase.addEventListener('mouseenter', showPhaseCard); $mphase.addEventListener('focus', showPhaseCard);
   $mphase.addEventListener('mouseleave', hidePhaseCard); $mphase.addEventListener('blur', hidePhaseCard);
