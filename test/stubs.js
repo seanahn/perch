@@ -109,6 +109,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
   store.sessions = store.sessions.map((x) => Object.assign({}, x));   // each install has records of its own
   const fakeStore = Object.assign({}, realStore, {
     titleOf: async (kind, id) => { const x = store.sessions.find((r) => r.kind === kind && r.id === id); return x && kind === 'claude' ? { title: x.title, named: !!x.named } : null; },
+    forkSession: async (kind, id, o) => { if (kind !== 'claude') throw new Error('Codex sessions cannot be forked here'); if (store.failFork) throw new Error(store.failFork); (store.forked = store.forked || []).push([kind, id, o]); const nid = id + '-fork'; store.sessions.unshift({ kind, id: nid, title: o.title, named: true, updatedAt: Date.now() }); return { id: nid, title: o.title }; },
     deleteSession: async (kind, id, o) => { if (store.failDelete) throw new Error(store.failDelete); store.deleted.push([kind, id, o]); store.sessions = store.sessions.filter((x) => !(x.kind === kind && x.id === id)); },
     listSessions: async (o) => { store.lists.push(o); return { sessions: store.sessions.map((x) => Object.assign({}, x)), failed: store.failed.slice() }; },
     claudeSessionUsage: async (id) => { const u = store.claudeUsage[id]; if (u instanceof Error) throw u; return u ? JSON.parse(JSON.stringify(u)) : null; },

@@ -1486,6 +1486,17 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(v.past().sessions[0].open, true, 'the list, sent again, marks it open');
     v.fire({ type: 'openPast', key: 'claude:nope' }); await flush();
     assert.strictEqual(m.perch.sessions.length, 1, 'a row no longer listed opens nothing');
+    // a Claude row forked: a copy of the session, under its name and (fork), opened in a tab of its own with the settings of
+    // the tab open on the original; the original keeps its tab. A Codex row cannot be, and says why
+    opened.model = 'opus'; opened.effort = 'high'; opened.mode = 'acceptEdits';
+    v.fire({ type: 'forkPast', key: 'claude:c-old' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(m.store.forked.pop(), ['claude', 'c-old', { dir: process.cwd(), title: 'gate run (fork)' }]);
+    const fork = m.perch.sessions.find((s) => s !== opened && s.kind === 'claude');
+    assert.deepStrictEqual(fork && [fork.title, fork.agentSessionId, fork.model, fork.effort, fork.mode, m.perch.sessions.length], ['gate run (fork)', 'c-old-fork', 'opus', 'high', 'acceptEdits', 2], 'a tab on the copy, set as the original\'s');
+    assert.strictEqual(v.past().sessions[0].key, 'claude:c-old-fork', 'the list, sent again, has the copy');
+    v.fire({ type: 'forkPast', key: 'codex:x-old' }); await flush(); await flush();
+    assert(/Codex sessions cannot be forked here/.test(m.ui.errors.pop()), 'a Codex row says why');
+    assert.strictEqual(m.perch.sessions.length, 2);
     // in view again, or asked: the list is read again
     const n = m.store.lists.length;
     v.reveal(); await flush(); await flush();

@@ -746,6 +746,22 @@ async function renameSession(kind, id, title, opts = {}) {
  * `codex delete --force <id>` for Codex, which removes the rollout and its name. `codex` is the Codex program to run.
  * Throws if the record cannot be removed.
  */
+/**
+ * A copy of a session, as a new one the original never sees: Claude Code's whole conversation, through the Agent SDK. Codex's
+ * SDK has no way to fork a thread (`codex fork` is its interactive terminal's), so a Codex session cannot be forked here.
+ * @returns {Promise<{ id: string, title: string }>} the new session
+ */
+async function forkSession(kind, id, { dir, sdk, title } = {}) {
+  if (kind === 'codex') throw new Error('Codex sessions cannot be forked here: Codex forks only in its own terminal (codex fork).');
+  if (kind !== 'claude') throw new Error('Unknown agent: ' + kind);
+  if (!id) throw new Error('This session has not started yet.');
+  const api = sdk || await claudeSdk();
+  if (typeof api.forkSession !== 'function') throw new Error('This version of the Claude Agent SDK cannot fork a session.');
+  const name = cleanTitle(title) || undefined;
+  const got = await api.forkSession(id, Object.assign(dir ? { dir } : {}, name ? { title: name } : {}));
+  return { id: got && got.sessionId, title: name || '' };
+}
+
 async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
   if (!id) throw new Error('This session has not started yet.');
   if (kind === 'claude') {
@@ -762,4 +778,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { claudeProjectDir, codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { claudeProjectDir, forkSession, codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

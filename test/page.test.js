@@ -790,6 +790,10 @@ const rows = () => $$('#past .row').filter(shown).map((r) => [r.querySelector('.
 assert.deepStrictEqual(rows(), [['gate run', '2m', 'k glyph claude'], ['hello', 'open · 26m', 'k glyph codex'], ['supertrend', '1mo', 'k glyph claude']], 'each by name, agent and age; an open one says so');
 assert.strictEqual($('#past .h').textContent, 'Sessions in this folder');
 assert.deepStrictEqual($$('#past .row').map((r) => r.title), ['gate run\n/home/me/.claude/projects/-w/c1.jsonl', 'hello', 'supertrend'], 'the name and, on hover, the file the transcript is in');
+assert.deepStrictEqual($$('#past .row').map((r) => !!r.querySelector('.fork')), [true, false, true], 'a fork button on each Claude row; Codex cannot fork from here');
+assert.strictEqual($$('#past .row')[0].querySelector('.fork').title, 'Fork: open a copy of this session in a new tab; this one is left as it is');
+$$('#past .row')[0].querySelector('.fork').click();
+assert.deepStrictEqual(out.splice(0), [{ type: 'forkPast', key: 'claude:c1' }], 'the fork, and not the row\'s own open');
 $('#past input').value = 'SUPER'; $('#past input').dispatchEvent(new window.Event('input'));
 assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters by name');
 $$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');

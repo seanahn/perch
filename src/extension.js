@@ -13,7 +13,7 @@ const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
-const { listSessions, renameSession, deleteSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
+const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
 
@@ -2091,6 +2091,7 @@ class PerchView {
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       case 'pastRefresh': this.sendPast(); return;
+      case 'forkPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.forkPast(p); return; }
       case 'openPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) { this.resumeSession(p); this.sendPast(); } return; }
       case 'subagentUsage': this.subagentUsage(s); return;
       case 'indexStatus': this.indexStatus(s); return;
@@ -2371,6 +2372,22 @@ class PerchView {
       return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open, file: p.file || '' };
     });
     this.sidebar.view.webview.postMessage({ type: 'past', sessions, failed: res.failed || [] });
+  }
+
+  /**
+   * A copy of a past session, opened in a tab of its own: to take the conversation somewhere else without the original seeing
+   * it. Claude Code's whole conversation is copied (sessionStore.forkSession); the new tab has the settings of the tab open
+   * on the original, if one is. Codex's SDK cannot fork, and that is said.
+   */
+  async forkPast(p) {
+    let got;
+    try { got = await forkSession(p.kind, p.id, { dir: cwd(), title: cleanTitle(p.title) + ' (fork)' }); }
+    catch (err) { vscode.window.showErrorMessage('Perch: ' + String((err && err.message) || err)); return; }
+    if (!got || !got.id) return;
+    const from = this.owner(p.kind, p.id);
+    const s = this.addSession(p.kind, { resume: got.id, title: got.title, gateway: from ? from.gateway : undefined });
+    if (s && from) { s.model = from.model; s.effort = from.effort; s.mode = from.mode; s.own = from.own; this.persist(); this.sendTabs(); }
+    this.sendPast();
   }
 
   /** The way back in when no tab is on screen: the tab last used, or the sessions list, which starts a new tab too. */

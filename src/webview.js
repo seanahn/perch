@@ -222,6 +222,9 @@ ${glyphCss}
   #past .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #past .row .w { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #past .none { padding: 4px; }
+  #past .row .fork { flex: none; visibility: hidden; font-size: 12px; padding: 0 5px; line-height: 16px; border: none; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
+  #past .row:hover .fork { visibility: visible; }
+  #past .row .fork:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); border-radius: 3px; }
 
   /* composer: the message on top, the tools in a row beneath. Each kind of tab takes its own vendor's look. */
   #composer { --accent: #D97757; margin: 0 8px 4px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 10px; background: var(--vscode-input-background); flex: none; display: flex; flex-direction: column; }
@@ -497,6 +500,11 @@ ${glyphCss}
     for (const p of list) {
       const r = el('div', 'row'); r.dataset.t = String(p.title || '').toLowerCase(); r.title = p.title + (p.file ? '\\n' + p.file : '');   // on hover, the file the transcript is in
       r.append(badge(p.kind), el('span', 't', p.title || '(untitled)'), el('span', 'w', (p.open ? 'open · ' : '') + (p.when || '')));
+      if (p.kind === 'claude') {   // Codex's SDK cannot fork a thread
+        const f = el('button', 'fork', '⑂'); f.title = 'Fork: open a copy of this session in a new tab; this one is left as it is';
+        f.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'forkPast', key: p.key }); });
+        r.append(f);
+      }
       r.addEventListener('click', () => vscode.postMessage({ type: 'openPast', key: p.key }));
       rows.append(r);
     }

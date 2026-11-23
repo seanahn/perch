@@ -154,7 +154,11 @@ icon in the activity bar.
 With no tab of its own, the Perch view lists the past sessions of the
 workspace folder, Claude's and Codex's together, newest first, under the
 two buttons that start a new tab. Type to search; click one to open it,
-or to go to the tab already open on it.
+or to go to the tab already open on it. The ⑂ on a Claude row, shown on
+hover, forks it: a copy of the whole conversation opens in a new tab,
+named "… (fork)", with the settings of the tab open on the original, and
+the original is left as it is. Codex rows have none: Codex forks only in
+its own terminal (`codex fork`).
 
 Both can be used at once. `Perch: Move Tab to the Editor Area` and
 `Perch: Move Tab to the Sidebar` move the active tab; the session, its
