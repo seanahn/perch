@@ -1639,6 +1639,125 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- perch.claude.defaultBackend: where new Claude tabs start while nothing is remembered
+  {
+    const m = install(undefined, { config: { 'claude.defaultBackend': 'gateway' } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const a = v.lastTabs().active;
+    assert.strictEqual(v.tab(a).gateway, true, 'gateway default with nothing remembered');
+    v.fire({ type: 'setBackend', sid: a, value: 'subscription' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const b = v.lastTabs().active;
+    assert.strictEqual(v.tab(b).gateway, false, 'the remembered choice wins over the setting');
+    m.perch.dispose();
+    const r = install(undefined, { config: { 'claude.defaultBackend': 'remembered' } }); await flush();
+    const rv = fakeView(); r.registered['perch.main'].resolveWebviewView(rv.view); rv.fire({ type: 'ready' }); await flush();
+    rv.fire({ type: 'new', kind: 'claude' });
+    assert.strictEqual(rv.tab(rv.lastTabs().active).gateway, false, 'remembered with nothing remembered: the window\'s backend');
+    r.perch.dispose();
+  }
+
+  // ---- perch.firstStart.openClaudeTab: one Claude tab on the right, once; false is written first, at the scope that held true
+  {
+    const KEY = 'firstStart.openClaudeTab', settle = async () => { await wait(150); await flush(); };
+    // what the window held when the tab was opened: the setting's writes so far, and the column asked for
+    const watchOpen = (m) => { const seen = []; const open = m.vscode.window.createWebviewPanel; m.vscode.window.createWebviewPanel = (...a) => { seen.push({ updates: m.ui.configUpdates.length, column: a[2] && a[2].viewColumn }); return open(...a); }; return seen; };
+    const fresh = (o) => install(undefined, o);
+
+    // opens one tab and writes false: set for the user, nothing open, the left group stays
+    {
+      const m = fresh({ config: { [KEY]: true } }); const seen = watchOpen(m);
+      m.ui.groups = [{ viewColumn: 1, tabs: [] }, { viewColumn: 2, tabs: [] }];
+      assert.strictEqual(m.perch.sessions.length, 0, 'nothing opens before the wait for restored tabs is over');
+      await settle();
+      assert.deepStrictEqual(m.perch.sessions.map((s) => [s.kind, s.location]), [['claude', 'editor']], 'one Claude tab, in an editor');
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Global]], 'false, at the user\'s scope');
+      assert.deepStrictEqual(seen, [{ updates: 1, column: m.vscode.ViewColumn.Beside }], 'written before the tab opens, and the tab opens beside');
+      assert.strictEqual(m.ui.configUpdates.some((u) => u[1] === undefined), false, 'the key is never removed');
+      assert.deepStrictEqual([m.ui.untitled.length, m.ui.errors.length], [0, 0], 'two groups: no untitled editor, no error');
+      m.perch.dispose();
+    }
+
+    // the window has a single group once the tab is open: a new empty group on the left, with VS Code's watermark; only
+    // if none is kept, an empty untitled editor moved to the left. The Perch tab has the focus last, and the untitled
+    // editor never stays in its group
+    const watchSteps = (m) => {
+      const steps = [], at = { untitled: null }, run = m.vscode.commands.executeCommand, show = m.vscode.window.showTextDocument, open = m.vscode.window.createWebviewPanel;
+      m.vscode.commands.executeCommand = (id, ...a) => { if (id.includes('Group') && id !== 'workbench.action.lockEditorGroup') steps.push(id); if (id === 'workbench.action.moveEditorToLeftGroup' && at.untitled === 'perch') at.untitled = 'left'; return run(id, ...a); };
+      m.vscode.window.showTextDocument = (doc, o) => { steps.push(doc.isUntitled ? 'show untitled' : 'show file'); if (doc.isUntitled) at.untitled = o && o.viewColumn === m.vscode.ViewColumn.Active ? 'perch' : String(o && o.viewColumn); return show(doc, o); };
+      m.vscode.window.createWebviewPanel = (...a) => { const p = open(...a); const reveal = p.reveal; p.reveal = function (...r) { steps.push('reveal perch'); return reveal.apply(this, r); }; return p; };
+      return { steps, at };
+    };
+    {
+      const m = install(undefined, { config: { [KEY]: true }, commandAnswers: { 'workbench.action.newGroupLeft': () => { m.ui.addedGroups.push({ viewColumn: 1, tabs: [] }); } } });
+      const { steps } = watchSteps(m); await settle();
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.deepStrictEqual(steps, ['workbench.action.newGroupLeft', 'reveal perch'], 'an empty group on the left, then the Perch tab focused');
+      assert.strictEqual(m.ui.untitled.length, 0, 'the kept group needs no untitled editor');
+      assert.strictEqual(m.ui.panels.find((p) => !p.disposed).active, true);
+      m.perch.dispose();
+    }
+    {
+      const m = fresh({ config: { [KEY]: true } }); const { steps, at } = watchSteps(m); await settle(); await wait(1300);   // newGroupLeft adds nothing here: the wait for a second group runs out
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.strictEqual(m.ui.untitled.length, 1, 'one untitled editor');
+      assert.deepStrictEqual(m.ui.shown.map(([d, o]) => [d.isUntitled, o.preview]), [[true, false]], 'not a preview');
+      assert.deepStrictEqual(steps.slice(steps.indexOf('show untitled')), ['show untitled', 'workbench.action.moveEditorToLeftGroup', 'reveal perch'], 'moved left, then the Perch tab focused last');
+      assert.strictEqual(steps[0], 'workbench.action.newGroupLeft', 'the empty group was tried first');
+      assert.strictEqual(at.untitled, 'left', 'the untitled editor does not stay in the Perch tab\'s group');
+      assert.strictEqual(m.ui.panels.find((p) => !p.disposed).active, true);
+      m.perch.dispose();
+    }
+    // the tab never shows among the groups within the wait: said in Perch's output, and the groups are left alone
+    {
+      const m = fresh({ config: { [KEY]: true } }); m.ui.groups = [{ viewColumn: 1, tabs: [] }]; const { steps } = watchSteps(m);
+      await settle(); await wait(1300);
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.deepStrictEqual([steps, m.ui.untitled.length], [[], 0], 'no group made, no untitled editor');
+      assert(m.ui.traces.some((l) => /did not show among the editor groups/.test(l)), 'traced');
+      m.perch.dispose();
+    }
+
+    // a restored tab means no new tab, and false is still written; a tab in the sidebar counts too
+    for (const location of ['editor', 'sidebar']) {
+      const saved = { 'perch.sessions.v1': { active: location === 'sidebar' ? 'back' : null, counters: { claude: 1, codex: 0 }, sessions: [{ id: 'back', kind: 'claude', title: 'Came back', titled: true, resume: 'sess-back', location, paneled: location === 'editor' }] } };
+      const m = install(saved, { config: { [KEY]: true } }); await settle();
+      assert.deepStrictEqual(m.perch.sessions.map((s) => s.id), ['back'], `a restored ${location} tab: no new tab`);
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Global]], `a restored ${location} tab: false still written`);
+      m.perch.dispose();
+    }
+
+    // a refused write opens nothing, and says nothing but to Perch's output
+    {
+      const m = fresh({ config: { [KEY]: true } }); m.ui.failConfigUpdate = 'Unable to write to User Settings: a policy sets it'; await settle();
+      assert.deepStrictEqual([m.perch.sessions.length, m.ui.panels.length, m.ui.errors.length, m.ui.warnings.length], [0, 0, 0, 0], 'no tab, no message');
+      assert(m.ui.traces.some((l) => l.includes('perch.firstStart.openClaudeTab could not be set back to false') && l.includes('a policy sets it')), 'said in Perch\'s output');
+      m.perch.dispose();
+    }
+
+    // the workspace scope is written back at the workspace scope, a folder's at the folder's
+    {
+      const m = fresh(); m.ui.workspaceConfig = { [KEY]: true }; await settle();
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Workspace]]);
+      assert.strictEqual(m.perch.sessions.length, 1);
+      m.perch.dispose();
+      const f = fresh(); f.ui.folderConfig[process.cwd()] = { [KEY]: true }; await settle();
+      assert.deepStrictEqual(f.ui.configUpdates, [[KEY, false, f.vscode.ConfigurationTarget.WorkspaceFolder, process.cwd()]]);
+      assert.strictEqual(f.perch.sessions.length, 1);
+      f.perch.dispose();
+      // the user's true under a workspace's false is the workspace's false: nothing happens
+      const w = fresh({ config: { [KEY]: true } }); w.ui.workspaceConfig = { [KEY]: false }; await settle();
+      assert.deepStrictEqual([w.ui.configUpdates.length, w.perch.sessions.length], [0, 0]);
+      w.perch.dispose();
+    }
+
+    // false or absent does nothing: no write, no tab
+    for (const config of [{ [KEY]: false }, {}]) {
+      const m = fresh({ config }); await settle();
+      assert.deepStrictEqual([m.ui.configUpdates.length, m.perch.sessions.length], [0, 0], JSON.stringify(config));
+      m.perch.dispose();
+    }
+  }
+
   // ---- the model pill on the gateway: the gateway's names, from the file; a model of Claude's catalog is let go when a tab moves there
   {
     const fs = require('fs'), os = require('os'), path = require('path');
@@ -3550,6 +3669,96 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const nv = fakeView(); n.registered['perch.main'].resolveWebviewView(nv.view); nv.fire({ type: 'ready' }); await flush();
     assert.deepStrictEqual(told(nv.got), [], 'without jay a page is told nothing');
     n.perch.dispose();
+  }
+
+  // ---- each Claude tab's workflow phase (note 203): from main-thread Skill calls whose result is ok, from the user's slash
+  // commands, and from the session's whole record when the tab reopens or comes back to it; never saved with the tab
+  {
+    const m = install(undefined, { past: { transcripts: {} } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    assert.strictEqual(v.tab(c).phase, null, 'no workflow skill yet: no phase');
+    // skill sets the phase once its result is ok
+    knobs.skills = [{ skill: 'trivialpowers:brainstorming' }];
+    v.fire({ type: 'send', sid: c, text: 'design the flush fix' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' });
+    knobs.skills = [{ skill: 'trivialpowers:writing-plans', isError: true }, { skill: 'trivialpowers:test-driven-development' }];
+    v.fire({ type: 'send', sid: c, text: 'plan it' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' }, 'a failed call, and a skill of no phase, leave it');
+    // sub-agent skill calls do not move the phase
+    knobs.skills = [{ skill: 'trivialpowers:executing-plans', sub: true }];
+    v.fire({ type: 'send', sid: c, text: 'build it with a sub-agent' }); await flush();
+    assert.strictEqual(v.tab(c).phase.phase, 'Design', 'a sub-agent\'s call is its own conversation\'s');
+    // a slash command sets the phase
+    v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' });
+    const s = m.perch.get(c), id1 = s.agentSessionId;
+    // a bare slash command is named in full when Claude Code's command list has exactly one <plugin>:<name> for it
+    { const cmds = (...names) => s.view.setCommands('claude', names.map((name) => ({ name, description: 'd' })));
+      cmds('clear', 'trivialpowers:finishing-a-development-branch');
+      v.fire({ type: 'send', sid: c, text: '/brainstorming the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'brainstorming' }, 'no command by that name in the list: bare');
+      cmds('clear', 'trivialpowers:brainstorming', 'trivialpowers:writing-plans');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/brainstorming the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'trivialpowers:brainstorming' }, 'one plugin offers it: its full name');
+      cmds('trivialpowers:brainstorming', 'other:brainstorming');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/brainstorming' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'brainstorming' }, 'two plugins offer it: bare');
+      cmds('trivialpowers:brainstorming');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans' }); await flush(); v.fire({ type: 'send', sid: c, text: '/other:brainstorming' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Design', skill: 'other:brainstorming' }, 'a name with a prefix is kept as typed');
+      cmds('clear');
+      v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
+      assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }); }
+    // the phase follows what was sent: a note kept for the record goes ahead of the message, so it no longer starts with /
+    s.records = ['For the record: PR #1 (https://x.example/1) was merged at 10:00.']; s.recordsSent = 0;
+    v.fire({ type: 'send', sid: c, text: '/finishing-a-development-branch' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }, 'a slash command behind a note runs no command');
+    assert(!('phase' in m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c)), 'not saved with the tab');
+    // codex stretch hides the pill, return restores it: the phase the session had as the tab left it, kept in memory by
+    // session id, so its record is not read again
+    m.store.transcripts[id1] = { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };
+    assert(s.switchVendor('codex')); await flush();
+    assert.deepStrictEqual([v.tab(c).kind, v.tab(c).phase, s.phase], ['codex', null, null], 'Codex has no phase');
+    const reads = () => m.store.loads.filter((l) => l[0] === 'claude' && l[1] === id1).length, read0 = reads();
+    assert(s.switchVendor('claude')); await flush(); await flush();
+    assert.strictEqual(s.agentSessionId, id1);
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }, 'the phase of the session it is back on, as it was');
+    assert.strictEqual(reads(), read0, 'kept, not read again');
+    // a session the tab has no phase for yet is read once, then kept
+    v.fire({ type: 'new', kind: 'claude' }); const c3 = v.lastTabs().active, s3 = m.perch.get(c3);
+    v.fire({ type: 'send', sid: c3, text: 'look at the logs' }); await flush();
+    const id3 = s3.agentSessionId, reads3 = () => m.store.loads.filter((l) => l[0] === 'claude' && l[1] === id3).length;
+    assert(id3 && s3.phase === null);
+    m.store.transcripts[id3] = { events: [], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };
+    assert(s3.switchVendor('codex')); await flush();
+    assert(s3.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([v.tab(c3).phase, reads3()], [{ phase: 'Build', skill: 'executing-plans' }, 1], 'the phase of the session it is back on, from its record');
+    assert(s3.switchVendor('codex')); await flush();
+    assert(s3.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([v.tab(c3).phase, reads3()], [{ phase: 'Build', skill: 'executing-plans' }, 1], 'read once');
+    // a new Claude thread starts with no phase
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    const sx = m.perch.get(x); sx.phase = { phase: 'Plan', skill: 'writing-plans' };   // as if left over
+    assert(sx.switchVendor('claude')); await flush();
+    assert.deepStrictEqual([sx.agentSessionId, v.tab(x).phase], [null, null]);
+    // reopened tab gets its phase from the record: one stretch (loadPast), and one that has been on both vendors (loadPeriods)
+    const dump = m.memento._dump(), tabs = dump['perch.sessions.v1'].sessions;
+    tabs.push(Object.assign({}, tabs.find((t) => t.id === c), { id: 'P2', resume: 'cl-2', periods: [{ kind: 'claude', resume: 'cl-2', said: true }, { kind: 'codex', resume: 'cx-2', said: true }, { kind: 'claude', resume: 'cl-2', said: true }] }));
+    const r = install(dump, { past: { transcripts: {
+      [id1]: { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 3, phase: { phase: 'Finish', skill: 'finishing-a-development-branch' } },
+      'cl-2': { events: [{ kind: 'user', text: 'one', queued: false }], earlier: 0, phase: { phase: 'Design', skill: 'brainstorming' } },
+      'cx-2': { events: [{ kind: 'user', text: 'two', queued: false }], earlier: 0, phase: null },
+    } } }); await flush();
+    const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(vr.tab(c).phase, { phase: 'Finish', skill: 'finishing-a-development-branch' });
+    assert.deepStrictEqual(vr.tab('P2').phase, { phase: 'Design', skill: 'brainstorming' });
+    const p2 = r.perch.get('P2'), readsP2 = () => r.store.loads.filter((l) => l[0] === 'claude' && l[1] === 'cl-2').length, readP2 = readsP2();
+    assert(p2.switchVendor('codex')); await flush();
+    assert(p2.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([p2.agentSessionId, vr.tab('P2').phase, readsP2()], ['cl-2', { phase: 'Design', skill: 'brainstorming' }, readP2], 'kept from the read as the tab reopened');
+    assert.strictEqual(vr.tab(x).phase, null, 'a tab with no workflow skill on record has none');
+    r.perch.dispose(); m.perch.dispose();
   }
 
   console.log('HOST OK');

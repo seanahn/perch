@@ -695,6 +695,37 @@ host({ type: 'tabs', tabs: [with_(A, { own: 'api' }), B], active: 'a' });
 assert.deepStrictEqual([$mb.textContent, [...$mu.children].map((n) => n.textContent), /API \/ Bedrock, its own choice; the window is on subscription \(login\)/.test($mb.title)], ['API', ['\u2014'], true]);
 $mb.click(); assert.deepStrictEqual(menuItems().map((x) => [x.label, x.on]), [['subscription (login)', false], ['API / Bedrock', true], ['LLM gateway', false]], 'the tab\'s own backend is checked'); assert(/^This tab, with credentials of Claude Code's own; the window stays on the subscription\./.test(menuItems()[1].desc)); $mb.click();
 host({ type: 'tabs', tabs: [A, B], active: 'a' });
+// the workflow phase: a pill right after the backend pill, and a hover card of the four phases with the current one marked
+{ const $ph = () => $('#meter .phase'), card = () => $('.phasecard');
+  const rows = () => $$('.phasecard .ph').map((r) => [r.querySelector('.mk').textContent, r.querySelector('.n').textContent, r.querySelector('.sk').textContent, r.classList.contains('now')]);
+  const PLAN = { phase: 'Plan', skill: 'trivialpowers:writing-plans' };
+  assert(!shown($ph()), 'no phase yet: no pill');
+  host({ type: 'tabs', tabs: [with_(A, { phase: PLAN }), B], active: 'a' });
+  assert.deepStrictEqual([shown($ph()), $ph().textContent, $mb.nextElementSibling === $ph()], [true, 'Plan', true], 'the phase, directly after the backend pill');
+  assert.deepStrictEqual([$ph().getAttribute('tabindex'), $ph().getAttribute('aria-describedby') === card().id, !!card().id, shown(card())], ['0', true, true, false], 'focusable, described by its card, which starts closed');
+  $ph().dispatchEvent(new window.MouseEvent('mouseenter'));
+  assert(shown(card()), 'hovering opens the card');
+  assert.strictEqual(card().querySelector('.h').textContent, 'Workflow phase \u00b7 trivialpowers', 'the header names the plugin');
+  assert.deepStrictEqual(rows(), [['', 'Design', '', false], ['▸', 'Plan', 'writing-plans', true], ['', 'Build', '', false], ['', 'Finish', '', false]], 'every phase in order, the current one marked with the skill that set it');
+  assert.deepStrictEqual(rows().map((r) => r[1]), require('../src/phase').PHASES, 'the page\'s list is src/phase.js\'s');
+  key(d.body, 'Escape'); assert(!shown(card()), 'Escape closes it');
+  $ph().dispatchEvent(new window.MouseEvent('mouseenter')); $ph().dispatchEvent(new window.MouseEvent('mouseleave')); assert(!shown(card()), 'leaving closes it');
+  $ph().dispatchEvent(new window.FocusEvent('focus')); assert(shown(card()), 'keyboard focus opens it');
+  host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Build', skill: 'executing-plans' } }), B], active: 'a' });
+  assert.deepStrictEqual([$ph().textContent, rows().filter((r) => r[3]).map((r) => r[1] + ' ' + r[2])], ['Build', ['Build executing-plans']], 'an open card follows the phase');
+  assert.deepStrictEqual([card().querySelector('.h').textContent, rows().filter((r) => r[3]).map((r) => r[2])], ['Workflow phase', ['executing-plans']], 'no prefix: no plugin in the header');
+  host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Plan', skill: 'a:b:writing-plans' } }), B], active: 'a' });
+  assert.deepStrictEqual([card().querySelector('.h').textContent, rows().filter((r) => r[3]).map((r) => r[2])], ['Workflow phase \u00b7 a:b', ['writing-plans']], 'the prefix is the part before the last colon');
+  $ph().dispatchEvent(new window.FocusEvent('blur')); assert(!shown(card()), 'blur closes it');
+  const before = out.length; $ph().click(); assert.deepStrictEqual([out.length, shown(card()), $('#menu')], [before, false, null], 'a click does nothing');
+  host({ type: 'tabs', tabs: [with_(A, { phase: PLAN, gateway: true, backend: 'gateway' }), B], active: 'a' });
+  assert.deepStrictEqual([shown($ph()), $ph().textContent], [true, 'Plan'], 'on the gateway too');
+  $ph().dispatchEvent(new window.MouseEvent('mouseenter'));
+  host({ type: 'tabs', tabs: [with_(A, { phase: null }), B], active: 'a' });
+  assert.deepStrictEqual([shown($ph()), shown(card())], [false, false], 'no phase: no pill, and its card closes');
+  host({ type: 'tabs', tabs: [A, with_(B, { phase: PLAN })], active: 'b' });
+  assert(!shown($ph()), 'a Codex tab has no pill');
+  host({ type: 'tabs', tabs: [A, B], active: 'a' }); }
 // the usage panel under a Claude tab: no plan is named, since Anthropic's usage endpoint names none; each window; refresh
 $mu.click(); assert(shown(puOf()) && $('#m-use').getAttribute('aria-pressed') === 'true', 'the compact reading opens the usage panel');
 assert.deepStrictEqual([puOf().querySelector('.mxh .what').textContent, puRows()], ['Claude usage', [['Backend', 'subscription (login)'], ['Plan', 'not reported']]]);

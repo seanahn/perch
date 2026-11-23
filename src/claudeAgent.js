@@ -239,7 +239,7 @@ class ClaudeAgent {
         const texts = [];
         for (const b of blocks) {
           if (b.type === 'text') texts.push(b.text);
-          else if (b.type === 'tool_use') this.emit({ kind: 'tool_use', id: b.id, name: b.name, input: b.input });
+          else if (b.type === 'tool_use') this.emit({ kind: 'tool_use', id: b.id, name: b.name, input: b.input, sub: !!m.parent_tool_use_id });   // sub: a sub-agent's call, not the main conversation's
           else if (b.type === 'thinking') this.emit({ kind: 'thinking', text: b.thinking || '' });
           // the API retried a refused response on another model itself: the answer says so before Claude Code does, which is
           // only when the turn ends (model_refusal_fallback, _fellBack). `early`: the move, without the notice

@@ -660,6 +660,12 @@ efforts, and is sent under the name the tab's backend knows it by.
 Defaults for new tabs: `perch.claude.model`, `perch.claude.effort`,
 `perch.claude.permissionMode`, `perch.codex.model`,
 `perch.codex.reasoningEffort`, `perch.codex.sandboxMode`.
+`perch.claude.defaultBackend` (`gateway` starts new Claude tabs on the
+gateway until a backend has been chosen) and `perch.firstStart.openClaudeTab`
+(opens one Claude tab on the right at the next start, once) are for an
+installer that sets a machine up. A pill in a Claude tab's footer names the
+phase of a skill-driven workflow (Design, Plan, Build, Finish); see
+[the design](docs/notes/203-workflow-phase-and-first-start.md).
 
 ## Codebase search
 

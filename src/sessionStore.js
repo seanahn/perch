@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const { newestRollouts } = require('./codexMeter');
 const { fallbackNote } = require('./models');
+const { phaseFromEvents } = require('./phase');
 
 const MAX_TITLE = 80;
 const HEAD_BYTES = 256 * 1024;   // a rollout opens with its instructions; the first message follows within this
@@ -218,6 +219,34 @@ async function claudeNotices(id, { claudeDir = process.env.CLAUDE_CONFIG_DIR || 
     break;
   }
   return out;
+}
+
+/**
+ * The workflow phase of a past Claude session (src/phase.js), from the session's own file: the Agent SDK's reader returns
+ * only what follows the last compaction (`compact_boundary`), and the skill that set the phase is often before it. Only the
+ * lines that can name a workflow skill are parsed: a Skill call, its result, a slash command; a sub-agent's records
+ * (`isSidechain`) are not the main conversation's. Undefined when there is no file, null when it has no workflow skill.
+ */
+async function claudePhase(id, { dir, claudeDir = claudeConfigDir() } = {}) {
+  if (!/^[A-Za-z0-9_-]+$/.test(String(id || ''))) return undefined;   // a session's id names a file: nothing else does
+  const file = claudeFiles(claudeDir)(id, dir);
+  let buf; try { buf = file ? await fs.promises.readFile(file) : null; } catch (_) { buf = null; }
+  if (!buf) return undefined;
+  const lines = new Map();   // where each line to parse starts -> where it ends
+  const take = (text) => {
+    const mark = Buffer.from(text);
+    for (let at = buf.indexOf(mark); at >= 0;) {
+      const nl = buf.indexOf(10, at), end = nl < 0 ? buf.length : nl;
+      lines.set(buf.lastIndexOf(10, at) + 1, end);
+      at = buf.indexOf(mark, end);
+    }
+  };
+  const records = () => [...lines].sort((a, b) => a[0] - b[0]).map(([s, e]) => { try { return JSON.parse(buf.toString('utf8', s, e)); } catch (_) { return null; } })
+    .filter((o) => o && !o.isSidechain && (o.type === 'user' || o.type === 'assistant'));
+  take('"Skill"'); take('<command-name>');   // as a value; in text it would be escaped
+  // then the results of the main conversation's Skill calls, by their call's id
+  for (const o of records()) for (const b of (o.type === 'assistant' && o.message && Array.isArray(o.message.content) ? o.message.content : [])) if (b && b.type === 'tool_use' && b.name === 'Skill' && typeof b.id === 'string') take(JSON.stringify(b.id));
+  return phaseFromEvents(claudeEvents(records()));
 }
 
 /**
@@ -618,11 +647,12 @@ function codexRollout(id, home) {
 
 /**
  * What was said in a past session, newest `limit` entries of it.
- * @returns {Promise<{ events: object[], earlier: number }>}  `earlier` counts the entries before those returned
+ * @returns {Promise<{ events: object[], earlier: number, phase: {phase: string, skill: string}|null }>}  `earlier` counts the
+ *   entries before those returned; `phase` is the workflow phase of the whole record (src/phase.js, claudePhase), Claude only
  */
 async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.codex'), claudeDir, sdk, limit = MAX_PAST } = {}) {
   let events = [];
-  if (!id) return { events, earlier: 0 };
+  if (!id) return { events, earlier: 0, phase: null };
   if (kind === 'claude') {
     const messages = await (sdk || await claudeSdk()).getSessionMessages(id, Object.assign(dir ? { dir } : {}, { includeSystemMessages: true }));
     // a notice comes back as its place in the conversation, without its words: those are read from the session's own file
@@ -630,8 +660,12 @@ async function loadTranscript(kind, id, { dir, home = path.join(os.homedir(), '.
     events = claudeEvents(messages, notes);
   }
   else if (kind === 'codex') { const file = codexRollout(id, home); if (file) { const text = fs.readFileSync(file, 'utf8'); events = addSubagentUsage(codexEvents(text), home, { text }); } }
+  // the phase of the whole record, compactions and all, from the session's own file; else from what the SDK returned,
+  // before the cut: the skill may be long before what is shown
+  let phase = null;
+  if (kind === 'claude') { phase = await claudePhase(id, { dir, claudeDir }); if (phase === undefined) phase = phaseFromEvents(events); }
   const earlier = Math.max(0, events.length - limit);
-  return { events: earlier ? events.slice(earlier) : events, earlier };
+  return { events: earlier ? events.slice(earlier) : events, earlier, phase };
 }
 
 /**
@@ -778,4 +812,4 @@ async function deleteSession(kind, id, { dir, sdk, codex, run } = {}) {
 /** A session's title in its agent's record. Codex gives a session no title of its own, so only Claude's is looked up. */
 async function titleOf(kind, id, o) { return kind === 'claude' ? titleOfClaude(id, o) : null; }
 
-module.exports = { claudeProjectDir, forkSession, codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };
+module.exports = { claudeProjectDir, forkSession, codeModeCommands, codeModeResults, collabEvent, codexQuestions, agentName, codexRollout, UsageTally, rolloutUsage, subagentEnds, addSubagentUsage, sessionUsage, claudeSessionUsage, claudeThreadUsage, deleteSession, titleOf, titleOfClaude, splitIde, listSessions, renameSession, loadTranscript, claudeEvents, claudeNotices, claudePhase, codexEvents, listClaude, listCodex, renameCodex, codexNames, parseRolloutHead, cleanTitle, ago, MAX_TITLE };

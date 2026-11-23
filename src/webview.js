@@ -336,6 +336,13 @@ ${glyphCss}
   #meter .mb:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb[aria-pressed="true"] { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
   #meter .mb.warn { background: var(--vscode-inputValidation-warningBackground); border-color: var(--vscode-inputValidation-warningBorder); color: var(--vscode-foreground); }
+  /* the workflow phase (note 203): a pill like the backend's, and on hover or focus a card of the four phases, the current one marked */
+  #meter .phase { flex: none; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); cursor: default; }
+  #meter .phase:hover, #meter .phase:focus { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); outline: none; }
+  .phasecard { pointer-events: none; }
+  .phasecard .ph { display: grid; grid-template-columns: 12px auto 1fr; column-gap: 6px; align-items: baseline; padding: 2px 8px; color: var(--vscode-descriptionForeground); }
+  .phasecard .ph.now { color: var(--vscode-menu-foreground, var(--vscode-foreground)); font-weight: 600; }
+  .phasecard .ph .sk { justify-self: end; padding-left: 12px; font-family: var(--vscode-editor-font-family); font-size: 11px; font-weight: normal; color: var(--vscode-descriptionForeground); }
   #meter .mu { flex: 1; min-width: 0; display: flex; gap: 8px; justify-content: flex-end; overflow: hidden; white-space: nowrap; cursor: pointer; }
   #meter .mu:hover { color: var(--vscode-foreground); }
   #meter .mu.stale { font-style: italic; }
@@ -370,7 +377,8 @@ ${glyphCss}
       <button id="send" disabled title="Send"></button>
     </div>
   </div>
-  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><button id="m-use" class="mb" aria-pressed="false">usage</button><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="meter" hidden><span id="m-claude" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Claude">${badge('claude')}</span><span id="m-codex" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" aria-label="Continue on Codex" hidden>${badge('codex')}</span><button id="m-backend" class="mb"></button><span id="m-phase" class="phase" tabindex="0" aria-describedby="m-phasecard" hidden></span><button id="m-use" class="mb" aria-pressed="false">usage</button><button id="m-index" class="mb" hidden>index</button><button id="m-subs" class="mb" hidden aria-pressed="false">sub-agents</button><span id="m-usage" class="mu" role="button" tabindex="0"></span></div>
+  <div id="m-phasecard" class="pop phasecard" role="tooltip" hidden></div>
 <script nonce="${nonce}">
 (function () {
   const vscode = acquireVsCodeApi();
@@ -1456,6 +1464,38 @@ ${glyphCss}
   $mindex.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleIndex(t.id); });
   $msubs.title = 'This session\\'s usage, thread by thread: the main thread and each sub-agent it started, each with its model, turns, tokens, and cost at list prices';
   $msubs.addEventListener('click', (e) => { e.stopPropagation(); const t = cur(); if (t) toggleUsage(t.id); });
+  // the workflow phase, after the backend pill (note 203): what the host found in a Claude tab's main conversation.
+  // No click action; the card opens on hover and focus, and closes on leave, blur and Escape.
+  const PHASES = ['Design', 'Plan', 'Build', 'Finish'];   // src/phase.js's PHASES: the page cannot require it, and a test holds the two equal
+  const $mphase = $('m-phase'), $phaseCard = $('m-phasecard');
+  let phaseNow = null;
+  function drawPhaseCard() {
+    $phaseCard.textContent = '';
+    const full = (phaseNow && phaseNow.skill) || '', cut = full.lastIndexOf(':');
+    $phaseCard.append(el('div', 'h', cut > 0 ? 'Workflow phase \\u00b7 ' + full.slice(0, cut) : 'Workflow phase'));
+    for (const name of PHASES) {
+      const now = !!phaseNow && phaseNow.phase === name, r = el('div', 'ph' + (now ? ' now' : ''));
+      r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', name), el('span', 'sk', now ? full.slice(cut + 1) : ''));
+      $phaseCard.append(r);
+    }
+  }
+  function showPhaseCard() {
+    if ($mphase.hidden || !phaseNow) return;
+    drawPhaseCard(); $phaseCard.hidden = false;
+    const r = $mphase.getBoundingClientRect();
+    $phaseCard.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+    $phaseCard.style.left = Math.max(8, Math.min(r.left, window.innerWidth - $phaseCard.offsetWidth - 8)) + 'px';
+  }
+  function hidePhaseCard() { $phaseCard.hidden = true; }
+  function syncPhase(t) {
+    phaseNow = t && t.kind === 'claude' && t.phase ? t.phase : null;
+    $mphase.hidden = !phaseNow; $mphase.textContent = phaseNow ? phaseNow.phase : '';
+    if (!phaseNow) hidePhaseCard(); else if (!$phaseCard.hidden) drawPhaseCard();
+  }
+  $mphase.addEventListener('mouseenter', showPhaseCard); $mphase.addEventListener('focus', showPhaseCard);
+  $mphase.addEventListener('mouseleave', hidePhaseCard); $mphase.addEventListener('blur', hidePhaseCard);
+  // Escape while the card is open only closes the card: caught first, so it neither closes a menu nor cancels dictation
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$phaseCard.hidden) { e.preventDefault(); e.stopPropagation(); hidePhaseCard(); } }, true);
   const meters = { claude: null, codex: null };
   let meter = null, meterKind = null, onGateway = false;
   // the gateway, as the host last said: whether there is a file to offer a tab on, and whether it is in order
@@ -1466,6 +1506,7 @@ ${glyphCss}
     meter = meterKind ? meters[meterKind] : null;
     { const pp = t ? panes.get(t.id) : null; if (pp && pp.puOpen) drawPlan(pp); }   // the panel follows the tab and its vendor, never showing another's reading
     $meter.hidden = !meter;
+    syncPhase(meter ? t : null);   // before the gateway's and the tab's own backend's early returns
     if (!meter) return;
     const claude = meterKind === 'claude';
     // These are actions, not identity marks: show where the tab can continue. The current vendor is already the tab's

@@ -72,4 +72,16 @@ assert.deepStrictEqual(permissionResult('Bash', cmd, { decision: 'always' }, [{ 
   } finally { Date.now = real; }
 }
 
+// ---- A tool call says whether a sub-agent made it: the workflow phase follows the main conversation only (note 203)
+{
+  const { ClaudeAgent } = require('../src/claudeAgent.js');
+  const P = ClaudeAgent.prototype, out = [];
+  const a = { live: '', waiting: [], running: false, pending: 0, lastCost: null, emit: (e) => out.push(e), _context() {}, _settle: P._settle, _state: P._state, _tasks: P._tasks, _taken: P._taken, _answered: P._answered, _retract: P._retract, _fellBack: P._fellBack };
+  const say = (m) => P._onMessage.call(a, m);
+  const call = (id) => ({ type: 'tool_use', id, name: 'Skill', input: { skill: 'trivialpowers:writing-plans' } });
+  say({ type: 'assistant', parent_tool_use_id: null, message: { content: [call('m1')] } });
+  say({ type: 'assistant', parent_tool_use_id: 'task-1', message: { content: [call('s1')] } });
+  assert.deepStrictEqual(out.filter((e) => e.kind === 'tool_use').map((e) => [e.id, e.sub]), [['m1', false], ['s1', true]]);
+}
+
 console.log('CLAUDE AGENT OK');

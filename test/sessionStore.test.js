@@ -163,16 +163,60 @@ function rollout(home, day, id, lines, mtime) {
   assert.deepStrictEqual([S.codexEvents(''), S.codexEvents(null), S.claudeEvents(null)], [[], [], []]);
 
   rollout(home, '2026-09-25', 'hhh', roll, NOW - 6 * D);
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home }), { events: expected, earlier: 0 });
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home, limit: 3 }), { events: expected.slice(5), earlier: 5 }, 'the most recent, and how many came before');
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'hh', { home }), { events: [], earlier: 0 }, 'an id is matched whole');
-  assert.deepStrictEqual(await S.loadTranscript('codex', 'gone', { home: path.join(home, 'nowhere') }), { events: [], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home }), { events: expected, earlier: 0, phase: null });
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hhh', { home, limit: 3 }), { events: expected.slice(5), earlier: 5, phase: null }, 'the most recent, and how many came before');
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'hh', { home }), { events: [], earlier: 0, phase: null }, 'an id is matched whole');
+  assert.deepStrictEqual(await S.loadTranscript('codex', 'gone', { home: path.join(home, 'nowhere') }), { events: [], earlier: 0, phase: null });
   const asked = [];
   const reader = { getSessionMessages: async (...a) => { asked.push(a); return [U('hi'), A([{ type: 'text', text: 'hello' }])]; } };
-  assert.deepStrictEqual(await S.loadTranscript('claude', 'c-1', { dir: '/w', sdk: reader }), { events: [{ kind: 'user', text: 'hi', queued: false }, { kind: 'text', text: 'hello' }], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('claude', 'c-1', { dir: '/w', sdk: reader, claudeDir: path.join(home, 'no-claude') }), { events: [{ kind: 'user', text: 'hi', queued: false }, { kind: 'text', text: 'hello' }], earlier: 0, phase: null });
   assert.deepStrictEqual(asked, [['c-1', { dir: '/w', includeSystemMessages: true }]], 'with the system records too: where Claude Code\'s notices were said');
-  assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0 });
+  assert.deepStrictEqual(await S.loadTranscript('claude', '', { sdk: reader }), { events: [], earlier: 0, phase: null });
   await assert.rejects(S.loadTranscript('claude', 'c-1', { sdk: { getSessionMessages: async () => { throw new Error('unreadable'); } } }), /unreadable/);
+  // phase found beyond the shown transcript: the phase is the whole record's, read before the cut
+  {
+    const many = [A([{ type: 'tool_use', id: 'sk', name: 'Skill', input: { skill: 'x:writing-plans' } }]), U([{ type: 'tool_result', tool_use_id: 'sk', content: 'Launching skill', is_error: false }])];
+    for (let i = 0; i < 599; i++) many.push(U('step ' + i), A([{ type: 'text', text: 'ok ' + i }]));
+    assert.strictEqual(many.length, 1200);
+    const noClaude = mk();   // no session files: the phase is read from what the SDK returns
+    const r = await S.loadTranscript('claude', 'c-long', { sdk: { getSessionMessages: async () => many }, limit: 1000, claudeDir: noClaude });
+    assert(r.earlier > 0, 'the skill call is not among the entries shown');
+    assert.deepStrictEqual(r.phase, { phase: 'Plan', skill: 'x:writing-plans' });
+    assert.strictEqual((await S.loadTranscript('codex', 'hhh', { home })).phase, null, 'Codex has no phase');
+    fs.rmSync(noClaude, { recursive: true, force: true });
+  }
+  // the phase across compactions: the SDK returns only what follows the last compact_boundary, so the phase is read from
+  // the session's own file, main conversation only (a sub-agent's records are isSidechain), a Skill call once its result is ok
+  {
+    const claudeDir = mk(), proj = path.join(claudeDir, 'projects', '-w'); fs.mkdirSync(proj, { recursive: true });
+    try {
+      const rec = (o) => JSON.stringify(Object.assign({ isSidechain: false, sessionId: 'c-cmp' }, o));
+      const skill = (id, name, side) => rec({ type: 'assistant', isSidechain: !!side, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Skill', input: { skill: name } }] } });
+      const result = (id, error, side) => rec({ type: 'user', isSidechain: !!side, message: { role: 'user', content: [Object.assign({ type: 'tool_result', tool_use_id: id, content: error ? 'Unknown skill' : 'Launching skill' }, error ? { is_error: true } : {})] }, toolUseResult: { success: !error } });
+      fs.writeFileSync(path.join(proj, 'c-cmp.jsonl'), [
+        JSON.stringify({ type: 'api-request-shape', shape: { tools: [{ name: 'Skill', description: 'skills' }] } }),   // the tool list names Skill too
+        rec({ type: 'user', message: { role: 'user', content: '<command-name>/trivialpowers:brainstorming</command-name>\n<command-message>brainstorming</command-message>\n<command-args>the flush fix</command-args>' } }),
+        skill('s1', 'trivialpowers:writing-plans'), result('s1'),
+        skill('s2', 'trivialpowers:finishing-a-development-branch'), result('s2', true),   // failed: does not count
+        skill('s3', 'trivialpowers:executing-plans'),                                        // no result yet: does not count
+        rec({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', parentUuid: null }),
+        skill('s4', 'trivialpowers:subagent-driven-development', true), result('s4', false, true),   // a sub-agent's own
+        rec({ type: 'user', message: { role: 'user', content: 'go on with the plan' } }),
+        rec({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Mentions "Skill" in passing.' }] } }),
+      ].join('\n') + '\n');
+      const after = [U('go on with the plan'), A([{ type: 'text', text: 'Mentions "Skill" in passing.' }])];   // what the SDK returns: after the boundary
+      const sdk = { getSessionMessages: async () => after };
+      const r = await S.loadTranscript('claude', 'c-cmp', { dir: '/w', sdk, claudeDir });
+      assert.deepStrictEqual(r.events, [{ kind: 'user', text: 'go on with the plan', queued: false }, { kind: 'text', text: 'Mentions "Skill" in passing.' }], 'the transcript is what the SDK returns');
+      assert.deepStrictEqual(r.phase, { phase: 'Plan', skill: 'trivialpowers:writing-plans' }, 'the last workflow skill before the boundary');
+      assert.deepStrictEqual((await S.loadTranscript('claude', 'c-cmp', { dir: '/elsewhere', sdk, claudeDir })).phase, { phase: 'Plan', skill: 'trivialpowers:writing-plans' }, 'the file found in another project folder');
+      // a file with no workflow skill has no phase, whatever the SDK's messages say
+      fs.writeFileSync(path.join(proj, 'c-none.jsonl'), rec({ type: 'user', message: { role: 'user', content: 'hello' } }) + '\n');
+      const said = [A([{ type: 'tool_use', id: 'k', name: 'Skill', input: { skill: 'writing-plans' } }]), U([{ type: 'tool_result', tool_use_id: 'k', content: 'ok' }])];
+      assert.strictEqual((await S.loadTranscript('claude', 'c-none', { dir: '/w', sdk: { getSessionMessages: async () => said }, claudeDir })).phase, null, 'the file is the record');
+      assert.strictEqual((await S.loadTranscript('claude', 'c-gone', { dir: '/w', sdk: { getSessionMessages: async () => said }, claudeDir })).phase.phase, 'Plan', 'no file: from what the SDK returns');
+    } finally { fs.rmSync(claudeDir, { recursive: true, force: true }); }
+  }
 
   // ---- a Claude session's usage, thread by thread: the main thread from the session's file, each sub-agent from its own
   // under <id>/subagents/ with a meta file naming it; a response counts once however many records carry it
@@ -249,7 +293,7 @@ function rollout(home, day, id, lines, mtime) {
       const reader2 = { getSessionMessages: async () => [U('scan this'), Sys('s1'), Sys('s2'), A([{ type: 'text', text: 'Done.' }]), Sys('s9')] };
       assert.deepStrictEqual(await S.loadTranscript('claude', 'c-2', { dir: '/w', sdk: reader2, claudeDir }), { events: [
         { kind: 'user', text: 'scan this', queued: false }, { kind: 'note', level: 'warn', text: NOTICE }, { kind: 'text', text: 'Done.' },
-      ], earlier: 0 }, 'the notice where it was said; any other system record says nothing');
+      ], earlier: 0, phase: null }, 'the notice where it was said; any other system record says nothing');
     } finally { fs.rmSync(claudeDir, { recursive: true, force: true }); }
   }
 

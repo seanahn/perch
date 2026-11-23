@@ -16,6 +16,7 @@ const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
+const { phaseOfSkill, skillOfSlash, resolveSkill } = require('./phase');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
@@ -335,6 +336,9 @@ class Session {
     this.handoff = handoff && typeof handoff.text === 'string' ? handoff : null;   // the earlier conversation, sent ahead of the first message after a switch
     this.records = Array.isArray(records) ? records.filter((r) => typeof r === 'string' && r) : [];   // sentences for the record (a PR merged: perch.notePrMerged), sent with the next message
     this.recordsSent = 0;            // how many of them the running turn carries: let go as it ends, sent again if it never got going
+    this.phase = null;               // claude only: the workflow phase, { phase, skill } (src/phase.js); in memory only, read back from the record
+    this.skillCalls = new Map();     // claude only: the main conversation's workflow Skill calls awaiting their result, id -> skill
+    this.phaseOf = new Map();        // claude session id -> its phase as last known, or null: a switch back reads no record again
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
@@ -370,15 +374,18 @@ class Session {
    * went, each record cut where the tab came back to it (Handoff.stretches), with the divider at each switch.
    */
   async loadPeriods() {
-    const records = new Map();
+    const records = new Map(), phases = new Map();
     try {
       for (const p of this.periods) {
         const key = p.kind + ':' + p.resume;
         if (!p.resume || records.has(key)) continue;
         const past = await loadTranscript(p.kind, p.resume, { dir: this.workdir(), limit: Infinity });
-        records.set(key, Handoff.stretches(past.events));
+        records.set(key, Handoff.stretches(past.events)); phases.set(key, past.phase || null);
+        if (p.kind === 'claude') this.keepPhase(p.resume, past.phase);
       }
     } catch (_) { return; }   // the note stays: the agents have the transcript, the page does not
+    const now = this.periods[this.periods.length - 1];
+    if (!this.disposed && now.kind === this.kind && now.resume === this.agentSessionId) this.recordPhase(phases.get(now.kind + ':' + now.resume));   // the phase of the session the tab is on now
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0) return;
     const events = [];
@@ -425,6 +432,7 @@ class Session {
     if ((kind !== 'claude' && kind !== 'codex') || kind === this.kind || this.busy || this.pending.size) return false;
     if (handoff && !handoff.fits) Handoff.writeHandoff(handoff.file, handoff.full);
     const from = this.where();
+    if (this.kind === 'claude' && this.agentSessionId && this.phase) this.phaseOf.set(this.agentSessionId, this.phase);   // as it is now, live calls and all
     this.left[this.kind] = { model: this.model, effort: this.effort, mode: this.mode, gateway: this.gateway, own: this.own, costSoFar: this.costSoFar, resume: this.agentSessionId };
     this.restart();
     const back = this.left[kind] || null;
@@ -441,6 +449,9 @@ class Session {
     this.own = kind === 'claude' && back && (back.own === 'subscription' || back.own === 'api') ? back.own : '';
     this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
     this.context = null; this.respondedAt = 0; this.collab.clear(); this.queue = []; this.shown = []; this.via = {}; this.lastVia = ''; this.viaQueue = [];
+    // no phase on Codex, nor on a new Claude thread; back on a Claude session, the phase it had, else the one its record has
+    this.phase = null; this.skillCalls.clear();
+    if (kind === 'claude' && this.agentSessionId) { if (this.phaseOf.has(this.agentSessionId)) this.recordPhase(this.phaseOf.get(this.agentSessionId)); else this.loadPhase(this.agentSessionId); }
     this.reconcile();
     // where the conversation goes: from one company's service, or account, to another's. Said on the divider; marked when it
     // leaves an account of the user's own (Bedrock, a gateway) for a vendor's service
@@ -481,6 +492,8 @@ class Session {
   /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
   async loadPast(id) {
     let past; try { past = await loadTranscript(this.kind, id, { dir: this.workdir() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
+    if (this.kind === 'claude' && past) this.keepPhase(id, past.phase);
+    if (!this.disposed && past && this.agentSessionId === id) this.recordPhase(past.phase);
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0 || !past || !past.events.length) return;
     // the transcript speaks for itself; only what is missing from it is said, where it is missing
@@ -496,6 +509,35 @@ class Session {
 
   /** The folder this tab's agent runs in: its own, else the window's. */
   workdir() { return this.dir || cwd(); }
+
+  // ---- the workflow phase (note 203): Claude only, the main conversation only
+
+  /** A workflow skill has run, or the user started one: the phase is its phase. Any other skill leaves the phase as it is. */
+  setPhase(skill) {
+    const phase = this.kind === 'claude' ? phaseOfSkill(skill) : null;
+    if (!phase || (this.phase && this.phase.phase === phase && this.phase.skill === skill)) return;
+    this.phase = { phase, skill };
+    this.view.sendTabs();
+  }
+  /** The phase a session's record has (loadTranscript), unless the tab has one already from what happened since it opened. */
+  recordPhase(found) {
+    if (this.kind !== 'claude' || this.phase || !found || !found.phase) return;
+    this.phase = { phase: found.phase, skill: found.skill };
+    this.view.sendTabs();
+  }
+  /** A Claude session's phase as its record has it, kept unless the tab knows it already: its own calls are newer. */
+  keepPhase(id, found) { if (id && !this.phaseOf.has(id)) this.phaseOf.set(id, found && found.phase ? { phase: found.phase, skill: found.skill } : null); }
+  /** Back on a Claude session after a stretch on Codex, its phase not known yet: read from its whole record. */
+  async loadPhase(id) {
+    let past; try { past = await loadTranscript('claude', id, { dir: this.workdir(), limit: 0 }); } catch (_) { return; }   // no phase shown: the record could not be read
+    if (past) this.keepPhase(id, past.phase);
+    if (!this.disposed && this.kind === 'claude' && this.agentSessionId === id && past) this.recordPhase(past.phase);
+  }
+  /** A Skill call of the main conversation counts once its result is in and is not an error. */
+  watchSkill(ev) {
+    if (ev.kind === 'tool_use' && ev.name === 'Skill' && !ev.sub && ev.input && phaseOfSkill(ev.input.skill)) this.skillCalls.set(ev.id, ev.input.skill);
+    else if (ev.kind === 'tool_result' && this.skillCalls.has(ev.id)) { const skill = this.skillCalls.get(ev.id); this.skillCalls.delete(ev.id); if (!ev.isError) this.setPhase(skill); }
+  }
 
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
 
@@ -588,6 +630,7 @@ class Session {
   }
 
   post(ev) {
+    if (this.kind === 'claude' && (ev.kind === 'tool_use' || ev.kind === 'tool_result')) this.watchSkill(ev);   // the workflow phase (note 203)
     // Codex's own word that its ChatGPT login was refused (revoked, invalidated, ended): acted on once the error is shown
     const refusedLogin = ev.kind === 'error' && this.kind === 'codex' && !(this.view.meter && this.view.meter.codexBackend() !== 'chatgpt') && codexAuth.refused(ev.text);
     // Codex's Linux sandbox is bubblewrap, which needs user namespaces; a container that forbids them fails every command this way
@@ -851,6 +894,8 @@ class Session {
     const noted = this.records.length && !this.recordsSent ? this.records.join(' ') + '\n\n' : '';
     if (noted) this.recordsSent = this.records.length;
     const full = carried + noted + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
+    // a workflow skill the user starts with its slash command: Claude Code runs it only when what is sent starts with it
+    if (this.kind === 'claude') this.setPhase(resolveSkill(skillOfSlash(full), this.view.commands.claude));
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
@@ -1075,6 +1120,7 @@ class Session {
       background: this.background || [],   // Claude's tasks that run on between turns (a command or agent in the background)
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
+      phase: this.kind === 'claude' ? this.phase : null,   // the workflow phase, for the footer's pill (note 203)
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : this.own, this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
@@ -1143,6 +1189,7 @@ class PerchView {
     this.confluenceSite = null;      // the Confluence site jay is signed in to (an origin), whose /wiki/ links open in jay (note 108)
     this.closing = false;
     this.graceTimer = null;
+    this.firstStartTimer = null;     // perch.firstStart.openClaudeTab's look, once the wait for restored tabs is over
     this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
     this.unlockTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex), { program: () => program('claude') });
@@ -1885,6 +1932,43 @@ class PerchView {
   }
 
   /**
+   * perch.firstStart.openClaudeTab, set by an installer: one Claude tab, in an editor group on the right, once (note 203).
+   * False is written first, at the scope that held true, and the key is kept: an installer that writes only missing keys
+   * then leaves it alone. A write that fails opens nothing, rather than a tab on every start; so does any Perch tab
+   * already open, in an editor or the sidebar, as one the window brought back. Called after the wait for restored tabs.
+   */
+  async firstStart() {
+    const KEY = 'firstStart.openClaudeTab', T = vscode.ConfigurationTarget;
+    const folder = (vscode.workspace.workspaceFolders || [])[0];
+    const c = vscode.workspace.getConfiguration('perch', folder && folder.uri), i = (c.inspect && c.inspect(KEY)) || {};
+    // the value that holds is the most specific one set, and that is where false goes
+    const [value, target] = i.workspaceFolderValue !== undefined ? [i.workspaceFolderValue, T.WorkspaceFolder]
+      : i.workspaceValue !== undefined ? [i.workspaceValue, T.Workspace] : [i.globalValue, T.Global];
+    if (value !== true) return;
+    try { await (target === T.WorkspaceFolder ? c : vscode.workspace.getConfiguration('perch')).update(KEY, false, target); }
+    catch (e) { this.trace(`perch.${KEY} could not be set back to false, so no tab is opened: ${(e && e.message) || e}`); return; }
+    if (this.closing || this.sessions.length) return;
+    const s = this.addSession('claude', { location: 'editor' });   // beside the active group: column() has no Perch tab to follow
+    if (!s) return;
+    // VS Code tells the extension of the new tab, and of a group made or closed, a moment later
+    const groups = () => (vscode.window.tabGroups && vscode.window.tabGroups.all) || [];
+    const until = async (ok) => { for (let n = 0; n < 20 && !ok(); n++) await new Promise((r) => setTimeout(r, 50)); return ok(); };
+    if (!(await until(() => groups().some((g) => (g.tabs || []).some(isPerchTab))))) { this.trace('the first Claude tab did not show among the editor groups within a second: the left group is left as it is'); return; }
+    if (this.closing || groups().length !== 1) return;
+    // the left group did not stay: an empty one, with VS Code's watermark; failing that, an empty untitled editor moved left
+    const focusTab = () => { const e = this.panels.get(s.id); if (e) e.panel.reveal(undefined, false); };
+    try {
+      await Promise.resolve(vscode.commands.executeCommand('workbench.action.newGroupLeft')).catch(() => { /* an untitled editor instead */ });
+      if (this.closing) return;
+      if (await until(() => groups().length > 1)) { focusTab(); return; }
+      focusTab();
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(), { viewColumn: vscode.ViewColumn.Active, preview: false });
+      await vscode.commands.executeCommand('workbench.action.moveEditorToLeftGroup');
+      focusTab();
+    } catch (e) { this.trace(`no group kept left of the first Claude tab: ${(e && e.message) || e}`); focusTab(); }
+  }
+
+  /**
    * An editor group that holds only sessions is locked, as a terminal's is: VS Code opens a file in the group that was
    * last used, which after a message is this one, and a locked group is passed over for the one beside it.
    */
@@ -2167,7 +2251,10 @@ class PerchView {
    *  its transcript with a line of perch's own */
   addSession(kind, { fill, location, resume, title, gateway, dir, note } = {}) {
     if (kind !== 'claude' && kind !== 'codex') return null;
-    if (gateway === undefined && kind === 'claude' && !resume) gateway = this.context.globalState.get(GATEWAY_DEFAULT_KEY) === true;   // where the last Claude tab was put
+    if (gateway === undefined && kind === 'claude' && !resume) {
+      const remembered = this.context.globalState.get(GATEWAY_DEFAULT_KEY);   // where the last Claude tab was put; undefined until a backend is first chosen
+      gateway = remembered === undefined ? cfg('claude.defaultBackend') === 'gateway' : remembered === true;
+    }
     const vendor = kind === 'claude' ? 'Claude' : 'Codex';
     // a machine where Codex's sandbox cannot start (codexNoSandbox): new Codex tabs run without one, and say so
     const mode = kind === 'codex' && this.codexUnsandboxedHere() ? 'danger-full-access' : undefined;
@@ -2509,6 +2596,7 @@ class PerchView {
   dispose() {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
+    clearTimeout(this.firstStartTimer);
     clearTimeout(this.unlockTimer);
     clearInterval(this.ticketTimer);
     for (const s of this.sessions) s.dispose();
@@ -2565,6 +2653,9 @@ function activate(context) {
     { dispose: () => perch.dispose() },
   );
   perch.start();
+  // an installer's first start: after the wait for restored tabs, so a tab VS Code brings back counts as open
+  perch.firstStartTimer = setTimeout(() => { perch.firstStartTimer = null; perch.firstStart().catch((e) => perch.trace(`first start: ${(e && e.message) || e}`)); }, RESTORE_GRACE_MS);
+  if (perch.firstStartTimer.unref) perch.firstStartTimer.unref();
   // jay's Jira projects: now, and again every few minutes, as jay learns of more (and as a page comes into view)
   perch.refreshTicketProjects();
   perch.ticketTimer = setInterval(() => perch.refreshTicketProjects(), TICKET_PROJECTS_MS);

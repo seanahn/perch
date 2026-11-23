@@ -3,7 +3,7 @@
   "displayName": "Perch",
   "icon": "media/icon.png",
   "description": "Claude Code and Codex agents as tabs, each with its own look, with dictation, usage, and backend switching. A shell, not an agent.",
-  "version": "0.7.40",
+  "version": "0.7.41",
   "publisher": "seanahn",
   "license": "MIT",
   "repository": {
@@ -421,10 +421,21 @@
           "default": "~/.config/gateway-claude/env",
           "description": "A file describing a gateway Claude Code can be run through: export KEY=VALUE lines, as a shell reads them, with ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and any model names. A Claude tab opened on the gateway runs with these added to its environment; nothing is written to Claude Code's settings. When the file exists, + offers a tab on the gateway."
         },
+        "perch.claude.defaultBackend": {
+          "type": "string",
+          "enum": ["remembered", "gateway"],
+          "default": "remembered",
+          "description": "Where new Claude tabs start before you have chosen a backend for any tab. After you choose one in a tab's backend menu, new tabs follow your choice."
+        },
         "perch.codex.executable": {
           "type": "string",
           "default": "",
           "description": "Path to a codex program to run. Empty uses the one that comes with the ChatGPT extension."
+        },
+        "perch.firstStart.openClaudeTab": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open one Claude tab on the right the next time Perch starts, then set this back to false. For installers."
         },
         "perch.ideContext": {
           "type": "boolean",
