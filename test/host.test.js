@@ -1473,12 +1473,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       { kind: 'codex', id: 'x-old', title: 'hello', named: false, updatedAt: NOW - 26 * MIN },
     ] };
     const SKILL = { name: 'c3-acls', source: 'folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md' };
-    const m = install(undefined, { past }); await flush(); m.box.skills = [SKILL];
+    const MCP = { name: 'jira', source: 'folder', description: '/bin/jira-mcp', file: '/w/.mcp.json', line: 8 }, AGENT = { name: 'reviewer', source: 'folder', description: 'Reviews.', file: '/w/.claude/agents/reviewer.md' }, CMD = { name: '/ship', source: 'folder', description: 'Ship it.', file: '/w/.claude/commands/ship.md' };
+    const m = install(undefined, { past }); await flush(); Object.assign(m.box, { skills: [SKILL], mcp: [MCP], agents: [AGENT], commands: [CMD] });
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush(); await flush();
-    assert.deepStrictEqual(v.past(), { type: 'past', skills: [SKILL], sessions: [
+    assert.deepStrictEqual(v.past(), { type: 'past', tab: 'sessions', skills: [SKILL], mcp: [MCP], agents: [AGENT], commands: [CMD], sessions: [
       { key: 'claude:c-old', kind: 'claude', title: 'gate run', when: '2m', open: false, file: '/home/me/.claude/projects/-w/c-old.jsonl' },
       { key: 'codex:x-old', kind: 'codex', title: 'hello', when: '26m', open: false, file: '' }], failed: [] }, 'newest first, by name, agent and age, with the file each is kept in; and the skills Claude Code loads here');
-    assert.deepStrictEqual(m.box.skillLists.pop(), { dir: process.cwd() }, 'the skills of the workspace folder');
+    assert.deepStrictEqual(m.box.explorerLists.splice(0).map((x) => x[0] + ' ' + x[1].dir), ['skills ' + process.cwd(), 'mcp ' + process.cwd(), 'agents ' + process.cwd(), 'commands ' + process.cwd()], 'each of the workspace folder');
+    // the explorer's tab, chosen in the page, is kept for the next time
+    v.fire({ type: 'explorerTab', tab: 'mcp' }); v.fire({ type: 'pastRefresh' }); await flush(); await flush();
+    assert.strictEqual(v.past().tab, 'mcp');
+    v.fire({ type: 'explorerTab', tab: 'nonsense' }); v.fire({ type: 'pastRefresh' }); await flush(); await flush();
+    assert.strictEqual(v.past().tab, 'mcp', 'a tab that is not one is ignored');
+    v.fire({ type: 'explorerTab', tab: 'sessions' });
     assert.deepStrictEqual(m.store.lists.pop(), { dir: process.cwd(), limit: 200 }, 'the sessions of the workspace folder');
     // a row clicked: the session opens in a tab, as from the Sessions command, and the list says it is open
     const made = created.length;
@@ -1504,12 +1511,19 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'renamePast', key: 'codex:x-old' }); await flush(); await flush(); await flush();
     assert.deepStrictEqual([m.ui.asked.pop().value, m.store.renamed.pop()], ['hello', ['codex', 'x-old', 'greeting', { dir: process.cwd() }]], 'the box opens on the present name; the record takes the new one');
     assert.strictEqual(v.past().sessions.find((x) => x.key === 'codex:x-old').title, 'greeting', 'the list, sent again, has the new name');
+    // with a Claude tab running, each of its MCP servers says how it is, as Claude Code reports; a Codex entry of the same name is not Claude's
+    Object.assign(m.box, { mcp: [MCP, { name: 'jira', source: 'codex', description: 'x', file: '/c/config.toml', line: 3 }, { name: 'quiet', source: 'yours', description: 'q', file: '/u', line: 0 }] });
+    knobs.mcpStatus = [{ name: 'jira', status: 'connected' }, { name: 'ms365', status: 'needs-auth' }];
+    v.fire({ type: 'send', sid: opened.id, text: 'hi' }); await flush();
+    v.fire({ type: 'pastRefresh' }); await flush(); await flush(); await flush();
+    assert.deepStrictEqual(v.past().mcp.map((x) => [x.name, x.source, x.status]), [['jira', 'folder', 'connected'], ['jira', 'codex', undefined], ['quiet', 'yours', undefined]], 'its word, beside each of its servers');
+    knobs.mcpStatus = null;
     // in view again, or asked: the list is read again
     const n = m.store.lists.length;
     v.reveal(); await flush(); await flush();
     v.fire({ type: 'pastRefresh' }); await flush(); await flush();
     assert.strictEqual(m.store.lists.length, n + 2);
-    assert.strictEqual(created.length, made, 'listing starts no agent');
+    assert.strictEqual(created.length, made + 1, 'listing starts no agent: the one is the tab the MCP check sent a message to');
     m.perch.dispose();
   }
 

@@ -161,11 +161,24 @@ named "… (fork)", with the settings of the tab open on the original, and
 the original is left as it is. Codex rows have none: Codex forks only in
 its own terminal (`codex fork`).
 
-Under the sessions, **Skills** lists the skills Claude Code loads in this
-folder: the folder's own (`.claude/skills`), yours (`~/.claude/skills`),
-those synced from claude.ai, and each enabled plugin's, each marked with
-where it comes from. It starts folded; the search box finds skills too.
-Hover one for its description and file; click it to open its `SKILL.md`.
+Tabs across the top of the list show the folder's other parts, each with
+its count, and the search box searches the tab showing:
+
+- **Skills**: the skills Claude Code loads here: the folder's own
+  (`.claude/skills`), yours (`~/.claude/skills`), those synced from
+  claude.ai, and each enabled plugin's. A skill whose folder holds more
+  than its `SKILL.md` opens, with ▸, onto its files.
+- **MCP**: the MCP servers of this folder's `.mcp.json`, of your
+  `~/.claude.json` (for this folder and everywhere), of enabled plugins,
+  and of Codex's `config.toml`, each with what it runs or where it is,
+  never its environment or headers. With a Claude tab running, each of
+  its servers also says how it is: connected, failed, needs-auth.
+- **Agents** and **Commands**: the folder's, yours and plugins' sub-agent
+  definitions (`.claude/agents`) and slash commands (`.claude/commands`).
+
+Each row says where it comes from; hover for what it is and its file;
+click to open the file, at its entry where the file can say. The tab you
+chose is kept.
 
 Both can be used at once. `Perch: Move Tab to the Editor Area` and
 `Perch: Move Tab to the Sidebar` move the active tab; the session, its

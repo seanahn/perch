@@ -49,6 +49,7 @@ function storageDir() {
 let fakeQueued = 0;
 class FakeAgent {
   constructor(o) { this.o = o; this.emit = o.emit; this.claude = !!o.askPermission; this.lastAnswer = ''; this.sent = []; this.waitingIds = []; this.disposed = false; this.interrupted = 0; this.modes = []; this.efforts = []; this.models = []; this.running = false; this.held = null; this.waiting = []; this.now = o.model ? 'claude-' + o.model + '-resolved' : knobs.startsOn || 'claude-opus-resolved'; created.push(this); }
+  mcpStatus() { return Promise.resolve(knobs.mcpStatus || []); }
   send(t, a, b) {
     const shown = this.claude ? b : a, images = (this.claude ? a : b) || [];   // the two agents take their arguments as the real ones do
     this.sent.push(t); (this.images = this.images || []).push(images);
@@ -268,7 +269,7 @@ function install(state, { extensions, config, catalogs, meter, globals, voice, a
     if (req === './codexMeter') return { readCodexUsage: () => { box.codexReads++; if (box.codex instanceof Error) throw box.codex; return box.codex; } };
     // the machine's Codex login: box.codexLoggedIn (true unless said otherwise); a wait for it logs in at once, or when
     // box.codexLoginHold settles, and is counted. Its sign-in ending first (o.until: its terminal closed) ends it unlogged
-    if (req === './skills') return { listSkills: (o) => { (box.skillLists = box.skillLists || []).push(o); return (box.skills || []).map((x) => Object.assign({}, x)); }, skillHead: () => ({}) };
+    if (req === './explorer') { const give = (k) => (o) => { (box.explorerLists = box.explorerLists || []).push([k, o]); return (box[k] || []).map((x) => Object.assign({}, x)); }; return { listSkills: give('skills'), listMcp: give('mcp'), listAgents: give('agents'), listCommands: give('commands'), skillHead: () => ({}) }; }
     if (req === './codexAuth') return Object.assign({}, origLoad.call(this, req, parent, isMain), { codexHome: () => box.codexHome || '/home/me/.codex', loggedIn: () => box.codexLoggedIn !== false, authStamp: () => (box.codexLoggedIn === false ? null : box.codexStamp === undefined ? 'stamp-1' : box.codexStamp), waitForLogin: async (o) => {
         box.codexWaits = (box.codexWaits || 0) + 1; box.codexWaitSince = o && o.since; box.codexWaitUntil = !!(o && o.until);
         if (box.codexLoginHold) {

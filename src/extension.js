@@ -71,6 +71,8 @@ function vendorIcons(webview) {
   return { icons, roots };
 }
 const MAX_HISTORY = 2000;
+const EXPLORER_TABS = ['sessions', 'skills', 'mcp', 'agents', 'commands'];   // the Perch view's explorer, when it holds no tab
+const EXPLORER_TAB_KEY = 'perch.explorer.tab';
 const MAX_PAST_SHOWN = 1000;   // entries of a switched tab's earlier transcript shown, as sessionStore shows of one record
 const MAX_KEPT_BYTES = 1500000;    // thumbnails saved with a tab, all messages together: about fifty screenshots at 320 px
 // what both agents take as an image. The size is of the base64 text, which is what the services measure.
@@ -2091,6 +2093,7 @@ class PerchView {
       case 'openExternal': { const u = String(msg.url || ''); if (/^https:\/\/(chatgpt\.com|platform\.openai\.com|claude\.ai|console\.anthropic\.com)\//.test(u)) vscode.env.openExternal(vscode.Uri.parse(u)); return; }   // the vendors' own pages, nothing else
       case 'history': this.pickSession(); return;
       case 'pastRefresh': this.sendPast(); return;
+      case 'explorerTab': if (EXPLORER_TABS.includes(msg.tab)) this.context.globalState.update(EXPLORER_TAB_KEY, msg.tab); return;   // the tab the explorer shows, for next time
       case 'renamePast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.renamePast(p).then(() => this.sendPast()); return; }
       case 'forkPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) this.forkPast(p); return; }
       case 'openPast': { const p = this.pastByKey && this.pastByKey.get(String(msg.key)); if (p) { this.resumeSession(p); this.sendPast(); } return; }
@@ -2372,8 +2375,19 @@ class PerchView {
       this.pastByKey.set(key, p);
       return { key, kind: p.kind, title: open && open.unsaved ? open.title : p.title, when: ago(p.updatedAt), open: !!open, file: p.file || '' };
     });
-    let skills = []; try { skills = require('./skills').listSkills({ dir: cwd() }); } catch (_) { /* none to show */ }
-    this.sidebar.view.webview.postMessage({ type: 'past', skills, sessions, failed: res.failed || [] });
+    // the explorer's other tabs: what Claude Code (and Codex, for MCP) load in this folder, read from their files
+    const E = require('./explorer'), list = (f) => { try { return f({ dir: cwd() }) || []; } catch (_) { return []; } };
+    const skills = list(E.listSkills), mcp = list(E.listMcp), agents = list(E.listAgents), commands = list(E.listCommands);
+    // a Claude tab's process says how each of its MCP servers is (connected, failed, needs-auth…); Codex's entries are not its
+    const live = this.sessions.find((x) => x.kind === 'claude' && x.agent && typeof x.agent.mcpStatus === 'function');
+    if (live) {
+      const said = await Promise.race([live.agent.mcpStatus(), new Promise((r) => setTimeout(() => r([]), 1500))]);
+      const by = new Map((said || []).map((x) => [x.name, x.status]));
+      for (const x of mcp) if (x.source !== 'codex' && by.has(x.name)) x.status = by.get(x.name);
+      if (gen !== this.pastGen || !this.sidebar.view) return;
+    }
+    const tab = this.context.globalState.get(EXPLORER_TAB_KEY) || 'sessions';
+    this.sidebar.view.webview.postMessage({ type: 'past', tab, skills, mcp, agents, commands, sessions, failed: res.failed || [] });
   }
 
   /**

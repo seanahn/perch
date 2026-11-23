@@ -789,7 +789,7 @@ host({ type: 'past', failed: [], sessions: [
   { key: 'claude:c2', kind: 'claude', title: 'supertrend', when: '1mo', open: false }] });
 const rows = () => $$('#past .row').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent, r.querySelector('.k').className]);
 assert.deepStrictEqual(rows(), [['gate run', '2m', 'k glyph claude'], ['hello', 'open · 26m', 'k glyph codex'], ['supertrend', '1mo', 'k glyph claude']], 'each by name, agent and age; an open one says so');
-assert.strictEqual($('#past .h').textContent, 'Sessions in this folder');
+assert.deepStrictEqual($$('#past .etab').map((b) => [b.textContent, b.classList.contains('on')]), [['Sessions 3', true], ['Skills 0', false], ['MCP 0', false], ['Agents 0', false], ['Commands 0', false]], 'tabs, each with how many; Sessions first');
 assert.deepStrictEqual($$('#past .row').map((r) => r.title), ['gate run\n/home/me/.claude/projects/-w/c1.jsonl', 'hello', 'supertrend'], 'the name and, on hover, the file the transcript is in');
 assert.deepStrictEqual($$('#past .row').map((r) => !!r.querySelector('.fork')), [true, false, true], 'a fork button on each Claude row; Codex cannot fork from here');
 assert.strictEqual($$('#past .row')[0].querySelector('.fork').title, 'Fork: open a copy of this session in a new tab; this one is left as it is');
@@ -804,23 +804,44 @@ assert.deepStrictEqual(rows().map((r) => r[0]), ['supertrend'], 'typing filters 
 $$('#past .row').filter(shown)[0].click(); assert.deepStrictEqual(out.pop(), { type: 'openPast', key: 'claude:c2' }, 'a click opens it');
 $('#past input').value = ''; $('#past input').dispatchEvent(new window.Event('input'));
 $('#past .refresh').click(); assert.deepStrictEqual(out.pop(), { type: 'pastRefresh' });
-// the skills Claude Code loads here, under the sessions: folded at first, by name and where each comes from; the description
-// and the file on hover; a click opens the file
-host({ type: 'past', failed: [], sessions: [{ key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false }], skills: [
-  { name: 'c3-acls', source: 'folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md' },
-  { name: 'trivialpowers:brainstorming', source: 'trivialpowers', description: 'Before creative work.', file: '/p/skills/brainstorming/SKILL.md' }] });
-const skillRows = () => $$('#skills .skill').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent]);
-assert.deepStrictEqual([$('#skills .h').textContent, skillRows()], ['Skills · 2', []], 'folded at first, with how many');
-$('#skills .hd').click();
-assert.deepStrictEqual(skillRows(), [['c3-acls', 'folder'], ['trivialpowers:brainstorming', 'trivialpowers']], 'opened: each by name and where it comes from');
-assert.strictEqual($$('#skills .skill')[0].title, 'c3-acls\nACLs on C3.\n/w/.claude/skills/c3-acls/SKILL.md');
-$$('#skills .skill')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/p/skills/brainstorming/SKILL.md' }, 'a click opens its SKILL.md');
+// the explorer's other tabs: what Claude Code (and Codex, for MCP) load here. A tab shows its list across the view; the choice
+// is told to the host, which keeps it; the search searches the tab showing; a click opens the file, at its entry where known
+host({ type: 'past', tab: 'sessions', failed: [], sessions: [{ key: 'claude:c1', kind: 'claude', title: 'gate run', when: '2m', open: false }], skills: [
+  { name: 'c3-acls', source: 'this folder', description: 'ACLs on C3.', file: '/w/.claude/skills/c3-acls/SKILL.md', files: ['SKILL.md', 'references/reference.md', 'scripts/check.py'] },
+  { name: 'trivialpowers:brainstorming', source: 'trivialpowers', description: 'Before creative work.', file: '/p/skills/brainstorming/SKILL.md', files: ['SKILL.md'] }],
+  mcp: [{ name: 'jira', source: 'this folder', description: '/bin/jira-mcp', file: '/w/.mcp.json', line: 8, status: 'connected' }, { name: 'docs', source: 'codex', description: 'https://docs/mcp', file: '/c/config.toml', line: 3 }],
+  agents: [], commands: [{ name: '/ship', source: 'this folder', description: 'Ship it.', file: '/w/.claude/commands/ship.md' }] });
+const items = () => $$('#past .row').filter(shown).map((r) => [r.querySelector('.t').textContent, r.querySelector('.w').textContent]);
+const etab = (name) => $$('#past .etab').find((b) => b.textContent.startsWith(name));
+assert.deepStrictEqual($$('#past .etab').map((b) => b.textContent), ['Sessions 1', 'Skills 2', 'MCP 2', 'Agents 0', 'Commands 1']);
+etab('Skills').click();
+assert.deepStrictEqual(out.splice(0), [{ type: 'explorerTab', tab: 'skills' }], 'the choice, to keep');
+assert.deepStrictEqual([items(), $('#past input').placeholder, etab('Skills').classList.contains('on')], [[['c3-acls', 'this folder'], ['trivialpowers:brainstorming', 'trivialpowers']], 'Search skills…', true], 'the skills, by name and where each comes from');
+assert.strictEqual($$('#past .row')[0].title, 'c3-acls\nACLs on C3.\n/w/.claude/skills/c3-acls/SKILL.md');
+$$('#past .row')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/p/skills/brainstorming/SKILL.md' }, 'a click opens its SKILL.md');
+// a skill of more than its SKILL.md is a node: its files, under it, when opened
+assert.deepStrictEqual($$('#past .row').map((r) => (r.querySelector('.tw') || {}).textContent || ''), ['▸', ''], 'a twisty on a skill with more files; none on one with SKILL.md alone');
+$$('#past .row')[0].querySelector('.tw').click();
+assert.strictEqual(out.length, 0, 'opening the node opens no file');
+const files = () => $$('#past .file').filter(shown).map((r) => r.textContent);
+assert.deepStrictEqual([files(), $$('#past .row')[0].querySelector('.tw').textContent], [['SKILL.md', 'references/reference.md', 'scripts/check.py'], '▾']);
+$$('#past .file').filter(shown)[1].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/w/.claude/skills/c3-acls/references/reference.md' }, 'a file opens');
+$$('#past .row')[0].querySelector('.tw').click(); assert.deepStrictEqual(files(), [], 'and folds again');
 $('#past input').value = 'brain'; $('#past input').dispatchEvent(new window.Event('input'));
-assert.deepStrictEqual([skillRows().map((r) => r[0]), $$('#past .row').filter(shown).length], [['trivialpowers:brainstorming'], 0], 'the search finds skills too');
+assert.deepStrictEqual(items().map((r) => r[0]), ['trivialpowers:brainstorming'], 'the search searches the tab showing');
 $('#past input').value = ''; $('#past input').dispatchEvent(new window.Event('input'));
-host({ type: 'past', failed: [], sessions: [], skills: [{ name: 'x', source: 'yours', description: '', file: '/x' }] });
-assert.deepStrictEqual(skillRows(), [['x', 'yours']], 'stays open when the list comes again');
-$('#skills .hd').click(); assert.deepStrictEqual(skillRows(), [], 'and folds again');
+etab('MCP').click(); out.length = 0;
+assert.deepStrictEqual(items(), [['jira', 'this folder · connected'], ['docs', 'codex']], 'MCP servers, with how each is where a running tab can say');
+assert.strictEqual($$('#past .row')[0].title, 'jira\n/bin/jira-mcp\n/w/.mcp.json:8');
+$$('#past .row')[0].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/w/.mcp.json#L8' }, 'at the line its entry starts on');
+$$('#past .row')[1].click(); assert.deepStrictEqual(out.pop(), { type: 'open', target: '/c/config.toml#L3' });
+etab('Agents').click(); out.length = 0;
+assert.deepStrictEqual([items(), $('#past .none').textContent], [[], 'No agents here.'], 'an empty tab says so');
+etab('Commands').click(); out.length = 0;
+assert.deepStrictEqual(items(), [['/ship', 'this folder']]);
+host({ type: 'past', tab: 'skills', failed: [], sessions: [], skills: [{ name: 'x', source: 'yours', description: '', file: '/x' }], mcp: [], agents: [], commands: [] });
+assert.deepStrictEqual([items(), etab('Skills').classList.contains('on')], [[['x', 'yours']], true], 'the host\'s kept tab, when the list comes again');
+etab('Sessions').click(); out.length = 0;
 host({ type: 'past', failed: ['codex'], sessions: [] });
 assert.deepStrictEqual([rows().length, $('#past .none').textContent], [0, 'The sessions of Codex could not be read.'], 'nothing to list says why');
 host({ type: 'past', failed: [], sessions: [] });
