@@ -70,7 +70,7 @@ Descriptions are searched from three letters. Otherwise `/c` matched
 
 ### Secret check
 
-Proposed 2026-11-23. A password or key pasted into the composer by mistake would go to the model and into the
+Built in 0.7.44, 2026-11-23. A password or key pasted into the composer by mistake would go to the model and into the
 session's record, which Perch cannot take back. So Send first runs a quick check, in the page, on the text alone
 (no network call), for Claude and Codex tabs alike; nothing reaches the agent until it passes or the user says so.
 
@@ -87,7 +87,7 @@ session's record, which Perch cannot take back. So Send first runs a quick check
 | Private key | `-----BEGIN … PRIVATE KEY-----` |
 | Password in a URL | `scheme://user:password@host` |
 | Secret assignment | `password`, `passwd`, `pwd`, `secret`, `api_key`, `apikey`, `token`, `access_token` then `=` or `:` then a value of 6+ non-space characters (quotes allowed) |
-| Random-looking string | one token of 32+ characters, no spaces, high entropy (≥ 4.0 bits per character over letters, digits and `+/_-=`); not a UUID, not a 40- or 64-hex hash, not a URL without credentials, not a file path |
+| Random-looking string | one token of 32+ characters, no spaces, high entropy (≥ 4.0 bits per character over letters, digits and `+/_-=`), with a digit in it (long identifiers reach 4.2 bits); not a UUID, not a 40- or 64-hex hash, not a URL without credentials, not a file path |
 
 **What happens.** The message stays in the box; a strip above it names the rule — *"This looks like a password
 or key (GitHub token). It would go to the model and into the session record."* — highlights the matched text in
