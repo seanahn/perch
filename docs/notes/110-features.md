@@ -78,16 +78,16 @@ session's record, which Perch cannot take back. So Send first runs a quick check
 
 | Rule | Matches |
 |---|---|
-| Anthropic / OpenAI key | `sk-` followed by 20+ key characters (`sk-ant-…`, `sk-proj-…`) |
+| Anthropic / OpenAI key | `sk-` followed by 20+ key characters with a digit or mixed case among them (`sk-ant-…`, `sk-proj-…`; not `sk-learn-…`) |
 | GitHub token | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` + 36 characters; `github_pat_…` |
 | AWS access key | `AKIA` or `ASIA` + 16 upper-case letters or digits |
 | Slack token | `xoxb-`, `xoxp-`, `xoxa-`, `xoxr-` … |
 | Google API key | `AIza` + 35 characters |
 | JSON Web Token | `eyJ…` `.` `eyJ…` `.` signature |
-| Private key | `-----BEGIN … PRIVATE KEY-----` |
-| Password in a URL | `scheme://user:password@host` |
-| Secret assignment | `password`, `passwd`, `pwd`, `secret`, `api_key`, `apikey`, `token`, `access_token` then `=` or `:` then a value of 6+ non-space characters (quotes allowed) |
-| Random-looking string | one token of 32+ characters, no spaces, high entropy (≥ 4.0 bits per character over letters, digits and `+/_-=`), with a digit in it (long identifiers reach 4.2 bits); not a UUID, not a 40- or 64-hex hash, not a URL without credentials, not a file path |
+| Private key | `-----BEGIN … PRIVATE KEY-----`, and PGP's `… PRIVATE KEY BLOCK-----` |
+| Password in a URL | `scheme://user:password@host`, the user name may be empty (`redis://:pw@host`) |
+| Secret assignment | `password`, `passwd`, `pwd`, `secret`, `api_key`, `apikey`, `token`, `access_token` then `=` or `:` then a value of 6+ non-space characters (quotes allowed); not a type (`string`, `boolean`, `None`, `Optional[…]`, `List[…]`…), and not one starting `$`, `process.env`, `os.environ`, `env.`, `<`, `/`, `~` or `{{` |
+| Random-looking string | one token of 32+ characters, no spaces, high entropy (≥ 4.0 bits per character over letters, digits and `+/_-=`), with a digit in it (long identifiers reach 4.2 bits); not words run together (camelCase, snake, kebab or `/` pieces averaging 3+ letters), not a UUID, not a 40- or 64-hex hash, not a `sha256-`/`sha384-`/`sha512-` integrity value, not a URL without credentials, not a `data:` URI, not a file path (`/`, `~`, `./`, a drive, `a/b.ext`, `host.tld/…`) |
 
 **What happens.** The message stays in the box; a strip above it names the rule — *"This looks like a password
 or key (GitHub token). It would go to the model and into the session record."* — highlights the matched text in
@@ -96,11 +96,13 @@ the box, and offers:
 - **Send anyway** — sends it unchanged; the same text is not flagged again in this tab.
 - **Not a secret** — sends it and remembers the matched value, so it is never flagged again anywhere. Perch keeps
   only a SHA-256 hash of the value, in its own stored state, never the value; **Perch: Clear Secret-Check
-  Exceptions** forgets them.
+  Exceptions** forgets them. The page works the hash out itself, in plain JavaScript (`sha256Hex` in
+  `src/secretCheck.js`), so the check stays synchronous and needs no `crypto.subtle`, which a page served over plain
+  http (code-server) does not have.
 - **Edit** — closes the strip, focus back in the box.
 - **Why?** — the rule's name and a one-line description of what it matches.
 
-**Settings.** `perch.secretCheck` (default `true`) switches the check off. `perch.secretCheck.ignore`: a list of
+**Settings.** `perch.secretCheck.enabled` (default `true`) switches the check off. `perch.secretCheck.ignore`: a list of
 regular expressions; a matched value that any of them matches in full is never flagged (a trace-id or
 build-id format, say). An invalid expression is skipped, with one note in the tab.
 

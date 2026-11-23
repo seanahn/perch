@@ -3615,6 +3615,15 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     n.perch.dispose();
   }
 
+  // a setting cannot be both a value and the parent of another: VS Code's settings tree drops the child ("Ignoring
+  // perch.secretCheck.ignore as perch.secretCheck is true"). So no contributed setting's name is a prefix of another's.
+  {
+    const props = Object.keys(require('../package.json').contributes.configuration.properties);
+    const clash = props.filter((a) => props.some((b) => b.startsWith(a + '.')));
+    assert.deepStrictEqual(clash, [], 'no setting is the parent of another: ' + clash.join(', '));
+    assert(props.includes('perch.secretCheck.enabled') && props.includes('perch.secretCheck.ignore'), 'the secret check\'s two settings');
+  }
+
   // the composer's secret check (note 110): the settings and the remembered hashes go to every page; "Not a secret" is
   // kept as a hash in globalState; the clear command forgets them; an invalid ignore expression is noted once in a tab
   {
@@ -3650,7 +3659,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert.strictEqual(notes().length, 1, 'one note for the invalid expression');
     assert(notes()[0].text.includes('(unclosed'), 'naming it: ' + notes()[0].text);
     // switched off, and the list changed: every page is told at once
-    m.changeConfig({ secretCheck: false, 'secretCheck.ignore': ['BLD-[0-9]+'] }); await flush();
+    m.changeConfig({ 'secretCheck.enabled': false, 'secretCheck.ignore': ['BLD-[0-9]+'] }); await flush();
     assert.deepStrictEqual(told(v.got).pop(), { type: 'secretCheck', enabled: false, ignore: ['BLD-[0-9]+'], allowed: [] }, 'a settings change reaches the pages');
     m.perch.dispose();
   }

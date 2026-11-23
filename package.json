@@ -446,7 +446,7 @@
           "default": true,
           "description": "New tabs attach the active file and, if there is one, the selection to each message, as the vendors' own panels do. Each tab can turn it on or off; the choice is kept with the tab."
         },
-        "perch.secretCheck": {
+        "perch.secretCheck.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Before a message is sent, look in it for something that looks like a password or key (a GitHub token, an AWS key, a password in a URL, a long random string…). If one is found the message waits, and you choose: Send anyway, Not a secret, or Edit. The check runs in the page, on the text alone."

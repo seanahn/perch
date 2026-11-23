@@ -613,7 +613,7 @@ like, or a long random string. If it finds one the message stays in the
 box, the value is selected, and a strip above the composer names the
 rule and offers **Send anyway** (this text, in this tab), **Not a
 secret** (never flagged again anywhere; Perch keeps only its SHA-256
-hash), **Edit** and **Why?**. `perch.secretCheck` turns it off;
+hash), **Edit** and **Why?**. `perch.secretCheck.enabled` turns it off;
 `perch.secretCheck.ignore` lists regular expressions for values never to
 flag, matched in full; `Perch: Clear Secret-Check Exceptions` forgets
 every "Not a secret". The rules are in note 110.

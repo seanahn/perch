@@ -2097,7 +2097,7 @@ class PerchView {
       try { new RegExp(x); ignore.push(x); } catch (_) { invalid.push(x); }
     }
     const allowed = this.context.globalState.get(SECRET_ALLOWED_KEY);
-    return { enabled: cfg('secretCheck') !== false, ignore, invalid, allowed: Array.isArray(allowed) ? allowed : [] };
+    return { enabled: cfg('secretCheck.enabled') !== false, ignore, invalid, allowed: Array.isArray(allowed) ? allowed : [] };
   }
   secretMessage() { const c = this.secretConfig(); return { type: 'secretCheck', enabled: c.enabled, ignore: c.ignore, allowed: c.allowed }; }
   /** An expression in perch.secretCheck.ignore that does not compile: said once in a tab, and again only if the list changes. */
