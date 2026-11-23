@@ -184,7 +184,7 @@ The phase, live and on reopening a tab:
 ## Built
 
 Branch `feat/phase-pill`, released in 0.7.37 (not yet published). The plan was deleted after commit
-`PLANSHA`. The README lists the two settings and links here: [README](../../README.md).
+`109ca51`. The README lists the two settings and links here: [README](../../README.md).
 
 ## Checked live
 
