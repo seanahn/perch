@@ -188,8 +188,8 @@ ${glyphCss}
   .perm .diff .del { display: block; background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,.18)); }
   .perm .diff .add { display: block; background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,.14)); }
   .perm .diff .cut { display: block; color: var(--vscode-descriptionForeground); font-style: italic; }
-  .perm button, .empty button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-  .perm button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .perm button, .empty button, #secret button { font-size: 11px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .perm button.primary, #secret button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   /* a question from the agent: its choices as buttons, a line for an answer of your own, and the answers once given */
   .ask { border: 1px solid var(--accent, var(--vscode-focusBorder)); border-radius: 8px; padding: 8px 10px 10px; white-space: normal; }
   .ask .q { margin: 2px 0 8px; }
