@@ -16,7 +16,7 @@ const RULES = [
   { id: 'private-key', name: 'Private key', description: 'A -----BEGIN … PRIVATE KEY----- block.' },
   { id: 'url-password', name: 'Password in a URL', description: 'A password written into an address, as in scheme://user:password@host.' },
   { id: 'assignment', name: 'Secret assignment', description: 'password, passwd, pwd, secret, api_key, apikey, token or access_token, then = or :, then a value of 6 or more characters that is not a type name, a variable, an environment read, a path or a placeholder.' },
-  { id: 'random', name: 'Random-looking string', description: 'One run of 32 or more letters, digits and +/_-= with a digit in it and at least 4 bits of entropy per character; not words run together, a UUID, a hex hash, an integrity value, an address, a data: URI or a file path.' },
+  { id: 'random', name: 'Random-looking string', description: 'One run of 32 or more letters, digits and +/_-= with a digit in it and at least 4 bits of entropy per character (corrected for a short sample); not words run together, a UUID, a hex hash, an integrity value, an address, a data: URI or a file path.' },
 ];
 
 /** Shannon entropy of `s`, in bits per character. */
@@ -36,6 +36,7 @@ function sha256Hex(s) {
   for (let i = 0; i < s.length; i++) {
     let c = s.charCodeAt(i);
     if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length) { const d = s.charCodeAt(i + 1); if (d >= 0xdc00 && d < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i++; } }
+    if (c >= 0xd800 && c < 0xe000) c = 0xfffd;   // a lone surrogate: U+FFFD, as TextEncoder and node write it
     if (c < 0x80) bytes.push(c);
     else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63));
     else if (c < 0x10000) bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
@@ -92,7 +93,7 @@ function findSecrets(text, { ignore = [] } = {}) {
   };
   // what an assignment's value is when it is code, not a secret: a type, a variable, an environment read, a path, a
   // placeholder or a template
-  const TYPE = /^(?:string|number|boolean|bool|str|int|integer|float|double|bigint|any|object|unknown|void|undefined|null|none|nil|bytes|char|true|false)(?![A-Za-z0-9_])/i;
+  const TYPE = /^(?:string|number|boolean|bool|str|int|integer|float|double|bigint|any|object|unknown|void|undefined|null|none|nil|bytes|char|true|false)(?:[[<|?,;)]|$)/i;   // the type itself, or the start of a type expression
   const GENERIC = /^(?:Optional|List|Dict|Set|Tuple|Union|Array|Record|Map|Promise|Sequence|Iterable|Mapping|Literal|ReadonlyArray)[[<]/;
   const NOT_A_VALUE = /^(?:[$<\/~]|\{\{|process\.env|os\.environ|env\.)/;
   const codeValue = (v) => TYPE.test(v) || GENERIC.test(v) || NOT_A_VALUE.test(v);
@@ -118,10 +119,25 @@ function findSecrets(text, { ignore = [] } = {}) {
       take(rule, start, value);
     }
   }
-  // words run together, as names are: camelCase, snake_case, kebab-case, a/b; letters per piece, on average, 3 or more
+  // words run together, as names are: camelCase, snake_case, kebab-case, a/b. It takes (a) real separators or
+  // lower-to-upper word boundaries, and (b) pieces that read as words: 3 or more letters each on average, most with a
+  // vowel, none with five consonants in a row. A random key fails (a) when it has one case and no separators, and (b)
+  // otherwise: its letter runs mostly lack vowels.
+  const VOWEL = /[aeiouy]/i, CLUSTER = /[^aeiouy]{5}/i;
   const wordy = (v) => {
+    if (!/[/_-]/.test(v) && !/[a-z][A-Z]/.test(v)) return false;
     const pieces = v.split(/[^A-Za-z]+/).flatMap((p) => p.split(/(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)).filter(Boolean);
-    return pieces.length > 0 && pieces.reduce((n, p) => n + p.length, 0) / pieces.length >= 3;
+    if (!pieces.length || pieces.reduce((n, p) => n + p.length, 0) / pieces.length < 3) return false;
+    const long = pieces.filter((p) => p.length >= 2);
+    if (long.length < 2 || long.some((p) => CLUSTER.test(p))) return false;
+    return long.filter((p) => VOWEL.test(p)).length >= 0.8 * long.length;
+  };
+  // /a/b/c or ~/a/b: every segment before the last reads as a directory name (lower case, or one capital first), as a
+  // random key that happens to start with / does not
+  const absolutePath = (s) => {
+    const segs = s.replace(/^~/, '').split('/').slice(1);
+    const dirs = segs.slice(0, -1);
+    return dirs.length > 0 && dirs.every((d) => /^[A-Z]?[a-z0-9._@-]*$/.test(d));
   };
   // random-looking strings: within one whitespace-separated word that is not an address, a data: URI or a file path
   const word = /\S+/g;
@@ -131,7 +147,8 @@ function findSecrets(text, { ignore = [] } = {}) {
     const lead = w[0].length - s.length;
     const bare = s.replace(/[)\]}>"'`.,;:!?]+$/, '');
     if (/:\/\//.test(s) || /^www\./i.test(s)) continue;                                  // an address; one with a password is the URL rule's
-    if (/^(?:[/~]|\.{1,2}[/\\]|[A-Za-z]:[\\/])/.test(s) || s.includes('\\')) continue;   // a file path
+    if (/^(?:\.{1,2}[/\\]|[A-Za-z]:[\\/])/.test(s) || s.includes('\\')) continue;   // a relative or Windows path
+    if (/^~?\//.test(s) && absolutePath(s)) continue;                                      // an absolute path
     if (bare.includes('/') && (/\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(bare) || /[A-Za-z0-9-]\.[A-Za-z]{2,}\//.test(bare))) continue;   // a/b/c.ext, host.tld/path
     if (/(?:^|[^A-Za-z0-9])data:[A-Za-z]+\/[A-Za-z0-9.+-]+[;,]/.test(s)) continue;         // a data: URI
     const run = /[A-Za-z0-9+/_=-]{32,}/g;
@@ -143,7 +160,7 @@ function findSecrets(text, { ignore = [] } = {}) {
       if (/^sha(?:256|384|512)-/.test(v)) continue;                                          // a subresource or npm integrity value
       if (!/[0-9]/.test(v)) continue;                                                        // a long identifier, not a key
       if (wordy(v)) continue;                                                                // words run together: a name
-      if (entropy(v) < 4) continue;
+      if (entropy(v) + (new Set(v).size - 1) / (2 * v.length * Math.LN2) < 4) continue;   // Miller-Madow: a short sample understates entropy
       take('random', w.index + lead + r.index, v);
     }
   }

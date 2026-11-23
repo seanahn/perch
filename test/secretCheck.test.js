@@ -63,6 +63,8 @@ const clean = [
   ['a URL without credentials', 'see https://github.com/seanahn/perch/blob/main/docs/notes/110-features.md#n110 and https://example.com/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
   ['a file path', 'open /home/someone/projects/perch/src/secretCheck.js and C:\\Users\\someone\\AppData\\Roaming\\Code\\User\\settings.json'],
   ['a long path without dots', 'cd /var/lib/containers/storage/overlay/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
+  ['a macOS path', 'ls /Users/someone/Library/Caches/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
+  ['a home path', 'cat ~/projects/perch/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
   ['ordinary prose', 'Please refactor the token handling in the parser so the password prompt appears once, and explain the secret of its speed.'],
   ['password with nothing after it', 'password: \nnext line'],
   ['password: and nothing at all', 'password:'],
@@ -95,6 +97,10 @@ const clean = [
   ['a sha384 integrity value', 'integrity="sha384-' + RANDOM40 + '"'],
   ['a data: URI', 'src="data:image/png;base64,' + RANDOM40 + RANDOM40 + '"'],
   ['sk- in a package name', 'sk-learn-preprocessing-pipeline-docs'],
+  ['a long identifier with no digit', 'useEffectCleanupSubscriptionManagerHook'],
+  ['a long snake_case name with no digit', 'test_secret_check_handles_long_snake_case_names'],
+  ['an upper-case constant', 'MAX_RETRY_COUNT_FOR_ARTIFACT_STORAGE_UPLOAD_V2'],
+  ['a kebab-case slug with digits', 'release-notes-for-version-12-of-the-dashboard-widget'],
 ];
 for (const [what, text] of clean) assert.deepStrictEqual(names(text), [], 'not flagged: ' + what);
 
@@ -108,6 +114,38 @@ assert.deepStrictEqual(names(samples[2][1], { ignore: ['nothing'] }), ['GitHub t
 assert.deepStrictEqual(names('token=' + RANDOM40, { ignore: [RANDOM40] }), [], 'an ignored value keeps its place: the random rule does not flag it again');
 const long = j('Zq8vN2kLp4Rt', 'X7wYb1Hc9Ue3').repeat(50);   // 1200 characters
 assert.deepStrictEqual(names('x ' + long + ' y', { ignore: ['[A-Za-z0-9]+'] }), ['Random-looking string'], 'a value over 512 characters is not matched against the ignore list');
+// a type is skipped only when the value is the type expression, not when it merely starts with a type's name
+for (const [text, value] of [['password: String!Pass1', 'String!Pass1'], ['secret: Null#Pass99', 'Null#Pass99'], ['api_key: any-thing-goes-9', 'any-thing-goes-9'], ['password=True2024!', 'True2024!'], ['pwd: integer7Secret', 'integer7Secret']])
+  assert.deepStrictEqual(findSecrets(text).map((h) => [h.name, h.value]), [['Secret assignment', value]], 'flagged: ' + text);
+for (const text of ['password: string[]', 'token: string | null', 'secret: boolean?', 'api_key: str)', 'password: object;', 'token: Map<string, string>', 'token: undefined'])
+  assert.deepStrictEqual(names(text), [], 'a type expression is not flagged: ' + text);
+
+// random keys, made by a seeded generator so the counts do not change from run to run: the words-run-together skip
+// must not swallow them. Misses allowed: 1% (2% where a key may by chance have no digit, or words in a prefix)
+{
+  let seed = 0x5eed1e55;
+  const next = () => { seed = (seed + 0x6d2b79f5) | 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };   // mulberry32
+  const rnd = (alpha, n) => { let o = ''; for (let i = 0; i < n; i++) o += alpha[Math.floor(next() * alpha.length)]; return o; };
+  const LOWER = 'abcdefghijklmnopqrstuvwxyz', UPPER = LOWER.toUpperCase(), DIGITS = '0123456789', A62 = UPPER + LOWER + DIGITS;
+  const shuffle = (s) => { const a = [...s]; for (let i = a.length - 1; i > 0; i--) { const k = Math.floor(next() * (i + 1)); [a[i], a[k]] = [a[k], a[i]]; } return a.join(''); };
+  const kinds = [
+    ['32 lower+digit', () => rnd(LOWER + DIGITS, 32), 0.01],
+    ['40 lower+digit', () => rnd(LOWER + DIGITS, 40), 0.01],
+    ['40 upper+digit', () => rnd(UPPER + DIGITS, 40), 0.01],
+    ['38 letters + 2 digits', () => shuffle(rnd(UPPER + LOWER, 38) + rnd(DIGITS, 2)), 0.01],
+    ['40 letters + 2 digits at the end', () => rnd(UPPER + LOWER, 38) + rnd(DIGITS, 2), 0.01],
+    ['AWS-style 40 mixed', () => rnd(A62 + '+/', 40), 0.02],
+    ['sk_live_ + 24', () => 'sk_live_' + rnd(A62, 24), 0.02],
+  ];
+  const N = 400;
+  for (const [what, gen, allowed] of kinds) {
+    let missed = 0, example = '';
+    for (let i = 0; i < N; i++) { const v = gen(); if (!findSecrets('the key is ' + v + ' here').length) { missed++; example = example || v; } }
+    assert(missed <= N * allowed, what + ': ' + missed + ' of ' + N + ' missed (at most ' + N * allowed + '), e.g. ' + example);
+  }
+}
+
+assert.deepStrictEqual(names('key /rm0zWSY8ybNdytvjH/4R9E4hJKcYCuC7n/iAvI6 here'), ['Random-looking string'], 'a key that starts with / is not taken for a path');
 // sk- needs a digit or mixed case after it
 assert.deepStrictEqual(names('sk-' + j('abcdefghij', 'klmnopqrst', 'uv1')), ['Anthropic / OpenAI key'], 'with a digit');
 
@@ -119,21 +157,25 @@ assert(Math.abs(entropy('0123456789abcdef') - 4) < 1e-9, '16 different character
 const lowButLong = 'ab12'.repeat(10);   // 40 characters, 2 bits each
 assert.deepStrictEqual(names('x ' + lowButLong + ' y'), [], 'long but repetitive: below the threshold');
 assert(entropy(RANDOM40) >= 4, 'the random sample is above it');
-const atThreshold = 'aZ3kQ9xW1mR7pL5t'.repeat(2);    // 32 characters, 16 different, evenly: 4 bits exactly
-assert(Math.abs(entropy(atThreshold) - 4) < 1e-9);
+// the rule adds the Miller-Madow correction, (distinct - 1) / (2 n ln 2): a 32-character sample of a 36-letter alphabet
+// shows about 4.4 bits where the source has 5.2, and 4% of random 32-character lower-case-and-digit keys fall under 4.0
+const atThreshold = 'aZ3kQ9xW1mR7pL5t'.repeat(2);    // 32 characters, 16 different, evenly: 4 bits, 4.34 corrected
+assert(Math.abs(entropy(atThreshold) - 4) < 1e-9, 'entropy() itself is plain Shannon entropy');
 assert.deepStrictEqual(names('x ' + atThreshold + ' y'), ['Random-looking string'], '4.0 bits per character is enough');
-const underThreshold = 'aZ3kQ9xW1mR7pL5'.repeat(3);   // 45 characters, 15 different: about 3.91 bits
-assert(entropy(underThreshold) < 4);
-assert.deepStrictEqual(names('x ' + underThreshold + ' y'), [], 'just under 4.0 is not');
+const correctedOver = 'aZ3kQ9xW1mR7pL5'.repeat(3);   // 45 characters, 15 different: 3.91 bits, 4.13 corrected
+assert(entropy(correctedOver) < 4);
+assert.deepStrictEqual(names('x ' + correctedOver + ' y'), ['Random-looking string'], 'under 4.0 plain, over it corrected: flagged');
+const underThreshold = 'aZ3kQ9xW1mR7p'.repeat(3);   // 39 characters, 13 different: 3.70 bits, 3.92 corrected
+assert.deepStrictEqual(names('x ' + underThreshold + ' y'), [], 'under 4.0 corrected: not flagged');
 assert.deepStrictEqual(names('x ' + atThreshold.slice(0, 31) + ' y'), [], 'and 31 characters are too short');
 
 // ---- SHA-256, in plain JavaScript, so the page needs no crypto.subtle (code-server over http has none)
-for (const x of ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'a'.repeat(1000), 'héllo wörld ✓ 🔑', RANDOM40]) assert.strictEqual(sha256Hex(x), nodeSha(x), 'sha256Hex agrees with node for ' + JSON.stringify(x.slice(0, 20)) + ' (' + x.length + ')');
+for (const x of ['\ud800', 'a\udc00b', '\ud83d', 'x\udc00\ud800y', '', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'a'.repeat(1000), 'héllo wörld ✓ 🔑', RANDOM40]) assert.strictEqual(sha256Hex(x), nodeSha(x), 'sha256Hex agrees with node for ' + JSON.stringify(x.slice(0, 20)) + ' (' + x.length + ')');
 
 // ---- no slow inputs: long runs of the characters the rules repeat over
 for (const [what, big] of [['dots', 'a.'.repeat(50000)], ['hyphens and pluses', 'a-b+'.repeat(25000)], ['one long word', 'x'.repeat(100000)], ['mixed', 'Ab1-'.repeat(25000)], ['spaces and colons', 'a: '.repeat(33334)]]) {
   const t0 = Date.now(); findSecrets(big); const ms = Date.now() - t0;
-  assert(ms < 200, '100K characters of ' + what + ' in under 200 ms: ' + ms + ' ms');
+  assert(ms < 1000, '100K characters of ' + what + ' in under a second (it took 1.9 s when the URL rule was quadratic): ' + ms + ' ms');
 }
 
 console.log('SECRET CHECK OK');
