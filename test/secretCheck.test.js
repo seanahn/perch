@@ -65,6 +65,14 @@ const clean = [
   ['a long path without dots', 'cd /var/lib/containers/storage/overlay/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
   ['a macOS path', 'ls /Users/someone/Library/Caches/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
   ['a home path', 'cat ~/projects/perch/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
+  // folders with inner capitals, ids, dots, dashes and ~, and no extension at the end
+  ['an Azure resource id', '/subscriptions/0b1f6471-1bf0-4dda-aec3-111122223333/resourceGroups/rg-prod/providers/Microsoft.Web/sites/myApp'],
+  ['an az --scope', 'az role assignment create --scope /subscriptions/3c9b1e2a-4f5d-4e6a-9b8c-7d6e5f4a3b2c/resourceGroups/rg-prod'],
+  ['a simulator path', '/Users/JohnSmith/Library/Developer/CoreSimulator/Devices/5A2C3E4F-1B2D-4C5E-8F9A-0B1C2D3E4F5A/data'],
+  ['a kubelet path', '/var/lib/kubelet/pods/7d9f2c1e-3b4a-4c5d-9e8f-1a2b3c4d5e6f/volumes/kubernetes.io~secret/default-token'],
+  ['a dot folder', '/home/sahn/.local/share/code-server/extensions'],
+  ['a macOS path with a capital inside a name', 'ls /Users/SeanAhn/Library/Caches/com/aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF'],
+  ['an Azure id with an upper-case group', '/subscriptions/3c9b1e2a-4f5d-4e6a-9b8c-7d6e5f4a3b2c/resourceGroups/RG-Prod2/providers'],
   ['ordinary prose', 'Please refactor the token handling in the parser so the password prompt appears once, and explain the secret of its speed.'],
   ['password with nothing after it', 'password: \nnext line'],
   ['password: and nothing at all', 'password:'],
@@ -146,6 +154,18 @@ for (const text of ['password: string[]', 'token: string | null', 'secret: boole
 }
 
 assert.deepStrictEqual(names('key /rm0zWSY8ybNdytvjH/4R9E4hJKcYCuC7n/iAvI6 here'), ['Random-looking string'], 'a key that starts with / is not taken for a path');
+// base64 keys that start with // or /x/: an empty or one-character folder does not read as a name
+{
+  let seed = 0x0b5e55ed;
+  const next = () => { seed = (seed + 0x6d2b79f5) | 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const rnd = (n) => { let o = ''; for (let i = 0; i < n; i++) o += B64[Math.floor(next() * 64)]; return o; };
+  for (const [what, gen] of [['//', () => '//' + rnd(38)], ['/x/', () => '/' + B64[Math.floor(next() * 62)] + '/' + rnd(37)], ['/ and base64', () => '/' + rnd(39)]]) {
+    let missed = 0, example = ''; const N = 400;
+    for (let i = 0; i < N; i++) { const v = gen(); if (!findSecrets('key ' + v + ' here').length) { missed++; example = example || v; } }
+    assert(missed <= N * 0.005, what + ': ' + missed + ' of ' + N + ' missed (at most 2), e.g. ' + example);
+  }
+}
 // sk- needs a digit or mixed case after it
 assert.deepStrictEqual(names('sk-' + j('abcdefghij', 'klmnopqrst', 'uv1')), ['Anthropic / OpenAI key'], 'with a digit');
 

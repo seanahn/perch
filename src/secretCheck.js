@@ -132,12 +132,24 @@ function findSecrets(text, { ignore = [] } = {}) {
     if (long.length < 2 || long.some((p) => CLUSTER.test(p))) return false;
     return long.filter((p) => VOWEL.test(p)).length >= 0.8 * long.length;
   };
-  // /a/b/c or ~/a/b: every segment before the last reads as a directory name (lower case, or one capital first), as a
-  // random key that happens to start with / does not
+  // /a/b/c or ~/a/b: most of the folders before the last part read as names, as a random key that happens to
+  // hold a / does not. A name: a UUID, a hex or numeric id, or words (lower case, PascalCase, camelCase, with dots,
+  // dashes, _, @ and ~; in mixed case, no digit followed by a letter), pieces of 3+ letters on average, mostly with a vowel (a, e, i, o, u), none with five consonants in a row. An empty or one-character
+  // folder (//, /x/) is not a name.
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const folderName = (d) => {
+    if (d.length < 2 || !/^[A-Za-z0-9._~@+-]+$/.test(d)) return false;
+    if (UUID.test(d) || /^[0-9a-f]{6,}$/i.test(d) || /^[0-9][0-9._-]*$/.test(d)) return true;
+    const pieces = d.split(/[^A-Za-z]+/).flatMap((p) => p.split(/(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)).filter(Boolean);
+    if (!pieces.length || pieces.reduce((n, p) => n + p.length, 0) / pieces.length < 3 || pieces.some((p) => CLUSTER.test(p))) return false;
+    if (!/[A-Z]/.test(d) || pieces.length === 1) return true;   // lib, usr, code-server, kubernetes.io~secret
+    if (/[a-z]/.test(d) && /[0-9][A-Za-z]/.test(d)) return false;   // mixed case with digits inside: a key, not a name (IntelliJIdea2023 is)
+    const long = pieces.filter((p) => p.length >= 2);
+    return long.filter((p) => /[aeiou]/i.test(p)).length >= 0.6 * long.length;
+  };
   const absolutePath = (s) => {
-    const segs = s.replace(/^~/, '').split('/').slice(1);
-    const dirs = segs.slice(0, -1);
-    return dirs.length > 0 && dirs.every((d) => /^[A-Z]?[a-z0-9._@-]*$/.test(d));
+    const dirs = s.replace(/^~/, '').split('/').slice(1, -1);
+    return dirs.length > 0 && dirs.filter(folderName).length * 2 > dirs.length;
   };
   // random-looking strings: within one whitespace-separated word that is not an address, a data: URI or a file path
   const word = /\S+/g;
