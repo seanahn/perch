@@ -3666,13 +3666,28 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'send', sid: c, text: '/finishing-a-development-branch' }); await flush();
     assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }, 'a slash command behind a note runs no command');
     assert(!('phase' in m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c)), 'not saved with the tab');
-    // codex stretch hides the pill, return restores it: from the record, as the tab comes back to that session
+    // codex stretch hides the pill, return restores it: the phase the session had as the tab left it, kept in memory by
+    // session id, so its record is not read again
     m.store.transcripts[id1] = { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };
     assert(s.switchVendor('codex')); await flush();
     assert.deepStrictEqual([v.tab(c).kind, v.tab(c).phase, s.phase], ['codex', null, null], 'Codex has no phase');
+    const reads = () => m.store.loads.filter((l) => l[0] === 'claude' && l[1] === id1).length, read0 = reads();
     assert(s.switchVendor('claude')); await flush(); await flush();
     assert.strictEqual(s.agentSessionId, id1);
-    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Build', skill: 'executing-plans' }, 'the phase of the session it is back on, from its record');
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }, 'the phase of the session it is back on, as it was');
+    assert.strictEqual(reads(), read0, 'kept, not read again');
+    // a session the tab has no phase for yet is read once, then kept
+    v.fire({ type: 'new', kind: 'claude' }); const c3 = v.lastTabs().active, s3 = m.perch.get(c3);
+    v.fire({ type: 'send', sid: c3, text: 'look at the logs' }); await flush();
+    const id3 = s3.agentSessionId, reads3 = () => m.store.loads.filter((l) => l[0] === 'claude' && l[1] === id3).length;
+    assert(id3 && s3.phase === null);
+    m.store.transcripts[id3] = { events: [], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };
+    assert(s3.switchVendor('codex')); await flush();
+    assert(s3.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([v.tab(c3).phase, reads3()], [{ phase: 'Build', skill: 'executing-plans' }, 1], 'the phase of the session it is back on, from its record');
+    assert(s3.switchVendor('codex')); await flush();
+    assert(s3.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([v.tab(c3).phase, reads3()], [{ phase: 'Build', skill: 'executing-plans' }, 1], 'read once');
     // a new Claude thread starts with no phase
     v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
     const sx = m.perch.get(x); sx.phase = { phase: 'Plan', skill: 'writing-plans' };   // as if left over
@@ -3689,6 +3704,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const vr = fakeView(); r.registered['perch.main'].resolveWebviewView(vr.view); vr.fire({ type: 'ready' }); await flush(); await flush(); await flush();
     assert.deepStrictEqual(vr.tab(c).phase, { phase: 'Finish', skill: 'finishing-a-development-branch' });
     assert.deepStrictEqual(vr.tab('P2').phase, { phase: 'Design', skill: 'brainstorming' });
+    const p2 = r.perch.get('P2'), readsP2 = () => r.store.loads.filter((l) => l[0] === 'claude' && l[1] === 'cl-2').length, readP2 = readsP2();
+    assert(p2.switchVendor('codex')); await flush();
+    assert(p2.switchVendor('claude')); await flush(); await flush();
+    assert.deepStrictEqual([p2.agentSessionId, vr.tab('P2').phase, readsP2()], ['cl-2', { phase: 'Design', skill: 'brainstorming' }, readP2], 'kept from the read as the tab reopened');
     assert.strictEqual(vr.tab(x).phase, null, 'a tab with no workflow skill on record has none');
     r.perch.dispose(); m.perch.dispose();
   }

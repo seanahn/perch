@@ -156,7 +156,10 @@ The phase, live and on reopening a tab:
 
 - The phase logic is one small module, `src/phase.js`: the skill-to-phase map, a user message's slash command,
   and the last workflow skill in a list of events. The host keeps the result on each Claude session in memory
-  only; `loadTranscript` computes it over the session's whole record, before the shown transcript is cut.
+  only. A past session's phase is read from its raw record, `<id>.jsonl`, across every compaction (the Agent
+  SDK returns only what follows the last `compact_boundary`): main-conversation Skill calls with an ok result,
+  and slash commands; from the SDK's messages only when there is no file. The host keeps it per session id, so
+  a switch back from Codex reads no record again.
 - Tool calls carry whether they came from a sub-agent (`sub`), so the live stream can ignore them as the
   replayed record already does.
 - The first-start check runs after the restore grace period, so a tab VS Code brings back counts as open. When,

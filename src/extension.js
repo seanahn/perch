@@ -336,6 +336,7 @@ class Session {
     this.recordsSent = 0;            // how many of them the running turn carries: let go as it ends, sent again if it never got going
     this.phase = null;               // claude only: the workflow phase, { phase, skill } (src/phase.js); in memory only, read back from the record
     this.skillCalls = new Map();     // claude only: the main conversation's workflow Skill calls awaiting their result, id -> skill
+    this.phaseOf = new Map();        // claude session id -> its phase as last known, or null: a switch back reads no record again
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
@@ -378,6 +379,7 @@ class Session {
         if (!p.resume || records.has(key)) continue;
         const past = await loadTranscript(p.kind, p.resume, { dir: this.workdir(), limit: Infinity });
         records.set(key, Handoff.stretches(past.events)); phases.set(key, past.phase || null);
+        if (p.kind === 'claude') this.keepPhase(p.resume, past.phase);
       }
     } catch (_) { return; }   // the note stays: the agents have the transcript, the page does not
     const now = this.periods[this.periods.length - 1];
@@ -428,6 +430,7 @@ class Session {
     if ((kind !== 'claude' && kind !== 'codex') || kind === this.kind || this.busy || this.pending.size) return false;
     if (handoff && !handoff.fits) Handoff.writeHandoff(handoff.file, handoff.full);
     const from = this.where();
+    if (this.kind === 'claude' && this.agentSessionId && this.phase) this.phaseOf.set(this.agentSessionId, this.phase);   // as it is now, live calls and all
     this.left[this.kind] = { model: this.model, effort: this.effort, mode: this.mode, gateway: this.gateway, own: this.own, costSoFar: this.costSoFar, resume: this.agentSessionId };
     this.restart();
     const back = this.left[kind] || null;
@@ -444,9 +447,9 @@ class Session {
     this.own = kind === 'claude' && back && (back.own === 'subscription' || back.own === 'api') ? back.own : '';
     this.costSoFar = back && typeof back.costSoFar === 'number' ? back.costSoFar : null;
     this.context = null; this.respondedAt = 0; this.collab.clear(); this.queue = []; this.shown = []; this.via = {}; this.lastVia = ''; this.viaQueue = [];
-    // no phase on Codex, nor on a new Claude thread; back on a Claude session, the phase its record has
+    // no phase on Codex, nor on a new Claude thread; back on a Claude session, the phase it had, else the one its record has
     this.phase = null; this.skillCalls.clear();
-    if (kind === 'claude' && this.agentSessionId) this.loadPhase(this.agentSessionId);
+    if (kind === 'claude' && this.agentSessionId) { if (this.phaseOf.has(this.agentSessionId)) this.recordPhase(this.phaseOf.get(this.agentSessionId)); else this.loadPhase(this.agentSessionId); }
     this.reconcile();
     // where the conversation goes: from one company's service, or account, to another's. Said on the divider; marked when it
     // leaves an account of the user's own (Bedrock, a gateway) for a vendor's service
@@ -487,6 +490,7 @@ class Session {
   /** Put what was said before in place of the note that says it is not shown. It is read from the agent's own record. */
   async loadPast(id) {
     let past; try { past = await loadTranscript(this.kind, id, { dir: this.workdir() }); } catch (_) { return; }   // the note stays as it is: the agent has the transcript, the page does not
+    if (this.kind === 'claude' && past) this.keepPhase(id, past.phase);
     if (!this.disposed && past && this.agentSessionId === id) this.recordPhase(past.phase);
     const at = this.history.indexOf(this.resumed);
     if (this.disposed || at < 0 || !past || !past.events.length) return;
@@ -519,9 +523,12 @@ class Session {
     this.phase = { phase: found.phase, skill: found.skill };
     this.view.sendTabs();
   }
-  /** Back on a Claude session after a stretch on Codex: its phase, read from its whole record. */
+  /** A Claude session's phase as its record has it, kept unless the tab knows it already: its own calls are newer. */
+  keepPhase(id, found) { if (id && !this.phaseOf.has(id)) this.phaseOf.set(id, found && found.phase ? { phase: found.phase, skill: found.skill } : null); }
+  /** Back on a Claude session after a stretch on Codex, its phase not known yet: read from its whole record. */
   async loadPhase(id) {
     let past; try { past = await loadTranscript('claude', id, { dir: this.workdir(), limit: 0 }); } catch (_) { return; }   // no phase shown: the record could not be read
+    if (past) this.keepPhase(id, past.phase);
     if (!this.disposed && this.kind === 'claude' && this.agentSessionId === id && past) this.recordPhase(past.phase);
   }
   /** A Skill call of the main conversation counts once its result is in and is not an error. */
