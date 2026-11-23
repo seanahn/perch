@@ -1179,6 +1179,7 @@ class PerchView {
     this.confluenceSite = null;      // the Confluence site jay is signed in to (an origin), whose /wiki/ links open in jay (note 108)
     this.closing = false;
     this.graceTimer = null;
+    this.firstStartTimer = null;     // perch.firstStart.openClaudeTab's look, once the wait for restored tabs is over
     this.leftGroups = new Set();     // editor groups a Perch tab has just left, looked at by unlockGroups
     this.unlockTimer = null;
     this.meter = new MeterHost(context, (state, why, codex) => this.onMeter(state, why, codex), { program: () => program('claude') });
@@ -1921,6 +1922,36 @@ class PerchView {
   }
 
   /**
+   * perch.firstStart.openClaudeTab, set by an installer: one Claude tab, in an editor group on the right, once (note 203).
+   * False is written first, at the scope that held true, and the key is kept: an installer that writes only missing keys
+   * then leaves it alone. A write that fails opens nothing, rather than a tab on every start; so does any Perch tab
+   * already open, in an editor or the sidebar, as one the window brought back. Called after the wait for restored tabs.
+   */
+  async firstStart() {
+    const KEY = 'firstStart.openClaudeTab', T = vscode.ConfigurationTarget;
+    const folder = (vscode.workspace.workspaceFolders || [])[0];
+    const c = vscode.workspace.getConfiguration('perch', folder && folder.uri), i = (c.inspect && c.inspect(KEY)) || {};
+    // the value that holds is the most specific one set, and that is where false goes
+    const [value, target] = i.workspaceFolderValue !== undefined ? [i.workspaceFolderValue, T.WorkspaceFolder]
+      : i.workspaceValue !== undefined ? [i.workspaceValue, T.Workspace] : [i.globalValue, T.Global];
+    if (value !== true) return;
+    try { await (target === T.WorkspaceFolder ? c : vscode.workspace.getConfiguration('perch')).update(KEY, false, target); }
+    catch (e) { this.trace(`perch.${KEY} could not be set back to false, so no tab is opened: ${(e && e.message) || e}`); return; }
+    if (this.closing || this.sessions.length) return;
+    const s = this.addSession('claude', { location: 'editor' });   // beside the active group: column() has no Perch tab to follow
+    if (!s) return;
+    // VS Code tells the extension of the new tab a moment later; then, with a single group left, the left one did not
+    // stay, and an empty untitled editor takes its place
+    const groups = () => (vscode.window.tabGroups && vscode.window.tabGroups.all) || [];
+    for (let n = 0; n < 20 && !groups().some((g) => (g.tabs || []).some(isPerchTab)); n++) await new Promise((r) => setTimeout(r, 50));
+    if (this.closing || groups().length !== 1) return;
+    try {
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(), { viewColumn: vscode.ViewColumn.One, preview: false });
+      const e = this.panels.get(s.id); if (e) e.panel.reveal(undefined, false);
+    } catch (e) { this.trace(`no untitled editor beside the first Claude tab: ${(e && e.message) || e}`); }
+  }
+
+  /**
    * An editor group that holds only sessions is locked, as a terminal's is: VS Code opens a file in the group that was
    * last used, which after a message is this one, and a locked group is passed over for the one beside it.
    */
@@ -2517,6 +2548,7 @@ class PerchView {
   dispose() {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
+    clearTimeout(this.firstStartTimer);
     clearTimeout(this.unlockTimer);
     clearInterval(this.ticketTimer);
     for (const s of this.sessions) s.dispose();
@@ -2573,6 +2605,9 @@ function activate(context) {
     { dispose: () => perch.dispose() },
   );
   perch.start();
+  // an installer's first start: after the wait for restored tabs, so a tab VS Code brings back counts as open
+  perch.firstStartTimer = setTimeout(() => { perch.firstStartTimer = null; perch.firstStart().catch((e) => perch.trace(`first start: ${(e && e.message) || e}`)); }, RESTORE_GRACE_MS);
+  if (perch.firstStartTimer.unref) perch.firstStartTimer.unref();
   // jay's Jira projects: now, and again every few minutes, as jay learns of more (and as a page comes into view)
   perch.refreshTicketProjects();
   perch.ticketTimer = setInterval(() => perch.refreshTicketProjects(), TICKET_PROJECTS_MS);

@@ -1624,6 +1624,78 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose();
   }
 
+  // ---- perch.firstStart.openClaudeTab: one Claude tab on the right, once; false is written first, at the scope that held true
+  {
+    const KEY = 'firstStart.openClaudeTab', settle = async () => { await wait(150); await flush(); };
+    // what the window held when the tab was opened: the setting's writes so far, and the column asked for
+    const watchOpen = (m) => { const seen = []; const open = m.vscode.window.createWebviewPanel; m.vscode.window.createWebviewPanel = (...a) => { seen.push({ updates: m.ui.configUpdates.length, column: a[2] && a[2].viewColumn }); return open(...a); }; return seen; };
+    const fresh = (o) => install(undefined, o);
+
+    // opens one tab and writes false: set for the user, nothing open, the left group stays
+    {
+      const m = fresh({ config: { [KEY]: true } }); const seen = watchOpen(m);
+      m.ui.groups = [{ viewColumn: 1, tabs: [] }, { viewColumn: 2, tabs: [] }];
+      assert.strictEqual(m.perch.sessions.length, 0, 'nothing opens before the wait for restored tabs is over');
+      await settle();
+      assert.deepStrictEqual(m.perch.sessions.map((s) => [s.kind, s.location]), [['claude', 'editor']], 'one Claude tab, in an editor');
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Global]], 'false, at the user\'s scope');
+      assert.deepStrictEqual(seen, [{ updates: 1, column: m.vscode.ViewColumn.Beside }], 'written before the tab opens, and the tab opens beside');
+      assert.strictEqual(m.ui.configUpdates.some((u) => u[1] === undefined), false, 'the key is never removed');
+      assert.deepStrictEqual([m.ui.untitled.length, m.ui.errors.length], [0, 0], 'two groups: no untitled editor, no error');
+      m.perch.dispose();
+    }
+
+    // the window has a single group once the tab is open: an empty untitled editor on the left, focus back on the Perch tab
+    {
+      const m = fresh({ config: { [KEY]: true } }); await settle();
+      assert.strictEqual(m.perch.sessions.length, 1);
+      assert.strictEqual(m.ui.untitled.length, 1, 'one untitled editor');
+      assert.deepStrictEqual(m.ui.shown.map(([d, o]) => [d.isUntitled, o]), [[true, { viewColumn: m.vscode.ViewColumn.One, preview: false }]]);
+      const panel = m.ui.panels.find((p) => !p.disposed);
+      assert.deepStrictEqual([panel.active, panel.reveals], [true, 1], 'the Perch tab has the focus again');
+      m.perch.dispose();
+    }
+
+    // a restored tab means no new tab, and false is still written; a tab in the sidebar counts too
+    for (const location of ['editor', 'sidebar']) {
+      const saved = { 'perch.sessions.v1': { active: location === 'sidebar' ? 'back' : null, counters: { claude: 1, codex: 0 }, sessions: [{ id: 'back', kind: 'claude', title: 'Came back', titled: true, resume: 'sess-back', location, paneled: location === 'editor' }] } };
+      const m = install(saved, { config: { [KEY]: true } }); await settle();
+      assert.deepStrictEqual(m.perch.sessions.map((s) => s.id), ['back'], `a restored ${location} tab: no new tab`);
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Global]], `a restored ${location} tab: false still written`);
+      m.perch.dispose();
+    }
+
+    // a refused write opens nothing, and says nothing but to Perch's output
+    {
+      const m = fresh({ config: { [KEY]: true } }); m.ui.failConfigUpdate = 'Unable to write to User Settings: a policy sets it'; await settle();
+      assert.deepStrictEqual([m.perch.sessions.length, m.ui.panels.length, m.ui.errors.length, m.ui.warnings.length], [0, 0, 0, 0], 'no tab, no message');
+      m.perch.dispose();
+    }
+
+    // the workspace scope is written back at the workspace scope, a folder's at the folder's
+    {
+      const m = fresh(); m.ui.workspaceConfig = { [KEY]: true }; await settle();
+      assert.deepStrictEqual(m.ui.configUpdates, [[KEY, false, m.vscode.ConfigurationTarget.Workspace]]);
+      assert.strictEqual(m.perch.sessions.length, 1);
+      m.perch.dispose();
+      const f = fresh(); f.ui.folderConfig[process.cwd()] = { [KEY]: true }; await settle();
+      assert.deepStrictEqual(f.ui.configUpdates, [[KEY, false, f.vscode.ConfigurationTarget.WorkspaceFolder, process.cwd()]]);
+      assert.strictEqual(f.perch.sessions.length, 1);
+      f.perch.dispose();
+      // the user's true under a workspace's false is the workspace's false: nothing happens
+      const w = fresh({ config: { [KEY]: true } }); w.ui.workspaceConfig = { [KEY]: false }; await settle();
+      assert.deepStrictEqual([w.ui.configUpdates.length, w.perch.sessions.length], [0, 0]);
+      w.perch.dispose();
+    }
+
+    // false or absent does nothing: no write, no tab
+    for (const config of [{ [KEY]: false }, {}]) {
+      const m = fresh({ config }); await settle();
+      assert.deepStrictEqual([m.ui.configUpdates.length, m.perch.sessions.length], [0, 0], JSON.stringify(config));
+      m.perch.dispose();
+    }
+  }
+
   // ---- the model pill on the gateway: the gateway's names, from the file; a model of Claude's catalog is let go when a tab moves there
   {
     const fs = require('fs'), os = require('os'), path = require('path');

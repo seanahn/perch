@@ -432,6 +432,11 @@
           "default": "",
           "description": "Path to a codex program to run. Empty uses the one that comes with the ChatGPT extension."
         },
+        "perch.firstStart.openClaudeTab": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open one Claude tab on the right the next time Perch starts, then set this back to false. For installers."
+        },
         "perch.ideContext": {
           "type": "boolean",
           "default": true,
