@@ -3661,6 +3661,10 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     v.fire({ type: 'send', sid: c, text: '/writing-plans for the flush fix' }); await flush();
     assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' });
     const s = m.perch.get(c), id1 = s.agentSessionId;
+    // the phase follows what was sent: a note kept for the record goes ahead of the message, so it no longer starts with /
+    s.records = ['For the record: PR #1 (https://x.example/1) was merged at 10:00.']; s.recordsSent = 0;
+    v.fire({ type: 'send', sid: c, text: '/finishing-a-development-branch' }); await flush();
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Plan', skill: 'writing-plans' }, 'a slash command behind a note runs no command');
     assert(!('phase' in m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c)), 'not saved with the tab');
     // codex stretch hides the pill, return restores it: from the record, as the tab comes back to that session
     m.store.transcripts[id1] = { events: [{ kind: 'user', text: 'design the flush fix', queued: false }], earlier: 0, phase: { phase: 'Build', skill: 'executing-plans' } };

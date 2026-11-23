@@ -874,7 +874,6 @@ class Session {
       return;
     }
     const agent = this.ensureAgent();
-    if (this.kind === 'claude') this.setPhase(skillOfSlash(text));   // a workflow skill the user starts with its slash command
     const thumbs = images.map((i) => i.thumb), sent = images.map((i) => ({ mime: i.mime, data: i.data }));
     // IDE context is read now, when the message is written, not later when a queued message starts
     const ctx = this.ide ? ideContext(this.workdir()) : null;
@@ -886,6 +885,8 @@ class Session {
     const noted = this.records.length && !this.recordsSent ? this.records.join(' ') + '\n\n' : '';
     if (noted) this.recordsSent = this.records.length;
     const full = carried + noted + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
+    // a workflow skill the user starts with its slash command: Claude Code runs it only when what is sent starts with it
+    if (this.kind === 'claude') this.setPhase(skillOfSlash(full));
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
