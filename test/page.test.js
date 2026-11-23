@@ -728,15 +728,15 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
   assert.deepStrictEqual([shown($ph()), $ph().textContent, $ph().classList.contains('none'), shown(card())], [true, 'no workflow', true, true], 'no phase: a dimmed pill, and an open card follows');
   const line = () => { const n = card().querySelector('.none'); return n ? n.textContent : null; };
   assert.deepStrictEqual([card().querySelector('.h').textContent, rows(), line()], ['Workflow phase', [['', 'Design', '', false], ['', 'Plan', '', false], ['', 'Build', '', false], ['', 'Finish', '', false]], 'Not in a trivialpowers workflow. Start one with /brainstorming.'], 'the four phases, none marked, and how to start one');
-  host({ type: 'tabs', tabs: [with_(A, { phase: null, workflow: { plugin: 'other', command: '/other:brainstorming' } }), B], active: 'a' });
-  assert.strictEqual(line(), 'Not in a other workflow. Start one with /other:brainstorming.', 'the plugin and command as the host names them');
+  host({ type: 'tabs', tabs: [with_(A, { phase: null, workflow: { plugin: 'example', command: '/example:brainstorming' } }), B], active: 'a' });
+  assert.strictEqual(line(), 'Not in a example workflow. Start one with /example:brainstorming.', 'the plugin and command as the host names them');
   host({ type: 'tabs', tabs: [with_(A, { phase: null, workflow: null }), B], active: 'a' });
   assert.deepStrictEqual([$ph().textContent, $ph().classList.contains('none'), rows().filter((r) => r[3]).length, line()], ['no workflow', true, 0, 'No workflow plugin is loaded.'], 'no workflow plugin loaded');
   host({ type: 'tabs', tabs: [with_(A, { phase: PLAN, workflow: TP }), B], active: 'a' });
   assert.deepStrictEqual([$ph().textContent, $ph().classList.contains('none'), line(), card().querySelector('.h').textContent], ['Plan', false, null, 'Workflow phase \u00b7 trivialpowers'], 'back in a phase: no line, the plugin in the header');
   $ph().dispatchEvent(new window.MouseEvent('mouseleave'));
   host({ type: 'tabs', tabs: [A, with_(B, { phase: PLAN, workflow: TP })], active: 'b' });
-  assert(!shown($ph()), 'a Codex tab has no pill');
+  assert.deepStrictEqual([shown($ph()), window.getComputedStyle($mu).marginLeft], [false, 'auto'], 'a Codex tab has no pill, and the stats take the right edge back');
   host({ type: 'tabs', tabs: [A, B], active: 'a' });
   assert.deepStrictEqual([shown($ph()), $ph().textContent], [true, 'no workflow'], 'a Claude tab with no phase: the pill says so'); }
 // the usage panel under a Claude tab: no plan is named, since Anthropic's usage endpoint names none; each window; refresh

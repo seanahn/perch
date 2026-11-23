@@ -1474,7 +1474,7 @@ ${glyphCss}
   // No click action; the card opens on hover and focus, and closes on leave, blur and Escape.
   const PHASES = ['Design', 'Plan', 'Build', 'Finish'];   // src/phase.js's PHASES: the page cannot require it, and a test holds the two equal
   const $mphase = $('m-phase'), $phaseCard = $('m-phasecard');
-  let phaseNow = null, phaseTab = false, workflowNow = null;   // phaseTab: the tab shown is a Claude tab, so the pill is
+  let phaseNow = null, phaseTab = false, workflowNow = null;   // phaseTab: the tab shown is a Claude tab, so the pill is shown
   function drawPhaseCard() {
     $phaseCard.textContent = '';
     const full = (phaseNow && phaseNow.skill) || '', cut = full.lastIndexOf(':');
