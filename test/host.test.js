@@ -3761,5 +3761,23 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose(); m.perch.dispose();
   }
 
+  // ---- the workflow a Claude tab can start when it is in none (note 203, 0.7.42): from Claude Code's command list, sent
+  // with every tab next to its phase, and again when the list changes
+  {
+    const m = install(undefined, { past: { transcripts: {} } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'new', kind: 'codex' }); const x = v.lastTabs().active;
+    const s = m.perch.get(c), cmds = (...names) => s.view.setCommands('claude', names.map((name) => ({ name, description: 'd' })));
+    cmds('clear', 'trivialpowers:brainstorming', 'trivialpowers:writing-plans');
+    assert.deepStrictEqual([v.tab(c).phase, v.tab(c).workflow], [null, { plugin: 'trivialpowers', command: '/brainstorming' }], 'one plugin offers it: the short command, sent as the list arrives');
+    assert.strictEqual(v.tab(x).workflow, null, 'Codex: none');
+    cmds('trivialpowers:brainstorming', 'other:brainstorming');
+    assert.deepStrictEqual(v.tab(c).workflow, { plugin: 'other', command: '/other:brainstorming' }, 'two plugins: the first of the list (kept sorted by name), in full');
+    cmds('clear', 'compact');
+    assert.strictEqual(v.tab(c).workflow, null, 'no workflow plugin loaded');
+    m.perch.dispose();
+  }
+
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

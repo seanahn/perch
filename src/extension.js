@@ -16,7 +16,7 @@ const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
-const { phaseOfSkill, skillOfSlash, resolveSkill } = require('./phase');
+const { phaseOfSkill, skillOfSlash, resolveSkill, workflowOf } = require('./phase');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
@@ -1121,6 +1121,7 @@ class Session {
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
       phase: this.kind === 'claude' ? this.phase : null,   // the workflow phase, for the footer's pill (note 203)
+      workflow: this.kind === 'claude' ? workflowOf(this.view.commands.claude) : null,   // the plugin and command that start one, for the pill's card when there is no phase
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : this.own, this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,
     };
@@ -1282,6 +1283,7 @@ class PerchView {
     if (JSON.stringify(next) === JSON.stringify(this.commands[kind])) return;
     this.commands[kind] = next;
     this.raw({ type: 'commands', kind, list: next });
+    if (kind === 'claude') this.sendTabs();   // each Claude tab carries the workflow plugin the list offers (note 203)
   }
 
   // ---- codebase search (codeindex/, src/codeIndex.js, docs/notes/201-codebase-indexing.md)
