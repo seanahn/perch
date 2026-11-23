@@ -340,6 +340,8 @@ ${glyphCss}
      focus a card of the four phases, the current one marked. The pill, when shown, takes the space between the groups. */
   #meter .phase { flex: none; margin-left: auto; padding: 0 6px; font-size: 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); cursor: default; }
   #meter .phase:hover, #meter .phase:focus { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); outline: none; }
+  /* in a workflow the phase reads green, the colour the IDE-context toggle uses for on */
+  #meter .phase:not(.none), #meter .phase:not(.none):hover, #meter .phase:not(.none):focus { color: var(--vscode-charts-green, var(--vscode-testing-iconPassed)); }
   #meter .phase.none { opacity: 0.6; font-style: italic; }
   #meter .phase.none:hover, #meter .phase.none:focus { opacity: 1; }
   .phasecard { pointer-events: none; }
