@@ -3,7 +3,7 @@
 // The host owns all state; this page renders what it is sent and can be rebuilt from a replay at any time.
 
 const { renderMarkdown, linkTicketKeys } = require('./markdown');
-const { RULES: SECRET_RULES, findSecrets, entropy } = require('./secretCheck');
+const { RULES: SECRET_RULES, findSecrets, entropy, sha256Hex } = require('./secretCheck');
 
 const LETTER = { claude: 'C', codex: 'X' };
 function esc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -448,6 +448,7 @@ ${glyphCss}
   const ticketed = (node) => linkTicketKeys(node, ticketProjects, document, openTicket);
   ${findSecrets.toString()}
   ${entropy.toString()}
+  ${sha256Hex.toString()}
   const RULES = ${JSON.stringify(SECRET_RULES)};
   /** A copy button for a piece of text: the host puts it on the clipboard, the button says so for a moment. */
   function copyButton(getText) {
@@ -1057,16 +1058,8 @@ ${glyphCss}
     closeMenu();
     if (secretCfg.enabled && p && text && !p.sentAnyway.has(text)) {
       const hits = findSecrets(text, { ignore: secretCfg.ignore });
-      if (hits.length) {
-        const sid = active;
-        if (!secretCfg.allowed.size) { holdSecret(sid, text, hits); return; }   // nothing allowed yet: no hash to wait for
-        hashes(hits).then((hs) => {
-          if (active !== sid || $input.value !== text) return;   // changed meanwhile: the next Send checks again
-          const left = hits.filter((h, i) => !hs[i] || !secretCfg.allowed.has(hs[i]));
-          if (left.length) holdSecret(sid, text, left); else dispatch(sid, text);
-        });
-        return;
-      }
+      const left = hits.filter((h) => !secretCfg.allowed.has(sha256Hex(h.value)));
+      if (left.length) { holdSecret(active, text, left); return; }
     }
     dispatch(active, text);
   }
@@ -1082,12 +1075,6 @@ ${glyphCss}
   const $secret = $('secret'), $secretSay = $secret.querySelector('.say'), $secretWhy = $secret.querySelector('.why');
   let secretCfg = { enabled: true, ignore: [], allowed: new Set() };
   let held = null;   // the message the strip is about: { sid, text, hits }
-  async function sha256(s) {
-    const bytes = typeof TextEncoder === 'function' ? new TextEncoder().encode(s) : Uint8Array.from(unescape(encodeURIComponent(s)), (c) => c.charCodeAt(0));
-    const b = await crypto.subtle.digest('SHA-256', bytes);
-    return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
-  }
-  const hashes = (hits) => Promise.all(hits.map((h) => sha256(h.value).catch(() => null)));
   const mark = (h) => { $input.focus(); try { $input.setSelectionRange(h.start, h.end); } catch (_) { /* not focusable */ } };
   function hideSecret() { held = null; $secret.hidden = true; $secretWhy.hidden = true; $secretWhy.textContent = ''; }
   function holdSecret(sid, text, hits) {
@@ -1108,10 +1095,10 @@ ${glyphCss}
     if (act === 'edit') { hideSecret(); mark(h.hits[0]); return; }
     if (h.sid !== active || $input.value !== h.text) { hideSecret(); return; }   // the text is not the one the strip is about
     if (act === 'send') { panes.get(h.sid).sentAnyway.add(h.text); dispatch(h.sid, h.text); return; }
-    if (act === 'allow') hashes(h.hits).then((hs) => {
-      for (const x of hs) if (x && !secretCfg.allowed.has(x)) { secretCfg.allowed.add(x); vscode.postMessage({ type: 'secretAllow', hash: x }); }
-      if (held === h && active === h.sid && $input.value === h.text) dispatch(h.sid, h.text);
-    });
+    if (act === 'allow') {   // the hash is worked out here, in plain JavaScript (no crypto.subtle needed): the value never leaves the page this way
+      for (const x of h.hits.map((y) => sha256Hex(y.value))) if (!secretCfg.allowed.has(x)) { secretCfg.allowed.add(x); vscode.postMessage({ type: 'secretAllow', hash: x }); }
+      dispatch(h.sid, h.text);
+    }
   });
   $input.addEventListener('input', () => { if (held) hideSecret(); });
 

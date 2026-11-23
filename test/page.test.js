@@ -19,7 +19,7 @@ const strip = (h) => h.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>
 
 function page(icons) {
   const out = [], states = [];
-  const dom = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons })), { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))), setState: (x) => states.push(JSON.parse(JSON.stringify(x))), getState: () => states[states.length - 1] }); w.HTMLElement.prototype.scrollIntoView = function () {}; if (!w.crypto.subtle) Object.defineProperty(w.crypto, 'subtle', { value: require('crypto').webcrypto.subtle, configurable: true }); } });   // a webview has crypto.subtle; jsdom does not
+  const dom = new JSDOM(strip(getHtml({ nonce: 'n', cspSource: 'x', icons })), { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole, beforeParse(w) { w.acquireVsCodeApi = () => ({ postMessage: (m) => out.push(JSON.parse(JSON.stringify(m))), setState: (x) => states.push(JSON.parse(JSON.stringify(x))), getState: () => states[states.length - 1] }); w.HTMLElement.prototype.scrollIntoView = function () {}; } });
   const w = dom.window, d = w.document;
   return { w, d, out, states, host: (m) => w.dispatchEvent(new w.MessageEvent('message', { data: m })), $: (s) => d.querySelector(s), $$: (s) => [...d.querySelectorAll(s)], shown: (n) => !!n && w.getComputedStyle(n).display !== 'none' && (!n.parentElement || n.parentElement === d.body || w.getComputedStyle(n.parentElement).display !== 'none') };
 }
@@ -1457,6 +1457,7 @@ window.close();
     const sha = (s) => require('crypto').createHash('sha256').update(s).digest('hex');
     const hideOf = (n) => !n || n.hidden || !ps.shown(n);
     assert(hideOf(strip()), 'no strip until something is found');
+    assert(!ps.w.crypto || !ps.w.crypto.subtle, 'no crypto.subtle here, as in a page served over plain http: the check does without it');
 
     // Send with a GitHub token: nothing goes out, the text stays, the strip names the rule, the token is selected
     typeIn(msg); enter(); await settle();
@@ -1529,7 +1530,7 @@ window.close();
     typeIn('one more, edited'); assert(hideOf(strip()), 'typing closes the strip');
     ps.out.length = 0;
 
-    // with perch.secretCheck off, the message goes at once
+    // with perch.secretCheck.enabled off, the message goes at once
     ps.host({ type: 'secretCheck', enabled: false, ignore: [], allowed: [] });
     typeIn('fresh ' + ['ghu_', 'Z9y8X7w6V5u4T3s2R1q0', 'P9o8N7m6L5k4J3i2'].join('')); enter();
     assert.strictEqual(sends().length, 1, 'off: sent at once, with no wait');
