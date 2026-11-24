@@ -71,8 +71,10 @@ class FakeAgent {
     this.answer(t);
   }
   answer(t) {
-    // knobs.skills: Skill calls the next Claude turn makes, each { skill, isError, sub }: the call, then its result
-    if (this.claude && knobs.skills) { for (const k of knobs.skills) { const id = 'sk-' + (++fakeSkill); this.emit({ kind: 'tool_use', id, name: 'Skill', input: { skill: k.skill }, sub: !!k.sub }); this.emit({ kind: 'tool_result', id, text: k.isError ? 'Unknown skill' : 'Launching skill: ' + k.skill, truncated: false, isError: !!k.isError }); } knobs.skills = null; }
+    // knobs.skills: Skill calls the next Claude turn makes, each { skill, args, isError, sub }: the call, then its result
+    if (this.claude && knobs.skills) { for (const k of knobs.skills) { const id = 'sk-' + (++fakeSkill); this.emit({ kind: 'tool_use', id, name: 'Skill', input: Object.assign({ skill: k.skill }, k.args ? { args: k.args } : {}), sub: !!k.sub }); this.emit({ kind: 'tool_result', id, text: k.isError ? 'Unknown skill' : 'Launching skill: ' + k.skill, truncated: false, isError: !!k.isError }); } knobs.skills = null; }
+    // knobs.tools: other tool calls the next Claude turn makes, each { name, input, sub }, after its Skill calls
+    if (this.claude && knobs.tools) { for (const k of knobs.tools) { const id = 'tl-' + (++fakeSkill); this.emit({ kind: 'tool_use', id, name: k.name, input: k.input, sub: !!k.sub }); this.emit({ kind: 'tool_result', id, text: 'ok', truncated: false, isError: false }); } knobs.tools = null; }
     this.emit({ kind: 'delta', text: 'ans' });
     this.lastAnswer = 'answer to ' + t; this.emit({ kind: 'text', text: this.lastAnswer });
     if (this.claude) { this.emit({ kind: 'responded', at: Date.now() }); this.emit({ kind: 'context', percent: 2.4, used: 20361, max: 1000000, model: this.now }); }

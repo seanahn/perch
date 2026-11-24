@@ -1548,7 +1548,9 @@ ${glyphCss}
     $phaseCard.append(el('div', 'h', cut > 0 ? 'Workflow phase \\u00b7 ' + full.slice(0, cut) : 'Workflow phase'));
     for (const name of PHASES) {
       const now = !!phaseNow && phaseNow.phase === name, r = el('div', 'ph' + (now ? ' now' : ''));
-      r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', name), el('span', 'sk', now ? full.slice(cut + 1) : ''));
+      // in Build, with its task count when the host found its ledger (Sean, 2026-11-24)
+      const pr = now && name === 'Build' && phaseNow.progress;
+      r.append(el('span', 'mk', now ? '▸' : ''), el('span', 'n', pr ? name + ' \u2014 ' + pr.done + ' of ' + pr.total + ' tasks done' : name), el('span', 'sk', now ? full.slice(cut + 1) : ''));
       $phaseCard.append(r);
     }
     if (!phaseNow) $phaseCard.append(el('div', 'none', workflowNow ? 'Not in a ' + workflowNow.plugin + ' workflow. Start one with ' + workflowNow.command + '.' : 'No workflow plugin is loaded.'));
@@ -1565,7 +1567,8 @@ ${glyphCss}
     phaseTab = !!t && t.kind === 'claude';
     phaseNow = phaseTab && t.phase ? t.phase : null;
     workflowNow = phaseTab && t.workflow ? t.workflow : null;
-    $mphase.hidden = !phaseTab; $mphase.textContent = phaseNow ? phaseNow.phase : phaseTab ? 'no workflow' : '';
+    const pr = phaseNow && phaseNow.phase === 'Build' && phaseNow.progress;   // Build 5/9: the plan's tasks done, of all
+    $mphase.hidden = !phaseTab; $mphase.textContent = phaseNow ? phaseNow.phase + (pr ? ' ' + pr.done + '/' + pr.total : '') : phaseTab ? 'no workflow' : '';
     $mphase.classList.toggle('none', phaseTab && !phaseNow);
     if (!phaseTab) hidePhaseCard(); else if (!$phaseCard.hidden) drawPhaseCard();
   }

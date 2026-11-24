@@ -717,6 +717,15 @@ host({ type: 'tabs', tabs: [A, B], active: 'a' });
   host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Build', skill: 'executing-plans' } }), B], active: 'a' });
   assert.deepStrictEqual([$ph().textContent, rows().filter((r) => r[3]).map((r) => r[1] + ' ' + r[2])], ['Build', ['Build executing-plans']], 'an open card follows the phase');
   assert.deepStrictEqual([card().querySelector('.h').textContent, rows().filter((r) => r[3]).map((r) => r[2])], ['Workflow phase', ['executing-plans']], 'no prefix: no plugin in the header');
+  // Build's task count (Sean, 2026-11-24): on the pill, and in the card's Build row; only in Build
+  host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Build', skill: 'trivialpowers:subagent-driven-development', progress: { done: 5, total: 9 } } }), B], active: 'a' });
+  assert.deepStrictEqual([$ph().textContent, $ph().classList.contains('none')], ['Build 5/9', false], 'the pill counts the plan\'s tasks done');
+  assert.deepStrictEqual(rows().map((r) => r[1]), ['Design', 'Plan', 'Build \u2014 5 of 9 tasks done', 'Finish'], 'the Build row says it in words');
+  assert.deepStrictEqual(rows().filter((r) => r[3]).map((r) => r[2]), ['subagent-driven-development'], 'beside the skill');
+  host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Plan', skill: 'writing-plans', progress: { done: 5, total: 9 } } }), B], active: 'a' });
+  assert.deepStrictEqual([$ph().textContent, rows().map((r) => r[1])], ['Plan', require('../src/phase').PHASES], 'no count in another phase');
+  host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Build', skill: 'executing-plans' } }), B], active: 'a' });
+  assert.deepStrictEqual([$ph().textContent, rows().map((r) => r[1])], ['Build', require('../src/phase').PHASES], 'no ledger found: the plain Build');
   host({ type: 'tabs', tabs: [with_(A, { phase: { phase: 'Plan', skill: 'a:b:writing-plans' } }), B], active: 'a' });
   assert.deepStrictEqual([card().querySelector('.h').textContent, rows().filter((r) => r[3]).map((r) => r[2])], ['Workflow phase \u00b7 a:b', ['writing-plans']], 'the prefix is the part before the last colon');
   $ph().dispatchEvent(new window.FocusEvent('blur')); assert(!shown(card()), 'blur closes it');

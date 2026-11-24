@@ -225,7 +225,8 @@ async function claudeNotices(id, { claudeDir = process.env.CLAUDE_CONFIG_DIR || 
  * The workflow phase of a past Claude session (src/phase.js), from the session's own file: the Agent SDK's reader returns
  * only what follows the last compaction (`compact_boundary`), and the skill that set the phase is often before it. Only the
  * lines that can name a workflow skill are parsed: a Skill call, its result, a slash command; a sub-agent's records
- * (`isSidechain`) are not the main conversation's. Undefined when there is no file, null when it has no workflow skill.
+ * (`isSidechain`) are not the main conversation's; and a line naming an SDD ledger, for Build's task count.
+ * Undefined when there is no file, null when it has no workflow skill.
  */
 async function claudePhase(id, { dir, claudeDir = claudeConfigDir() } = {}) {
   if (!/^[A-Za-z0-9_-]+$/.test(String(id || ''))) return undefined;   // a session's id names a file: nothing else does
@@ -244,6 +245,7 @@ async function claudePhase(id, { dir, claudeDir = claudeConfigDir() } = {}) {
   const records = () => [...lines].sort((a, b) => a[0] - b[0]).map(([s, e]) => { try { return JSON.parse(buf.toString('utf8', s, e)); } catch (_) { return null; } })
     .filter((o) => o && !o.isSidechain && (o.type === 'user' || o.type === 'assistant'));
   take('"Skill"'); take('<command-name>');   // as a value; in text it would be escaped
+  take('.superpowers/sdd/');   // a tool call naming an SDD ledger: Build's task count (phaseFromEvents)
   // then the results of the main conversation's Skill calls, by their call's id
   for (const o of records()) for (const b of (o.type === 'assistant' && o.message && Array.isArray(o.message.content) ? o.message.content : [])) if (b && b.type === 'tool_use' && b.name === 'Skill' && typeof b.id === 'string') take(JSON.stringify(b.id));
   return phaseFromEvents(claudeEvents(records()));

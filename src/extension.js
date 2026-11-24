@@ -18,9 +18,11 @@ const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
 const Handoff = require('./handoff');
 const PrSessions = require('./prSessions');
-const { phaseOfSkill, skillOfSlash, resolveSkill, workflowOf } = require('./phase');
+const { phaseOfSkill, skillOfSlash, resolveSkill, workflowOf, ledgerOfInput, taskProgress } = require('./phase');
 
 const VENDOR = { claude: 'Claude', codex: 'Codex' };
+/** A phase as src/phase.js finds it, with Build's hints for its task count when it has them. */
+const phaseCopy = (f) => Object.assign({ phase: f.phase, skill: f.skill }, typeof f.args === 'string' ? { args: f.args } : {}, typeof f.ledger === 'string' ? { ledger: f.ledger } : {});
 const MODE_NAMES = { default: 'Ask', acceptEdits: 'Edits', plan: 'Plan', auto: 'Auto', bypassPermissions: 'Bypass', 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' };
 
 const MODES = {
@@ -343,6 +345,9 @@ class Session {
     this.phase = null;               // claude only: the workflow phase, { phase, skill } (src/phase.js); in memory only, read back from the record
     this.skillCalls = new Map();     // claude only: the main conversation's workflow Skill calls awaiting their result, id -> skill
     this.phaseOf = new Map();        // claude session id -> its phase as last known, or null: a switch back reads no record again
+    this.progress = null;            // claude only, in Build: { done, total } of the plan's tasks, from its SDD ledger (taskProgress); else null
+    this.lastLedger = null;          // the SDD ledger a tool call of this tab last named, as written there
+    this.progressAt = 0; this.progressReading = false; this.progressAgain = false;
     this.agent = null;               // started lazily on first message
     this.history = [];
     this.pending = new Map();        // permission id -> resolve
@@ -517,20 +522,27 @@ class Session {
   // ---- the workflow phase (note 203): Claude only, the main conversation only
 
   /** A workflow skill has run, or the user started one: the phase is its phase. Any other skill leaves the phase as it is. */
-  setPhase(skill) {
+  setPhase(skill, args) {
     const phase = this.kind === 'claude' ? phaseOfSkill(skill) : null;
-    if (!phase || (this.phase && this.phase.phase === phase && this.phase.skill === skill)) return;
-    this.phase = { phase, skill };
+    if (!phase) return;
+    const hints = Object.assign({}, typeof args === 'string' && args.trim() ? { args: args.trim() } : {}, phase === 'Build' && this.lastLedger ? { ledger: this.lastLedger } : {});
+    if (this.phase && this.phase.phase === phase && this.phase.skill === skill) {
+      if (phase === 'Build' && hints.args && hints.args !== this.phase.args) { this.phase = Object.assign({}, this.phase, hints); this.refreshProgress(true); }
+      return;
+    }
+    this.phase = Object.assign({ phase, skill }, hints); this.progress = null;
     this.view.sendTabs();
+    this.refreshProgress(true);
   }
   /** The phase a session's record has (loadTranscript), unless the tab has one already from what happened since it opened. */
   recordPhase(found) {
     if (this.kind !== 'claude' || this.phase || !found || !found.phase) return;
-    this.phase = { phase: found.phase, skill: found.skill };
+    this.phase = phaseCopy(found); this.progress = null;
     this.view.sendTabs();
+    this.refreshProgress(true);
   }
   /** A Claude session's phase as its record has it, kept unless the tab knows it already: its own calls are newer. */
-  keepPhase(id, found) { if (id && !this.phaseOf.has(id)) this.phaseOf.set(id, found && found.phase ? { phase: found.phase, skill: found.skill } : null); }
+  keepPhase(id, found) { if (id && !this.phaseOf.has(id)) this.phaseOf.set(id, found && found.phase ? phaseCopy(found) : null); }
   /** Back on a Claude session after a stretch on Codex, its phase not known yet: read from its whole record. */
   async loadPhase(id) {
     let past; try { past = await loadTranscript('claude', id, { dir: this.workdir(), limit: 0 }); } catch (_) { return; }   // no phase shown: the record could not be read
@@ -539,8 +551,37 @@ class Session {
   }
   /** A Skill call of the main conversation counts once its result is in and is not an error. */
   watchSkill(ev) {
-    if (ev.kind === 'tool_use' && ev.name === 'Skill' && !ev.sub && ev.input && phaseOfSkill(ev.input.skill)) this.skillCalls.set(ev.id, ev.input.skill);
-    else if (ev.kind === 'tool_result' && this.skillCalls.has(ev.id)) { const skill = this.skillCalls.get(ev.id); this.skillCalls.delete(ev.id); if (!ev.isError) this.setPhase(skill); }
+    if (ev.kind === 'tool_use') { const l = ledgerOfInput(ev.input); if (l) this.noteLedger(l); }   // any tool call, a sub-agent's too
+    if (ev.kind === 'tool_use' && ev.name === 'Skill' && !ev.sub && ev.input && phaseOfSkill(ev.input.skill)) this.skillCalls.set(ev.id, ev.input);
+    else if (ev.kind === 'tool_result' && this.skillCalls.has(ev.id)) { const i = this.skillCalls.get(ev.id); this.skillCalls.delete(ev.id); if (!ev.isError) this.setPhase(i.skill, i.args); }
+    else if (ev.kind === 'tool_result' && !ev.sub) this.refreshProgress(false);   // the ledger may have moved on: read again, at most every couple of seconds
+  }
+
+  // ---- Build's task count (Sean, 2026-11-24): '5/9' on the pill, from the SDD ledger the session last named, else the one
+  // its plan has (src/phase.js taskProgress); read again as the phase is set, as tool calls come back, and as a turn ends
+  /** A tool call named an SDD ledger: in Build, it is the one counted. */
+  noteLedger(l) {
+    if (l === this.lastLedger && (!this.phase || this.phase.ledger === l)) return;
+    this.lastLedger = l;
+    if (this.phase && this.phase.phase === 'Build' && this.phase.ledger !== l) { this.phase = Object.assign({}, this.phase, { ledger: l }); this.refreshProgress(true); }
+  }
+  /** Read the ledger and plan again, without waiting on them; `force` reads now, else no more than once in two seconds. Any failure: no count. */
+  refreshProgress(force) {
+    if (this.kind !== 'claude' || !this.phase || this.phase.phase !== 'Build') { if (this.progress) { this.progress = null; this.view.sendTabs(); } return; }
+    if (this.progressReading) { if (force) this.progressAgain = true; return; }
+    if (!force && Date.now() - this.progressAt < 2000) return;
+    this.progressReading = true; this.progressAt = Date.now();
+    const hint = this.phase;
+    taskProgress(hint, { cwd: this.workdir() }).catch(() => null).then((p) => {
+      this.progressReading = false;
+      if (this.disposed) return;
+      if (this.phase === hint) {
+        const was = this.progress;
+        this.progress = p;
+        if (!(was && p ? was.done === p.done && was.total === p.total : was === p)) this.view.sendTabs();
+      }
+      if (this.progressAgain || this.phase !== hint) { this.progressAgain = false; this.refreshProgress(true); }
+    });
   }
 
   idleStatus() { return 'idle'; }     // state only: mode, effort, and model have their own selectors
@@ -653,6 +694,7 @@ class Session {
         this.busy = !!ev.busy; if (!this.busy) this.collab.clear();   // a turn's sub-agents end with its process
         this.view.sendTabs(); this.view.sendEvent(this.id, ev); this.post({ kind: 'status', text: this.busy ? 'working' : 'ready' });
         if (!this.busy) this.view.saveName(this);          // a tab named before its first turn: the agent has a record to write the name to now
+        if (!this.busy) this.refreshProgress(true);        // Build's task count, as the turn leaves the ledger
         if (!this.busy) this.view.syncTitle(this);         // and a tab the user has not named takes the title its agent's record has by now
         if (!this.busy && this.restartWhenIdle) {   // true: a backend switch; else the note to give, once restarted
           const note = typeof this.restartWhenIdle === 'string' ? this.restartWhenIdle : 'Moved to the new Claude backend; the conversation continues from the next message.';
@@ -899,7 +941,7 @@ class Session {
     if (noted) this.recordsSent = this.records.length;
     const full = carried + noted + (ctx ? text + ctx.block : text), shown = { text, tag: ctx ? ctx.tag : undefined };
     // a workflow skill the user starts with its slash command: Claude Code runs it only when what is sent starts with it
-    if (this.kind === 'claude') this.setPhase(resolveSkill(skillOfSlash(full), this.view.commands.claude));
+    if (this.kind === 'claude') { const sk = skillOfSlash(full); this.setPhase(resolveSkill(sk, this.view.commands.claude), sk ? full.slice(sk.length + 1) : ''); }
     if (this.kind !== 'codex') { if (sent.length) this.thumbs.push(thumbs); agent.send(full, sent, shown); return; }
     if (this.busy) {
       const qid = require('crypto').randomUUID();
@@ -1124,7 +1166,8 @@ class Session {
       background: this.background || [],   // Claude's tasks that run on between turns (a command or agent in the background)
       ide: this.ide,
       context: this.kind === 'claude' ? this.context : null,
-      phase: this.kind === 'claude' ? this.phase : null,   // the workflow phase, for the footer's pill (note 203)
+      // the workflow phase, for the footer's pill (note 203); in Build, with its task count when its ledger is found
+      phase: this.kind === 'claude' && this.phase ? Object.assign({ phase: this.phase.phase, skill: this.phase.skill }, this.phase.phase === 'Build' && this.progress ? { progress: this.progress } : {}) : null,
       workflow: this.kind === 'claude' ? workflowOf(this.view.commands.claude) : null,   // the plugin and command that start one, for the pill's card when there is no phase
       // the prompt cache: how long it stays warm, and since when. Claude only; Codex does not expose its cache lifetime.
       cache: this.kind === 'claude' ? { minutes: this.view.meter.cacheMinutes(this.agent ? this.backend : this.gateway ? 'gateway' : this.own, this.gateway ? this.view.gateway().vars : undefined), since: this.respondedAt } : null,

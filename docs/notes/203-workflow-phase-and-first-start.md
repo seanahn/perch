@@ -1,7 +1,7 @@
 # 203 — The workflow phase pill, and settings an installer can set
 
 Built 2026-11-23, released in 0.7.41 (see [Built](#built) and [Checked live](#checked-live)); the pill moved
-right, and reads `no workflow` when there is none, in 0.7.42 ([Changed in 0.7.42](#changed-in-0742)); a phase reads green in 0.7.43. Written against
+right, and reads `no workflow` when there is none, in 0.7.42 ([Changed in 0.7.42](#changed-in-0742)); a phase reads green in 0.7.43; Build counts its plan's tasks in 0.7.48 ([Build's task count](#builds-task-count-sean-2026-11-24)). Written against
 Perch 0.7.36. Three small changes, wanted by an installer that sets up a
 whole machine (VS Code, Perch, an LLM gateway, MCP servers, a workflow plugin) in one run, so that the first
 time the user opens VS Code, Perch is already in place and on the right backend. Each is useful without that
@@ -228,6 +228,25 @@ command list; the tab carries the result as `workflow`.
 In a workflow the pill's text is green (`--vscode-charts-green`, falling back to the testing pass colour), so a
 glance tells a workflow session from one without; `no workflow` keeps the default colour, dimmed. Asked for by the
 author after using 0.7.42.
+## Build's task count (Sean, 2026-11-24)
+
+In Build the pill counts the plan's tasks: `Build 5/9`, and the card's Build row reads `Build — 5 of 9 tasks done`.
+The other phases are unchanged, and Build without a ledger is the plain `Build`.
+
+- **Done** is the number of distinct task numbers on lines of subagent-driven-development's ledger,
+  `<repo>/.superpowers/sdd/<plan>/progress.md`, that match `^Task (\d+): complete`.
+- **Total** is the number of `### Task <N>:` headings in the plan the ledger's first line names
+  (`# SDD ledger — plan: <path>`, relative to the ledger's repo root, or absolute).
+- **Which ledger.** A tab's folder is often not where the ledger is (the session works in one repo, the plan is built in
+  a worktree), so the ledger is the last one any tool call of the session named: a path containing `/.superpowers/sdd/`
+  and ending `/progress.md`, in a command, a file path or a sub-agent's prompt (`ledgerOfInput` in `src/phase.js`, a
+  regex over the input's text). Else the plan in the Build skill's args: its ledger is at its repo's git root, under the
+  plan's basename. A ledger with no first line takes its plan from the args too. Else no count.
+- **Freshness.** `taskProgress` reads both files without blocking: as the phase is set, as a tool call names a ledger,
+  as the main conversation's tool results come back (at most every two seconds), and as each turn ends. Any read error
+  is no count. A reopened tab finds the ledger in its record: `claudePhase` also parses the lines that name one.
+- The count is in memory only, sent with the tab as `phase.progress`; never saved.
+
 ## Built
 
 Branch `feat/phase-pill`, [PR #1](https://github.com/seanahn/perch/pull/1), released in 0.7.41 (not yet published). The plan was deleted after commit

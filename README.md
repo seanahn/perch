@@ -694,6 +694,12 @@ installer that sets a machine up. A pill in a Claude tab's footer names the
 phase of a skill-driven workflow (Design, Plan, Build, Finish); see
 [the design](docs/notes/203-workflow-phase-and-first-start.md).
 
+Build's task count (Sean, 2026-11-24): in Build the pill reads `Build 5/9`,
+the tasks marked complete in subagent-driven-development's ledger
+(`.superpowers/sdd/<plan>/progress.md`, the one the session last named) of
+the `### Task <N>:` headings in its plan; with no ledger found it is the
+plain `Build`.
+
 ## Codebase search
 
 Claude and Codex tabs get one more tool, `codebase_search`: a question

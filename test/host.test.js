@@ -3947,6 +3947,51 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     r.perch.dispose(); m.perch.dispose();
   }
 
+  // ---- Build's task count (Sean, 2026-11-24): from the SDD ledger the session's tool calls last named, else the one at the
+  // git root of the plan in the skill's args; read again as calls come back and as a turn ends; only in Build
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-sdd-')), repo = path.join(root, 'r.wt'), plan = path.join(repo, 'docs', 'plans', 'x.md');
+    const ledger = path.join(repo, '.superpowers', 'sdd', 'x', 'progress.md');
+    fs.mkdirSync(path.dirname(plan), { recursive: true }); fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(plan, Array.from({ length: 9 }, (_, i) => `### Task ${i + 1}: t\n`).join(''));
+    const write = (n) => fs.writeFileSync(ledger, '# SDD ledger \u2014 plan: docs/plans/x.md\n' + Array.from({ length: n }, (_, i) => `Task ${i + 1}: complete (commits a..b)\n`).join(''));
+    write(5);
+    const until = async (f) => { for (let i = 0; i < 200 && !f(); i++) await wait(10); return f(); };
+    const SDD = 'trivialpowers:subagent-driven-development';
+    const m = install(undefined, { past: { transcripts: {} } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    knobs.skills = [{ skill: SDD }];
+    v.fire({ type: 'send', sid: c, text: 'build it' }); await flush(); await wait(50);
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Build', skill: SDD }, 'no ledger named, no plan given: the plain Build');
+    knobs.tools = [{ name: 'Agent', input: { prompt: 'Implement Task 6. Ledger: ' + ledger + '.' }, sub: false }];
+    v.fire({ type: 'send', sid: c, text: 'go on' }); await flush();
+    assert(await until(() => v.tab(c).phase.progress), 'counted once a tool call names the ledger');
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Build', skill: SDD, progress: { done: 5, total: 9 } });
+    write(6); v.fire({ type: 'send', sid: c, text: 'next task' }); await flush();
+    assert(await until(() => v.tab(c).phase.progress.done === 6), 'read again as the turn ends');
+    assert(!('progress' in m.memento._dump()['perch.sessions.v1'].sessions.find((x) => x.id === c)), 'not saved with the tab');
+    v.fire({ type: 'send', sid: c, text: '/finishing-a-development-branch' }); await flush(); await wait(30);
+    assert.deepStrictEqual(v.tab(c).phase, { phase: 'Finish', skill: 'finishing-a-development-branch' }, 'only Build has a count');
+    // no ledger named: the one the plan in the skill's args has, at its repo's git root
+    v.fire({ type: 'new', kind: 'claude' }); const c2 = v.lastTabs().active;
+    knobs.skills = [{ skill: SDD, args: plan }];
+    v.fire({ type: 'send', sid: c2, text: 'build the plan' }); await flush();
+    assert(await until(() => v.tab(c2).phase && v.tab(c2).phase.progress), 'from the plan in its args');
+    assert.deepStrictEqual(v.tab(c2).phase.progress, { done: 6, total: 9 });
+    // a ledger named that cannot be read: no count
+    v.fire({ type: 'new', kind: 'claude' }); const c3 = v.lastTabs().active;
+    knobs.skills = [{ skill: SDD }]; knobs.tools = [{ name: 'Bash', input: { command: 'cat ' + path.join(root, 'gone', '.superpowers', 'sdd', 'x', 'progress.md') } }];
+    v.fire({ type: 'send', sid: c3, text: 'build it' }); await flush(); await wait(50);
+    assert.deepStrictEqual(v.tab(c3).phase, { phase: 'Build', skill: SDD }, 'no such ledger: the plain Build');
+    // a reopened session: the ledger from its record's hints
+    const s3 = m.perch.get(c3); s3.phase = null; s3.recordPhase({ phase: 'Build', skill: SDD, ledger });
+    assert(await until(() => v.tab(c3).phase.progress), 'from the record');
+    assert.deepStrictEqual(v.tab(c3).phase.progress, { done: 6, total: 9 });
+    m.perch.dispose(); fs.rmSync(root, { recursive: true, force: true });
+  }
+
   // ---- the workflow a Claude tab can start when it is in none (note 203, 0.7.42): from Claude Code's command list, sent
   // with every tab next to its phase, and again when the list changes
   {
