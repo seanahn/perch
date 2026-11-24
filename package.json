@@ -443,7 +443,7 @@
         "perch.firstStart.openClaudeTab": {
           "type": "boolean",
           "default": false,
-          "description": "Open one Claude tab on the right the next time Perch starts, then set this back to false. For installers."
+          "description": "Open one tab on the right the next time Perch starts, then set this back to false. The tab is Claude on the gateway when the gateway file is usable, else Claude when it is signed in, else Codex when it is, else Claude, which offers the sign-in. For installers."
         },
         "perch.ideContext": {
           "type": "boolean",

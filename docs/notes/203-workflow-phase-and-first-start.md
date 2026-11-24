@@ -132,9 +132,13 @@ A boolean, default `false`. When Perch activates and finds it `true`:
 
 1. Write `false` to the setting first, at the scope it was read from. If that write fails (a scope Perch
    cannot write, such as a policy), do nothing more: never open a tab that would open again on every start.
-2. If no Perch tab is open anywhere (in an editor or the sidebar), open a new Claude tab (on the backend item 2 gives it) in an editor group
+2. If no Perch tab is open anywhere (in an editor or the sidebar), open a new tab in an editor group
    to the right of the active one, creating that group; Perch locks it as it locks any group holding only its
-   tabs (`perch.lockGroup`).
+   tabs (`perch.lockGroup`). The tab is the agent that can answer *(Sean, 2026-11-24)*: a Claude tab on the gateway
+   when the gateway file is usable (a base URL and a token); else a Claude tab when Claude is signed in (a login, or
+   an API key: what `MeterHost.canRun` checks); else a Codex tab when Codex is (its `auth.json`, or an API key Perch
+   holds or `OPENAI_API_KEY`); else a Claude tab, which offers the sign-in. The choice is `chooseFirstTab`
+   (src/firstTab.js). The setting keeps its name.
 3. Keep a group on the left: if the window has a single group once the tab is open, make an empty group to its
    left (VS Code's empty-group watermark); only if VS Code keeps no second group, open one empty, unsaved untitled
    editor and move it to a group on the left. The Perch tab has the focus at the end.
