@@ -2147,26 +2147,71 @@ class PerchView {
 
   /**
    * The composer's secret check (note 110), as the pages need it: on or off, the user's ignore expressions that compile
-   * (the others are noted in the tabs), and the hashes of values the user said are not secrets.
+   * (the others are noted in the tabs), and the hashes of values the user said are not secrets. Both settings are read
+   * for a folder when one is given (their scope is resource: a folder's own .vscode/settings.json decides for the tabs
+   * working in it), else as the window sees them. The hashes are the same everywhere.
    */
-  secretConfig() {
-    const raw = cfg('secretCheck.ignore'), ignore = [], invalid = [];
+  secretConfig(folder) {
+    let get = cfg;
+    if (folder) { try { const c = vscode.workspace.getConfiguration('perch', folder.uri); get = (k) => c.get(k); } catch (_) { /* the window's value */ } }
+    const raw = get('secretCheck.ignore'), ignore = [], invalid = [];
     for (const x of Array.isArray(raw) ? raw : []) {
       if (typeof x !== 'string' || !x) continue;
       try { new RegExp(x); ignore.push(x); } catch (_) { invalid.push(x); }
     }
     const allowed = this.context.globalState.get(SECRET_ALLOWED_KEY);
-    return { enabled: cfg('secretCheck.enabled') !== false, ignore, invalid, allowed: Array.isArray(allowed) ? allowed : [] };
+    return { enabled: get('secretCheck.enabled') !== false, ignore, invalid, allowed: Array.isArray(allowed) ? allowed : [] };
   }
-  secretMessage() { const c = this.secretConfig(); return { type: 'secretCheck', enabled: c.enabled, ignore: c.ignore, allowed: c.allowed }; }
+  /** The workspace folder a tab works in: the innermost one holding its working directory, or null (none, or outside them all). */
+  sessionFolder(s) {
+    const path = require('path'), dir = s && s.workdir();
+    let best = null;
+    if (!dir) return null;
+    for (const f of vscode.workspace.workspaceFolders || []) {
+      const rel = path.relative(f.uri.fsPath, dir);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      if (!best || f.uri.fsPath.length > best.uri.fsPath.length) best = f;
+    }
+    return best;
+  }
+  /** The window's value at the top, for a tab the page has not been told of; each tab's own, from its folder, in perTab. */
+  secretMessage() {
+    const c = this.secretConfig(), perTab = {};
+    for (const s of this.sessions) { const t = this.secretConfig(this.sessionFolder(s)); perTab[s.id] = { enabled: t.enabled, ignore: t.ignore }; }
+    return { type: 'secretCheck', enabled: c.enabled, ignore: c.ignore, allowed: c.allowed, perTab };
+  }
   /** An expression in perch.secretCheck.ignore that does not compile: said once in a tab, and again only if the list changes. */
   secretNote(s) {
-    const { invalid } = this.secretConfig(), key = JSON.stringify(invalid);
+    const { invalid } = this.secretConfig(this.sessionFolder(s)), key = JSON.stringify(invalid);
     if (!invalid.length || s.secretNoted === key) return;
     s.secretNoted = key;
     s.post({ kind: 'note', level: 'warn', text: `The secret check skips ${invalid.length === 1 ? 'an expression' : 'expressions'} in perch.secretCheck.ignore that ${invalid.length === 1 ? 'is' : 'are'} not valid: ${invalid.map((x) => JSON.stringify(x)).join(', ')}.` });
   }
   secretChanged() { this.raw(this.secretMessage()); for (const s of this.sessions) this.secretNote(s); }
+  /**
+   * Turn the secret check on or off for one folder, in that folder's own settings: the WorkspaceFolder target, as
+   * codebase search's per-folder switch does; in a window of one folder, the Workspace target (the same file). The folder
+   * is the tab's (the active one's when no tab is given); when that is not clear, the user picks one.
+   * @returns {Promise<boolean>} whether it was written
+   */
+  async secretFolder(on, s) {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const what = `the secret check ${on ? 'on' : 'off'}`;
+    if (!folders.length) { vscode.window.showInformationMessage(`Perch: there is no folder open to turn ${what} for; set perch.secretCheck.enabled in your settings.`); return false; }
+    const name = (f) => require('path').basename(f.uri.fsPath) || f.uri.fsPath;
+    let f = this.sessionFolder(s === undefined ? this.active() : s);
+    if (!f && folders.length === 1) f = folders[0];
+    if (!f) {
+      const pick = await vscode.window.showQuickPick(folders.map((x) => ({ label: name(x), description: x.uri.fsPath, folder: x })), { placeHolder: `Turn ${what} for which folder?` });
+      if (!pick) return false;
+      f = pick.folder;
+    }
+    const single = folders.length === 1 && !vscode.workspace.workspaceFile;
+    try { await vscode.workspace.getConfiguration('perch', f.uri).update('secretCheck.enabled', !!on, single ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.WorkspaceFolder); }
+    catch (err) { vscode.window.showErrorMessage(`Perch: the setting for ${name(f)} could not be written: ${String((err && err.message) || err)}`); return false; }
+    vscode.window.showInformationMessage(`Perch: the secret check is ${on ? 'on' : 'off'} for ${name(f)}.`);
+    return true;
+  }
   async secretAllow(hash) {
     const h = typeof hash === 'string' ? hash.toLowerCase() : '';
     if (!/^[0-9a-f]{64}$/.test(h)) return;   // a hash and nothing else, so no value can be stored by mistake
@@ -2230,6 +2275,7 @@ class PerchView {
       }
       case 'send': if (s) { this.secretNote(s); s.send(msg.text, msg.images); } return;
       case 'secretAllow': this.secretAllow(msg.hash); return;   // "Not a secret" in the page's secret check: its SHA-256, never the value
+      case 'secretFolderOff': if (s) this.secretFolder(false, s).then((ok) => { if (!ok) this.raw(this.secretMessage()); }); return;   // "Off for this repo" in the page's secret check; the page sends the message itself, and is set right if nothing was written
       case 'stop': if (s) s.interrupt(); return;
       case 'permission': if (s) s.answerPermission(msg.id, msg.decision, msg.answers); return;
       case 'unqueue': if (s) s.unqueue(String(msg.qid || '')); return;
@@ -2362,6 +2408,7 @@ class PerchView {
       ? { kind, title: cleanTitle(title) || `${vendor} ${String(resume).slice(0, 8)}`, titled: true, resume, mode, location: location || this.where(), gateway, dir }
       : { kind, title: `${vendor} ${++this.counters[kind]}`, mode, location: location || this.where(), gateway, dir });
     this.sessions.push(s);
+    this.raw(this.secretMessage());   // the pages hear the new tab's own secret check (its folder's setting)
     if (mode) s.history.push({ kind: 'note', text: `Codex runs without a sandbox on ${require('os').hostname()}: the kernel forbids the user namespaces its sandbox needs.` });
     if (note) s.history.unshift({ kind: 'note', text: note });   // ahead of the resumed transcript, which loads in place of its own note
     if (fill) s.prefill = fill;
@@ -2751,8 +2798,10 @@ function activate(context) {
     vscode.commands.registerCommand('perch.codebaseIndex.toggle', () => perch.toggleSearch()),
     vscode.commands.registerCommand('perch.codebaseIndex.install', () => perch.installSearch()),
     vscode.commands.registerCommand('perch.clearSecretExceptions', () => perch.clearSecretExceptions()),
+    vscode.commands.registerCommand('perch.secretCheck.offForFolder', () => perch.secretFolder(false)),
+    vscode.commands.registerCommand('perch.secretCheck.onForFolder', () => perch.secretFolder(true)),
     vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('perch.codebaseIndex')) perch.searchChanged(); if (e.affectsConfiguration('perch.secretCheck')) perch.secretChanged(); }),
-    ...(vscode.workspace.onDidChangeWorkspaceFolders ? [vscode.workspace.onDidChangeWorkspaceFolders(() => perch.searchChanged())] : []),   // a folder added or removed: the search covers it, or not, from each tab's next process
+    ...(vscode.workspace.onDidChangeWorkspaceFolders ? [vscode.workspace.onDidChangeWorkspaceFolders(() => { perch.searchChanged(); perch.secretChanged(); })] : []),   // a folder added or removed: the search covers it, or not, from each tab's next process; a tab's secret check may now be its folder's
     { dispose: () => perch.dispose() },
   );
   perch.start();

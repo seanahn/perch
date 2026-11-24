@@ -178,6 +178,14 @@
         "title": "Perch: Clear Secret-Check Exceptions"
       },
       {
+        "command": "perch.secretCheck.offForFolder",
+        "title": "Perch: Turn the Secret Check Off for This Folder"
+      },
+      {
+        "command": "perch.secretCheck.onForFolder",
+        "title": "Perch: Turn the Secret Check On for This Folder"
+      },
+      {
         "command": "perch.voice.setup",
         "title": "Perch: Set Up Voice Input"
       },
@@ -453,7 +461,8 @@
         "perch.secretCheck.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Before a message is sent, look in it for something that looks like a password or key (a GitHub token, an AWS key, a password in a URL, a long random string…). If one is found the message waits, and you choose: Send anyway, Not a secret, or Edit. The check runs in the page, on the text alone."
+          "description": "Before a message is sent, look in it for something that looks like a password or key (a GitHub token, an AWS key, a password in a URL, a long random string…). If one is found the message waits, and you choose: Send anyway, Not a secret, Off for this repo, or Edit. The check runs in the page, on the text alone. In a workspace of several folders, a folder's own .vscode/settings.json decides for the tabs working in it (Perch: Turn the Secret Check Off for This Folder).",
+          "scope": "resource"
         },
         "perch.secretCheck.ignore": {
           "type": "array",
@@ -461,7 +470,8 @@
             "type": "string"
           },
           "default": [],
-          "description": "Regular expressions for values the secret check never flags, such as a trace-id or build-id format. A value is let through when one of them matches it in full. An invalid expression is skipped, with a note in the tab."
+          "description": "Regular expressions for values the secret check never flags, such as a trace-id or build-id format. A value is let through when one of them matches it in full. An invalid expression is skipped, with a note in the tab. A folder's own .vscode/settings.json decides for the tabs working in it.",
+          "scope": "resource"
         },
         "perch.codebaseIndex.enabled": {
           "type": "boolean",

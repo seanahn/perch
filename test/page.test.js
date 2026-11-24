@@ -1465,7 +1465,7 @@ window.close();
     assert.strictEqual(ps.$('#input').value, msg, 'it stays in the box');
     assert(!hideOf(strip()), 'the strip shows');
     assert.strictEqual(strip().querySelector('.say').textContent, 'This looks like a password or key (GitHub token). It would go to the model and into the session record.');
-    assert.deepStrictEqual([...strip().querySelectorAll('button')].map((b) => b.textContent), ['Send anyway', 'Not a secret', 'Edit', 'Why?']);
+    assert.deepStrictEqual([...strip().querySelectorAll('button')].map((b) => b.textContent), ['Send anyway', 'Not a secret', 'Off for this repo', 'Edit', 'Why?']);
     const i = ps.$('#input');
     assert.deepStrictEqual([i.selectionStart, i.selectionEnd], [msg.indexOf(TOKEN), msg.indexOf(TOKEN) + TOKEN.length], 'the match is selected in the box');
 
@@ -1535,6 +1535,31 @@ window.close();
     typeIn('fresh ' + ['ghu_', 'Z9y8X7w6V5u4T3s2R1q0', 'P9o8N7m6L5k4J3i2'].join('')); enter();
     assert.strictEqual(sends().length, 1, 'off: sent at once, with no wait');
     assert(hideOf(strip()));
+    ps.out.length = 0;
+
+    // each tab its own (its folder's setting, in perTab): off for tab a's folder, on for b; a tab not in perTab has the top
+    const GHU = ['ghu_', 'A1b2C3d4E5f6G7h8I9j0', 'K1l2M3n4O5p6Q7r8'].join('');
+    ps.host({ type: 'secretCheck', enabled: true, ignore: [], allowed: [], perTab: { a: { enabled: false, ignore: [] }, b: { enabled: true, ignore: [] } } });
+    typeIn('in b: ' + GHU); enter(); await settle();
+    assert.deepStrictEqual(sends(), [], 'tab b, its folder on: held');
+    btn('Edit').click();
+    ps.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'a' });
+    typeIn('in a: ' + GHU); enter(); await settle();
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'a', text: 'in a: ' + GHU }], 'tab a, its folder off: sent at once');
+    assert(hideOf(strip()));
+    ps.out.length = 0;
+
+    // Off for this repo: the host is asked to turn it off for the tab's folder, then the message is sent; the tab's next
+    // message is not held while the host's word is on its way
+    ps.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' }), tab({ id: 'b', kind: 'codex', title: 'B' })], active: 'b' });
+    typeIn('b again: ' + GHU); enter(); await settle();
+    assert(!hideOf(strip()), 'held in b');
+    btn('Off for this repo').click(); await settle();
+    assert.deepStrictEqual(ps.out.filter((m) => m.type === 'secretFolderOff' || m.type === 'send'), [{ type: 'secretFolderOff', sid: 'b' }, { type: 'send', sid: 'b', text: 'b again: ' + GHU }], 'the switch for tab b\'s folder, then the message');
+    assert(hideOf(strip()), 'and the strip goes');
+    ps.out.length = 0;
+    typeIn('b once more: ' + GHU); enter(); await settle();
+    assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'b', text: 'b once more: ' + GHU }], 'off for b at once');
     ps.w.close();
   }
   console.log('PAGE OK');

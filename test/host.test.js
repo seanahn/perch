@@ -3719,10 +3719,11 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     const m = install(undefined, { config: { newTabs: 'editor', 'secretCheck.ignore': ['TRC[0-9a-f]{20}', '(unclosed', 7] } }); await flush();
     const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
     const told = (got) => got.filter((x) => x.type === 'secretCheck');
-    assert.deepStrictEqual(told(v.got), [{ type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [] }], 'a ready page is told: on by default, the valid expressions only, nothing allowed yet');
+    assert.deepStrictEqual(told(v.got), [{ type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [], perTab: {} }], 'a ready page is told: on by default, the valid expressions only, nothing allowed yet');
     await m.commands['perch.newClaude']();
     const p1 = m.ui.panels[0]; p1.fire({ type: 'ready' }); await flush();
-    assert.deepStrictEqual(told(p1.got).pop(), { type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [] }, 'an editor tab too');
+    const sid0 = p1.lastTabs().tabs[0].id;
+    assert.deepStrictEqual(told(p1.got).pop(), { type: 'secretCheck', enabled: true, ignore: ['TRC[0-9a-f]{20}'], allowed: [], perTab: { [sid0]: { enabled: true, ignore: ['TRC[0-9a-f]{20}'] } } }, 'an editor tab too, with each tab\'s own');
     // "Not a secret": the hash is stored and every page hears of it
     p1.fire({ type: 'secretAllow', hash: H1 }); await flush();
     assert.deepStrictEqual(m.globalState._dump()['perch.secretCheck.allowed'], [H1], 'kept in globalState');
@@ -3748,7 +3749,55 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     assert(notes()[0].text.includes('(unclosed'), 'naming it: ' + notes()[0].text);
     // switched off, and the list changed: every page is told at once
     m.changeConfig({ 'secretCheck.enabled': false, 'secretCheck.ignore': ['BLD-[0-9]+'] }); await flush();
-    assert.deepStrictEqual(told(v.got).pop(), { type: 'secretCheck', enabled: false, ignore: ['BLD-[0-9]+'], allowed: [] }, 'a settings change reaches the pages');
+    assert.deepStrictEqual(told(v.got).pop(), { type: 'secretCheck', enabled: false, ignore: ['BLD-[0-9]+'], allowed: [], perTab: { [sid]: { enabled: false, ignore: ['BLD-[0-9]+'] } } }, 'a settings change reaches the pages');
+    m.perch.dispose();
+  }
+
+  // per repo (note 110, Sean 2026-11-24): a folder's own setting decides for the tabs working in it, and only those
+  {
+    const m = install(undefined, { workspaceFolders: ['/w/fennets', '/w/lattice'] }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    const told = () => v.got.filter((x) => x.type === 'secretCheck');
+    const a = m.perch.addSession('claude'), b = m.perch.addSession('claude', { dir: '/w/lattice/src' }), c = m.perch.addSession('codex', { dir: '/elsewhere' });
+    await flush();
+    assert.deepStrictEqual(Object.keys(told().pop().perTab), [a.id, b.id, c.id], 'a new tab is told to the pages at once');
+    m.ui.folderConfig['/w/lattice'] = { 'secretCheck.enabled': false, 'secretCheck.ignore': ['LAT-[0-9]+'] };
+    m.changeConfig({ 'secretCheck.enabled': true }); await flush();
+    const last = told().pop();
+    assert.deepStrictEqual([last.enabled, last.perTab[a.id], last.perTab[b.id], last.perTab[c.id]],
+      [true, { enabled: true, ignore: [] }, { enabled: false, ignore: ['LAT-[0-9]+'] }, { enabled: true, ignore: [] }],
+      'off for the tab working in lattice only; the tab in fennets (the window\'s first folder) and the one outside every folder keep the check');
+
+    // the commands: the active tab's folder, in its own settings (the WorkspaceFolder target), with a word naming it
+    m.ui.configUpdates.length = 0; m.ui.infos.length = 0;
+    m.perch.activeId = a.id;
+    await m.commands['perch.secretCheck.offForFolder']();
+    assert.deepStrictEqual(m.ui.configUpdates, [['secretCheck.enabled', false, 3, '/w/fennets']], 'written for fennets, at the WorkspaceFolder target');
+    assert.deepStrictEqual(m.ui.infos.pop(), 'Perch: the secret check is off for fennets.');
+    assert.strictEqual(told().pop().perTab[a.id].enabled, false, 'and the pages are told');
+    // a tab outside every folder: the user picks one
+    m.perch.activeId = c.id; m.ui.configUpdates.length = 0;
+    m.picks.push((i) => i.label === 'lattice');
+    await m.commands['perch.secretCheck.onForFolder']();
+    assert.deepStrictEqual(m.ui.configUpdates, [['secretCheck.enabled', true, 3, '/w/lattice']], 'the folder picked');
+    assert.deepStrictEqual(m.ui.infos.pop(), 'Perch: the secret check is on for lattice.');
+    m.ui.configUpdates.length = 0;
+    await m.commands['perch.secretCheck.onForFolder']();
+    assert.deepStrictEqual(m.ui.configUpdates, [], 'no pick, nothing written');
+
+    // "Off for this repo" in a tab's strip: that tab's folder, then the message the page sends itself goes as usual
+    m.ui.configUpdates.length = 0;
+    m.ui.folderConfig['/w/lattice'] = {};
+    v.fire({ type: 'secretFolderOff', sid: b.id }); await flush();
+    assert.deepStrictEqual(m.ui.configUpdates, [['secretCheck.enabled', false, 3, '/w/lattice']], 'the strip\'s tab\'s folder');
+    m.perch.dispose();
+  }
+  // a window of one folder: the Workspace target
+  {
+    const m = install(undefined, { workspaceFolders: ['/w/only'] }); await flush();
+    m.perch.addSession('claude', { location: 'sidebar' });
+    await m.commands['perch.secretCheck.offForFolder']();
+    assert.deepStrictEqual(m.ui.configUpdates.filter((u) => u[0] === 'secretCheck.enabled'), [['secretCheck.enabled', false, 2, '/w/only']], 'one folder: the Workspace target');
     m.perch.dispose();
   }
 

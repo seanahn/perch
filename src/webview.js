@@ -374,7 +374,7 @@ ${glyphCss}
 <body>
   <div id="tabs"><div id="add" title="New tab">+</div></div>
   <div id="panes"><div class="empty" id="empty"><div class="btns"><button id="e-claude">${badge('claude')}New Claude tab</button><button id="e-codex">${badge('codex')}New Codex tab</button></div><div id="past" hidden></div></div></div>
-  <div id="secret" role="alert" hidden><div class="say"></div><div class="why" hidden></div><div class="acts"><button type="button" class="primary" data-act="send">Send anyway</button><button type="button" data-act="allow">Not a secret</button><button type="button" data-act="edit">Edit</button><button type="button" data-act="why">Why?</button></div></div>
+  <div id="secret" role="alert" hidden><div class="say"></div><div class="why" hidden></div><div class="acts"><button type="button" class="primary" data-act="send">Send anyway</button><button type="button" data-act="allow">Not a secret</button><button type="button" data-act="folderOff" title="Turn the secret check off for this tab's folder, in its .vscode/settings.json, and send">Off for this repo</button><button type="button" data-act="edit">Edit</button><button type="button" data-act="why">Why?</button></div></div>
   <div id="composer" class="off">
     <div id="shots" hidden></div>
     <textarea id="input" rows="1" disabled placeholder="Open a tab with +"></textarea>
@@ -1057,8 +1057,9 @@ ${glyphCss}
     const p = panes.get(active), shots = p ? p.shots : [];
     const text = $input.value; if (!text.trim() && !shots.length) return;
     closeMenu();
-    if (secretCfg.enabled && p && text && !p.sentAnyway.has(text)) {
-      const hits = findSecrets(text, { ignore: secretCfg.ignore });
+    const mine = secretFor(active);
+    if (mine.enabled && p && text && !p.sentAnyway.has(text)) {
+      const hits = findSecrets(text, { ignore: mine.ignore });
       const left = hits.filter((h) => !secretCfg.allowed.has(sha256Hex(h.value)));
       if (left.length) { holdSecret(active, text, left); return; }
     }
@@ -1072,9 +1073,12 @@ ${glyphCss}
   }
 
   // ---- the secret check's strip. "Send anyway" lets this text through in this tab; "Not a secret" has the host keep the
-  // SHA-256 of each value found (never the value), so it is let through anywhere, until the user clears the list.
+  // SHA-256 of each value found (never the value), so it is let through anywhere, until the user clears the list. "Off for
+  // this repo" has the host turn the check off in the tab's folder's settings, and sends. On or off and the ignore list
+  // are each tab's own (its folder's setting, in perTab); the hashes are the page's, for every tab.
   const $secret = $('secret'), $secretSay = $secret.querySelector('.say'), $secretWhy = $secret.querySelector('.why');
-  let secretCfg = { enabled: true, ignore: [], allowed: new Set() };
+  let secretCfg = { enabled: true, ignore: [], allowed: new Set(), perTab: {} };
+  const secretFor = (sid) => (sid && Object.prototype.hasOwnProperty.call(secretCfg.perTab, sid) ? secretCfg.perTab[sid] : secretCfg);
   let held = null;   // the message the strip is about: { sid, text, hits }
   const mark = (h) => { $input.focus(); try { $input.setSelectionRange(h.start, h.end); } catch (_) { /* not focusable */ } };
   function hideSecret() { held = null; $secret.hidden = true; $secretWhy.hidden = true; $secretWhy.textContent = ''; }
@@ -1098,6 +1102,12 @@ ${glyphCss}
     if (act === 'send') { panes.get(h.sid).sentAnyway.add(h.text); dispatch(h.sid, h.text); return; }
     if (act === 'allow') {   // the hash is worked out here, in plain JavaScript (no crypto.subtle needed): the value never leaves the page this way
       for (const x of h.hits.map((y) => sha256Hex(y.value))) if (!secretCfg.allowed.has(x)) { secretCfg.allowed.add(x); vscode.postMessage({ type: 'secretAllow', hash: x }); }
+      dispatch(h.sid, h.text);
+      return;
+    }
+    if (act === 'folderOff') {   // off here at once, so the next message is not held before the host's word comes back
+      secretCfg.perTab[h.sid] = { enabled: false, ignore: secretFor(h.sid).ignore };
+      vscode.postMessage({ type: 'secretFolderOff', sid: h.sid });
       dispatch(h.sid, h.text);
     }
   });
@@ -1686,7 +1696,11 @@ ${glyphCss}
     else if (m.type === 'subagentUsage') { const p = panes.get(m.sid); if (p) { p.mxData = m; if (p.mxOpen) drawUsage(p); } }
     else if (m.type === 'indexStatus') { const p = panes.get(m.sid); if (p) { p.ixData = m; if (p.ixOpen) drawIndex(p); } }
     else if (m.type === 'commands') { commands[m.kind] = m.list || []; syncComposer(); }
-    else if (m.type === 'secretCheck') secretCfg = { enabled: m.enabled !== false, ignore: Array.isArray(m.ignore) ? m.ignore.filter((x) => typeof x === 'string') : [], allowed: new Set(Array.isArray(m.allowed) ? m.allowed : []) };
+    else if (m.type === 'secretCheck') {
+      const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []), perTab = {};
+      for (const [sid, t] of Object.entries(m.perTab && typeof m.perTab === 'object' ? m.perTab : {})) if (t && typeof t === 'object') perTab[sid] = { enabled: t.enabled !== false, ignore: strs(t.ignore) };
+      secretCfg = { enabled: m.enabled !== false, ignore: strs(m.ignore), allowed: new Set(Array.isArray(m.allowed) ? m.allowed : []), perTab };
+    }
     else if (m.type === 'confluenceSite') { confluenceSite = typeof m.url === 'string' ? m.url.replace(/[/]+$/, '') : null; }
     else if (m.type === 'ticketProjects') { ticketProjects = Array.isArray(m.projects) ? m.projects : []; for (const p of panes.values()) p.log.querySelectorAll('.msg.assistant.md, .msg.user').forEach(ticketed); }
   });

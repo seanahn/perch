@@ -99,12 +99,25 @@ the box, and offers:
   Exceptions** forgets them. The page works the hash out itself, in plain JavaScript (`sha256Hex` in
   `src/secretCheck.js`), so the check stays synchronous and needs no `crypto.subtle`, which a page served over plain
   http (code-server) does not have.
+- **Off for this repo** — turns the check off for the tab's folder, in that folder's own settings (as **Perch: Turn
+  the Secret Check Off for This Folder** does), then sends it.
 - **Edit** — closes the strip, focus back in the box.
 - **Why?** — the rule's name and a one-line description of what it matches.
 
 **Settings.** `perch.secretCheck.enabled` (default `true`) switches the check off. `perch.secretCheck.ignore`: a list of
 regular expressions; a matched value that any of them matches in full is never flagged (a trace-id or
 build-id format, say). An invalid expression is skipped, with one note in the tab.
+
+**Per repo** (Sean, 2026-11-24: per repo). Both settings have resource scope: in a multi-root workspace a folder's own
+`.vscode/settings.json` decides for the tabs working in it. A tab's folder is the innermost workspace folder holding its
+working directory (the window's first folder unless the tab was opened elsewhere, a PR session's checkout say); a tab
+outside every folder has the window's value. The host's `secretCheck` message to the pages carries the window's
+`enabled` and `ignore` at the top, each open tab's own in `perTab: {sid: {enabled, ignore}}`, and the `allowed` hashes,
+which stay global; the page checks with the tab's own, or the top for a tab it has not been told of. It is resent on a
+setting change, a folder added or removed, and a new tab. **Perch: Turn the Secret Check Off for This Folder** and
+**…On for This Folder** write `secretCheck.enabled` for the active tab's folder at the WorkspaceFolder target (in a
+window of one folder, the Workspace target: the same file), asking with a picker when the tab has no folder, and say
+which folder it was.
 
 **Not covered:** pasted images, files the agent reads by itself, text sent by other means (handoffs, kestrel's
 prompts, which the user reviews before pressing Enter), and terminal `claude`. A slash command's own text is

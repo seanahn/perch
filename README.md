@@ -620,10 +620,15 @@ like, or a long random string. If it finds one the message stays in the
 box, the value is selected, and a strip above the composer names the
 rule and offers **Send anyway** (this text, in this tab), **Not a
 secret** (never flagged again anywhere; Perch keeps only its SHA-256
-hash), **Edit** and **Why?**. `perch.secretCheck.enabled` turns it off;
-`perch.secretCheck.ignore` lists regular expressions for values never to
-flag, matched in full; `Perch: Clear Secret-Check Exceptions` forgets
-every "Not a secret". The rules are in note 110.
+hash), **Off for this repo** (turns the check off for the tab's folder,
+then sends), **Edit** and **Why?**. `perch.secretCheck.enabled` turns it
+off; `perch.secretCheck.ignore` lists regular expressions for values
+never to flag, matched in full. Both can be set per repo: in a multi-root
+workspace a folder's own `.vscode/settings.json` decides for the tabs
+working in it, and `Perch: Turn the Secret Check Off for This Folder`
+(and `…On for This Folder`) write it there for the active tab's folder.
+`Perch: Clear Secret-Check Exceptions` forgets every "Not a secret". The
+rules are in note 110.
 
 Not included: Codex's microphone. A webview cannot open the microphone;
 Codex does it with a companion extension that records natively. perch could
