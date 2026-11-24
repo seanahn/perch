@@ -258,4 +258,101 @@ function createTemplate(file) {
   fs.writeFileSync(file, TEMPLATE, { flag: 'wx', mode: 0o600 });
 }
 
-module.exports = { DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, ownBackendSettings, gatewayModels, gatewayCatalog, gatewayModelName, fetchGatewayModels, describe, createTemplate };
+// ---- writing the file, from Perch: Set Up a Gateway… (Sean, 2026-11-24)
+/** The model names the form offers, in its order. */
+const MODEL_VARS = ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'];
+
+/**
+ * A value as a shell reads it back, and as parseEnvFile does: bare when it is plain, else in single quotes, else (it holds
+ * a single quote) in double quotes when nothing in it means something there. Throws for what no quoting here keeps.
+ */
+function shellQuote(value) {
+  const s = String(value === undefined || value === null ? '' : value);
+  if (/[\r\n\0]/.test(s)) throw new Error('A value cannot hold a line break.');
+  if (/^[A-Za-z0-9_@%+=:,./-]*$/.test(s)) return s;
+  if (!s.includes("'")) return `'${s}'`;
+  if (!/["$`\\!]/.test(s)) return `"${s}"`;
+  throw new Error('A value cannot hold both a single quote and one of " $ ` \\ !.');
+}
+
+/** The variable that holds the token: ANTHROPIC_API_KEY when the file sets that and no ANTHROPIC_AUTH_TOKEN, else ANTHROPIC_AUTH_TOKEN. */
+function tokenVar(vars) {
+  const v = vars || {};
+  return v.ANTHROPIC_API_KEY && !v.ANTHROPIC_AUTH_TOKEN ? 'ANTHROPIC_API_KEY' : 'ANTHROPIC_AUTH_TOKEN';
+}
+
+/**
+ * The file's text with the given variables set, and every other line as it was. A key's assignments are rewritten in
+ * place (`export KEY=value`); with none, the template's commented-out line (`# export KEY=`) is taken back in, else the
+ * line goes at the end. An empty value comments the key's assignments out, so the variable is not set at all. A key
+ * given as undefined is left alone.
+ * @param {string} text  the file as it is ('' or the template for a new one)
+ * @param {Record<string,string|undefined>} values
+ */
+function updateEnvText(text, values) {
+  const lines = String(text || '').split('\n');
+  for (const [key, value] of Object.entries(values || {})) {
+    if (value === undefined) continue;
+    const v = String(value).trim();
+    const line = 'export ' + key + '=' + shellQuote(v);
+    const active = new RegExp('^\\s*(?:export\\s+)?' + key + '='), commented = new RegExp('^\\s*#\\s*(?:export\\s+)?' + key + '=\\s*$');
+    let found = false;
+    for (let i = 0; i < lines.length; i++) if (active.test(lines[i])) { lines[i] = v ? line : '# export ' + key + '='; found = true; }
+    if (found || !v) continue;
+    const at = lines.findIndex((l) => commented.test(l));
+    if (at >= 0) { lines[at] = line; continue; }
+    if (lines.length && lines[lines.length - 1] === '') lines.splice(lines.length - 1, 0, line);
+    else lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * What is wrong with the form's values, or null: a base URL (http or https) and a token are needed, the token being
+ * the one in the file already when `keepToken`.
+ */
+function checkForm({ baseUrl, token, keepToken } = {}) {
+  const u = String(baseUrl || '').trim();
+  if (!u) return 'A base URL is needed.';
+  let parsed = null;
+  try { parsed = new URL(u); } catch (_) { /* below */ }
+  if (!parsed || !/^https?:$/.test(parsed.protocol) || !/^https?:\/\/\S+$/.test(u)) return 'The base URL must be an http:// or https:// address.';
+  if (!String(token || '').trim() && !keepToken) return 'A token is needed.';
+  return null;
+}
+
+/**
+ * Write the form's values into the file: made from the template when there is none, else only those lines changed.
+ * The directory is made for its owner only, and the file is left readable by its owner only, since it holds the token.
+ * An empty token keeps the one the file has.
+ * @param {string} file
+ * @param {{ baseUrl: string, token?: string, models?: Record<string,string> }} form
+ * @returns {{ file: string, exists: boolean, ok: boolean, error: string|null, vars: Record<string,string> }} the file read back
+ */
+function saveGateway(file, form) {
+  const f = form || {};
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; text = TEMPLATE; }
+  const vars = parseEnvFile(text);
+  const token = String(f.token || '').trim();
+  const err = checkForm({ baseUrl: f.baseUrl, token, keepToken: TOKEN_VARS.some((k) => vars[k]) });
+  if (err) throw new Error(err);
+  const values = { [URL_VAR]: String(f.baseUrl).trim() };
+  if (token) values[tokenVar(vars)] = token;
+  for (const k of MODEL_VARS) if (f.models && typeof f.models[k] === 'string') values[k] = f.models[k];
+  const out = updateEnvText(text, values);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, out, { mode: 0o600 });
+  if (process.platform !== 'win32') fs.chmodSync(file, 0o600);   // an existing file keeps its mode through a write
+  return readGateway(file);
+}
+
+/** What the form is shown of the file: everything but the token, of which only whether there is one. */
+function formState(gw) {
+  const v = (gw && gw.vars) || {};
+  const models = {};
+  for (const k of MODEL_VARS) models[k] = v[k] || '';
+  return { file: gw ? gw.file : '', exists: !!(gw && gw.exists), ok: !!(gw && gw.ok), baseUrl: v[URL_VAR] || '', tokenSet: TOKEN_VARS.some((k) => v[k]), models };
+}
+
+module.exports = { MODEL_VARS, shellQuote, tokenVar, updateEnvText, checkForm, saveGateway, formState, DEFAULT_FILE, URL_VAR, TOKEN_VARS, TEMPLATE, expandHome, gatewayFile, parseEnvFile, readGateway, gatewayEnv, gatewaySettings, offGatewaySettings, ownBackendSettings, gatewayModels, gatewayCatalog, gatewayModelName, fetchGatewayModels, describe, createTemplate };

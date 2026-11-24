@@ -156,5 +156,70 @@ try {
   assert.deepStrictEqual(G.ownBackendSettings(true, {}), { env: { CLAUDE_CODE_USE_BEDROCK: '1', ...noSlots } }, 'API/Bedrock for this tab: no base URL, helper or model cleared, since no gateway is pinned');
   assert.deepStrictEqual([G.ownBackendSettings(false, pod).env.CLAUDE_CODE_USE_BEDROCK, G.ownBackendSettings(false, pod).env.ANTHROPIC_MODEL, G.ownBackendSettings(true, pod).env.ANTHROPIC_MODEL], ['0', '', 'us.anthropic.claude-sonnet-4-6'], 'subscription for this tab: a Bedrock id the machine pins is not carried over; on Bedrock it is');
 
+  // ---- writing the file, from the set-up form: values quoted as a shell reads them back
+  for (const v of ['https://gw.example.com/llm-api', 'sk-abc=def', 'router-auto[1m]', 'a b', 'it\'s', 'x#y', '#lead', '$HOME', 'a"b', '']) {
+    assert.strictEqual(G.parseEnvFile('export K=' + G.shellQuote(v)).K, v, `${JSON.stringify(v)} round-trips`);
+  }
+  assert.strictEqual(G.shellQuote('plain-token_1.2'), 'plain-token_1.2', 'a plain value is bare');
+  assert.strictEqual(G.shellQuote('router-auto[1m]'), "'router-auto[1m]'", 'brackets a shell would glob are quoted');
+  assert.strictEqual(G.shellQuote('$HOME'), "'$HOME'", 'nothing is expanded');
+  assert.strictEqual(G.shellQuote("it's"), '"it\'s"');
+  assert.throws(() => G.shellQuote("it's $HOME"), /single quote/, 'no quoting here keeps both');
+  assert.throws(() => G.shellQuote('a\nb'), /line break/);
+
+  // the form's checks
+  assert.strictEqual(G.checkForm({ baseUrl: '', token: 't' }), 'A base URL is needed.');
+  assert.strictEqual(G.checkForm({ baseUrl: 'gw.example.com', token: 't' }), 'The base URL must be an http:// or https:// address.');
+  assert.strictEqual(G.checkForm({ baseUrl: 'ftp://gw.example.com', token: 't' }), 'The base URL must be an http:// or https:// address.');
+  assert.strictEqual(G.checkForm({ baseUrl: 'https://gw example', token: 't' }), 'The base URL must be an http:// or https:// address.');
+  assert.strictEqual(G.checkForm({ baseUrl: 'https://gw.example.com', token: '' }), 'A token is needed.');
+  assert.strictEqual(G.checkForm({ baseUrl: 'https://gw.example.com', token: '', keepToken: true }), null, 'the token in the file is kept');
+  assert.strictEqual(G.checkForm({ baseUrl: 'http://localhost:4000', token: 't' }), null);
+
+  // updating in place: those lines only, comments and other lines kept
+  const before = ['# mine', 'export ANTHROPIC_BASE_URL=https://old.example', 'export ANTHROPIC_AUTH_TOKEN=old  # keep me secret', 'export OTHER=1', '# export ANTHROPIC_MODEL=', 'export ENABLE_PROMPT_CACHING_1H=1', ''].join('\n');
+  assert.strictEqual(G.updateEnvText(before, { ANTHROPIC_BASE_URL: 'https://new.example', ANTHROPIC_AUTH_TOKEN: 'new', ANTHROPIC_MODEL: 'router[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'small', ANTHROPIC_DEFAULT_OPUS_MODEL: '', ANTHROPIC_DEFAULT_SONNET_MODEL: undefined }),
+    ['# mine', 'export ANTHROPIC_BASE_URL=https://new.example', 'export ANTHROPIC_AUTH_TOKEN=new', 'export OTHER=1', "export ANTHROPIC_MODEL='router[1m]'", 'export ENABLE_PROMPT_CACHING_1H=1', 'export ANTHROPIC_DEFAULT_HAIKU_MODEL=small', ''].join('\n'),
+    'rewritten in place, a commented-out line taken back, a new one at the end; empty and undefined add nothing');
+  assert.strictEqual(G.updateEnvText('ANTHROPIC_MODEL=m\nX=1', { ANTHROPIC_MODEL: '' }), '# export ANTHROPIC_MODEL=\nX=1', 'an emptied name is commented out, so it is not set at all');
+  assert.strictEqual(G.tokenVar({ ANTHROPIC_API_KEY: 'k' }), 'ANTHROPIC_API_KEY', 'a file that keeps its token as an API key keeps it there');
+  assert.strictEqual(G.tokenVar({ ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't' }), 'ANTHROPIC_AUTH_TOKEN');
+  assert.strictEqual(G.tokenVar({}), 'ANTHROPIC_AUTH_TOKEN');
+
+  // saving: a new file from the template, the directory and the file for the owner only
+  const saved = path.join(tmp, 'new', 'gw', 'env');
+  let got = G.saveGateway(saved, { baseUrl: ' https://gw.example.com/llm-api ', token: 'sk-1', models: { ANTHROPIC_MODEL: 'router-auto[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: '' } });
+  assert.deepStrictEqual([got.ok, got.vars.ANTHROPIC_BASE_URL, got.vars.ANTHROPIC_AUTH_TOKEN, got.vars.ANTHROPIC_MODEL, got.vars.ENABLE_PROMPT_CACHING_1H, 'ANTHROPIC_DEFAULT_OPUS_MODEL' in got.vars], [true, 'https://gw.example.com/llm-api', 'sk-1', 'router-auto[1m]', '1', false], 'the template, filled in');
+  const savedText = fs.readFileSync(saved, 'utf8');
+  assert.strictEqual(savedText.split('\n')[0], G.TEMPLATE.split('\n')[0], 'the template\'s comments are there');
+  assert(savedText.includes('# export ANTHROPIC_DEFAULT_OPUS_MODEL='), 'a name left empty stays a comment');
+  if (process.platform !== 'win32') {
+    assert.strictEqual(fs.statSync(saved).mode & 0o777, 0o600, 'the file: its owner only');
+    assert.strictEqual(fs.statSync(path.dirname(saved)).mode & 0o777, 0o700, 'the directory made: its owner only');
+  }
+  // again, with no token: the one there is kept; a file that was readable by others is made the owner's only
+  if (process.platform !== 'win32') fs.chmodSync(saved, 0o644);
+  fs.appendFileSync(saved, 'alias gw=claude\n');
+  got = G.saveGateway(saved, { baseUrl: 'https://other.example', token: '', models: { ANTHROPIC_MODEL: '' } });
+  assert.deepStrictEqual([got.ok, got.vars.ANTHROPIC_BASE_URL, got.vars.ANTHROPIC_AUTH_TOKEN, 'ANTHROPIC_MODEL' in got.vars], [true, 'https://other.example', 'sk-1', false]);
+  assert(fs.readFileSync(saved, 'utf8').includes('alias gw=claude\n'), 'a line of the user\'s is kept');
+  if (process.platform !== 'win32') assert.strictEqual(fs.statSync(saved).mode & 0o777, 0o600, 'back to its owner only');
+  // a file whose token is an API key: replaced there
+  const keyed = path.join(tmp, 'keyed'); fs.writeFileSync(keyed, 'export ANTHROPIC_BASE_URL=https://k.example\nexport ANTHROPIC_API_KEY=old\n');
+  got = G.saveGateway(keyed, { baseUrl: 'https://k.example', token: 'new' });
+  assert.deepStrictEqual([got.vars.ANTHROPIC_API_KEY, 'ANTHROPIC_AUTH_TOKEN' in got.vars], ['new', false]);
+  // what is wrong is thrown, and the file is not touched
+  const untouched = fs.readFileSync(keyed, 'utf8');
+  assert.throws(() => G.saveGateway(keyed, { baseUrl: 'nope', token: 't' }), /http:\/\/ or https:\/\//);
+  assert.throws(() => G.saveGateway(path.join(tmp, 'none'), { baseUrl: 'https://x.example', token: '' }), /A token is needed/, 'a new file needs a token');
+  assert.throws(() => G.saveGateway(keyed, { baseUrl: 'https://x.example', token: "it's $x" }), /single quote/);
+  assert.strictEqual(fs.readFileSync(keyed, 'utf8'), untouched);
+  assert.strictEqual(fs.existsSync(path.join(tmp, 'none')), false);
+  // what the form is shown: never the token
+  const st = G.formState(G.readGateway(saved));
+  assert.deepStrictEqual(st, { file: saved, exists: true, ok: true, baseUrl: 'https://other.example', tokenSet: true, models: { ANTHROPIC_MODEL: '', ANTHROPIC_DEFAULT_OPUS_MODEL: '', ANTHROPIC_DEFAULT_SONNET_MODEL: '', ANTHROPIC_DEFAULT_HAIKU_MODEL: '' } });
+  assert(!JSON.stringify(st).includes('sk-1'), 'the token is not in it');
+  assert.deepStrictEqual(G.formState(G.readGateway(path.join(tmp, 'none'))).tokenSet, false);
+
   console.log('gateway tests passed');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
