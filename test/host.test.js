@@ -1793,6 +1793,59 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     }
   }
 
+  // ---- Perch: Set Up a Gateway…: a form in an editor tab writes the file; the token goes in and never comes back out
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-gwform-')), file = path.join(dir, 'conf', 'env');
+    const realFetch = globalThis.fetch; globalThis.fetch = async () => ({ ok: false });
+    try {
+      const m = install(undefined, { config: { 'claude.gatewayEnv': file } }); await flush();
+      assert.deepStrictEqual(m.ui.contexts.filter((c) => c[0] === 'perch.gatewayReady'), [['perch.gatewayReady', false]], 'no gateway at the start: not ready');
+      m.commands['perch.setUpGateway']();
+      const forms = () => m.ui.panels.filter((p) => p.viewType === 'perch.gatewaySetup' && !p.disposed);
+      const p = forms()[0];
+      assert(p, 'a form in an editor tab');
+      assert.strictEqual(p.title, 'Set Up a Gateway');
+      assert(/Content-Security-Policy[^>]*script-src 'nonce-[0-9a-f]{32}'/.test(p.webview.html), 'its script runs by nonce only');
+      const last = () => p.got[p.got.length - 1];
+      p.fire({ type: 'ready' });
+      assert.deepStrictEqual(last(), { type: 'state', state: { file, exists: false, ok: false, baseUrl: '', tokenSet: false, models: { ANTHROPIC_MODEL: '', ANTHROPIC_DEFAULT_OPUS_MODEL: '', ANTHROPIC_DEFAULT_SONNET_MODEL: '', ANTHROPIC_DEFAULT_HAIKU_MODEL: '' } } }, 'the file as it is: none yet');
+      // what is wrong is said on the page, and nothing is written
+      p.fire({ type: 'save', baseUrl: 'gw.example.com', token: 'sk-secret', models: {} });
+      assert.deepStrictEqual([last(), fs.existsSync(file)], [{ type: 'error', text: 'The base URL must be an http:// or https:// address.' }, false]);
+      p.fire({ type: 'save', baseUrl: 'https://gw.example.com', token: '', models: {} });
+      assert.deepStrictEqual(last(), { type: 'error', text: 'A token is needed.' });
+      // saved: the file from the template, for its owner only; the page shows Saved, and perch.gatewayReady flips
+      p.fire({ type: 'save', baseUrl: 'https://gw.example.com/llm-api', token: 'sk-secret', models: { ANTHROPIC_MODEL: 'router[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: '' } });
+      assert.strictEqual(last().type, 'saved');
+      assert.deepStrictEqual([last().state.ok, last().state.tokenSet, last().state.baseUrl, last().state.models.ANTHROPIC_MODEL], [true, true, 'https://gw.example.com/llm-api', 'router[1m]']);
+      const gw = require('../src/gateway').readGateway(file);
+      assert.deepStrictEqual([gw.ok, gw.vars.ANTHROPIC_AUTH_TOKEN, gw.vars.ENABLE_PROMPT_CACHING_1H], [true, 'sk-secret', '1']);
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+      assert.deepStrictEqual(m.ui.contexts.filter((c) => c[0] === 'perch.gatewayReady').pop(), ['perch.gatewayReady', true], 'the gateway is ready');
+      assert.deepStrictEqual(m.ui.contexts.filter((c) => c[0] === 'perch.gateway').pop(), ['perch.gateway', true]);
+      // the Saved box's button: a Claude tab on the gateway
+      p.fire({ type: 'newTab' }); await flush();
+      assert(m.ui.executed.includes('perch.newClaudeGateway'), 'New Claude Tab on the Gateway');
+      // opened again: the same tab; shown the file again, without the token
+      m.commands['perch.setUpGateway']();
+      assert.strictEqual(forms().length, 1, 'one form at a time');
+      p.fire({ type: 'ready' });
+      assert.deepStrictEqual([last().type, last().state.tokenSet], ['state', true]);
+      // no token given: the one in the file stays
+      p.fire({ type: 'save', baseUrl: 'https://other.example.com', token: '', models: { ANTHROPIC_MODEL: '' } });
+      const again = require('../src/gateway').readGateway(file);
+      assert.deepStrictEqual([last().type, again.vars.ANTHROPIC_BASE_URL, again.vars.ANTHROPIC_AUTH_TOKEN, 'ANTHROPIC_MODEL' in again.vars], ['saved', 'https://other.example.com', 'sk-secret', false]);
+      assert(!JSON.stringify(p.got).includes('sk-secret'), 'the token is never sent to the page');
+      p.fire({ type: 'openFile' }); await flush();
+      assert.deepStrictEqual(m.ui.opened.pop(), [file, null], 'Open the file');
+      p.dispose(); m.commands['perch.setUpGateway']();
+      assert.strictEqual(forms().length, 1, 'closed, it opens anew');
+      m.perch.dispose();
+      assert.strictEqual(forms().length, 0, 'and goes with Perch');
+    } finally { globalThis.fetch = realFetch; fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+
   // ---- the model pill on the gateway: the gateway's names, from the file; a model of Claude's catalog is let go when a tab moves there
   {
     const fs = require('fs'), os = require('os'), path = require('path');
@@ -3283,7 +3336,7 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
       // no file yet: nothing offers a tab on the gateway, but the command and the footer's menu still lead to one
       assert.deepStrictEqual(v.lastTabs().gateway, { file, exists: false, ok: false }, 'every tabs message says where the file is and whether there is one');
-      assert.deepStrictEqual(m.ui.contexts, [['perch.gateway', false]], 'the title menus are told to hide their gateway entry');
+      assert.deepStrictEqual(m.ui.contexts, [['perch.gateway', false], ['perch.gatewayReady', false]], 'the title menus are told to hide their gateway entry, and that no gateway is ready');
       m.picks.push((i) => i.gateway); assert.strictEqual(await m.commands['perch.new'](), null, 'the quick pick has no gateway entry');
       await m.commands['perch.newClaudeGateway']();
       let t = v.lastTabs(); const g = t.tabs[0].id;

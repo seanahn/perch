@@ -400,7 +400,14 @@ is copied from elsewhere, so a fresh remote has neither.
   ANTHROPIC_BASE_URL=…`, `export ANTHROPIC_AUTH_TOKEN=…` (or
   `ANTHROPIC_API_KEY`), and any model names (`ANTHROPIC_MODEL`,
   `ANTHROPIC_DEFAULT_OPUS_MODEL`, …). The same file can drive a terminal
-  launcher. A tab on the gateway runs its Claude Code process with those
+  launcher. **Perch: Set Up a Gateway…** fills it in from a form in an
+  editor tab: the base URL, the token (shown only as set, with Replace;
+  it is never sent back to the page) and, folded away, the model names.
+  Saving makes the file from the template when there is none, else
+  changes only those lines and keeps the rest (comments, your own lines,
+  `ENABLE_PROMPT_CACHING_1H`); the file is left readable by you alone
+  (0600), and a folder made for it by you alone (0700). The form then
+  offers **New Claude Tab on the Gateway**. A tab on the gateway runs its Claude Code process with those
   variables added to its environment, and that is all: nothing is
   written to `~/.claude/settings.json`, the token is never in a file of
   Perch's, and the session, its record, your `CLAUDE.md`, memory, and MCP

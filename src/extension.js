@@ -4,6 +4,7 @@ const { randomBytes, randomUUID } = require('crypto');
 const { ClaudeAgent } = require('./claudeAgent');
 const { CodexAgent } = require('./codexAgent');
 const { getHtml } = require('./webview');
+const { getGatewayFormHtml } = require('./gatewayForm');
 const { loadClaudeModels, loadCodexModels, normalizeCommands, modelEntry, modelLabel, sameModel, fallbackNote } = require('./models');
 const { MeterHost } = require('./meterHost');
 const { VoiceHost } = require('./voiceHost');
@@ -37,6 +38,7 @@ const GATEWAY_DEFAULT_KEY = 'perch.claude.newTabsOnGateway';   // true once the 
 const REFUSED_LOGIN_KEY = 'perch.codex.refusedLogin';   // the authStamp of the Codex login Codex last refused here, until auth.json holds another
 const UNSANDBOXED_KEY = 'perch.codex.unsandboxed';   // { hostname: true } for machines where Codex's sandbox cannot start
 const PANEL_TYPE = 'perch.session';   // the webview panel type of an editor tab
+const GATEWAY_PANEL_TYPE = 'perch.gatewaySetup';   // Perch: Set Up a Gateway…'s form
 // how long to wait for VS Code to bring back editor tabs before opening them ourselves (shortened by the tests)
 const RESTORE_GRACE_MS = Number(process.env.PERCH_RESTORE_GRACE_MS) > 0 ? Number(process.env.PERCH_RESTORE_GRACE_MS) : 4000;
 // how long after a Perch tab leaves a group its lock is looked at: a tab that takes the place of another opens a moment
@@ -1500,12 +1502,51 @@ class PerchView {
   }
   /** What a page needs to know of the gateway, with the tabs: whether to offer it, and whether it is in order. */
   gatewayInfo() { const gw = this.gateway(); return { file: gw.file, exists: gw.exists, ok: gw.ok }; }
-  /** Tells VS Code whether there is a gateway file, so the menus offer a tab on it only then. */
+  /**
+   * Tells VS Code whether there is a gateway file, so the menus offer a tab on it only then (perch.gateway), and whether
+   * it is usable, with a base URL and a token (perch.gatewayReady, for a when clause that waits on a usable gateway).
+   */
   syncGatewayContext() {
-    const exists = this.gateway().exists;
-    if (exists === this.gatewayShown) return;
-    this.gatewayShown = exists;
-    Promise.resolve(vscode.commands.executeCommand('setContext', 'perch.gateway', exists)).catch(() => { /* an older VS Code */ });
+    const gw = this.gateway();
+    if (gw.exists !== this.gatewayShown) {
+      this.gatewayShown = gw.exists;
+      Promise.resolve(vscode.commands.executeCommand('setContext', 'perch.gateway', gw.exists)).catch(() => { /* an older VS Code */ });
+    }
+    if (gw.ok !== this.gatewayReadyShown) {
+      this.gatewayReadyShown = gw.ok;
+      Promise.resolve(vscode.commands.executeCommand('setContext', 'perch.gatewayReady', gw.ok)).catch(() => { /* an older VS Code */ });
+    }
+  }
+
+  /**
+   * Perch: Set Up a Gateway…: a form in an editor tab that writes the gateway file (Gateway.saveGateway). The page is
+   * shown the file's values but the token, of which only whether there is one; a save answers with the file read back,
+   * or what is wrong, shown on the page. One such tab at a time. (Sean, 2026-11-24)
+   */
+  setUpGateway() {
+    if (this.gatewayPanel) { this.gatewayPanel.reveal(); return this.gatewayPanel; }
+    const panel = vscode.window.createWebviewPanel(GATEWAY_PANEL_TYPE, 'Set Up a Gateway', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [] });
+    this.gatewayPanel = panel;
+    panel.webview.html = getGatewayFormHtml({ nonce: randomBytes(16).toString('hex'), cspSource: panel.webview.cspSource });
+    const post = (m) => { Promise.resolve(panel.webview.postMessage(m)).catch(() => { /* the page is gone */ }); };
+    panel.webview.onDidReceiveMessage((msg) => {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'ready') post({ type: 'state', state: Gateway.formState(this.gateway()) });
+      else if (msg.type === 'openFile') this.openGatewayFile();
+      else if (msg.type === 'newTab') Promise.resolve(vscode.commands.executeCommand('perch.newClaudeGateway')).catch((e) => this.trace(`gateway form: ${(e && e.message) || e}`));
+      else if (msg.type === 'save') {
+        const models = {};
+        for (const k of Gateway.MODEL_VARS) if (msg.models && typeof msg.models[k] === 'string') models[k] = msg.models[k];
+        let gw;
+        try { gw = Gateway.saveGateway(this.gatewayPath(), { baseUrl: String(msg.baseUrl || ''), token: String(msg.token || ''), models }); }
+        catch (e) { post({ type: 'error', text: (e && e.message) || String(e) }); return; }
+        this.syncGatewayContext();
+        this.sendTabs();   // the tabs' footers and menus learn of the gateway now
+        post({ type: 'saved', state: Gateway.formState(gw) });
+      }
+    });
+    panel.onDidDispose(() => { if (this.gatewayPanel === panel) this.gatewayPanel = null; });
+    return panel;
   }
 
   /** The gateway's file, made from the template when there is none, so there is something to fill in. Owner-readable only. */
@@ -2656,6 +2697,7 @@ class PerchView {
     this.closing = true;             // the editor tabs are going away with the window, not being closed by the user
     clearTimeout(this.graceTimer);
     clearTimeout(this.firstStartTimer);
+    if (this.gatewayPanel) { try { this.gatewayPanel.dispose(); } catch (_) { /* gone */ } }
     clearTimeout(this.unlockTimer);
     clearInterval(this.ticketTimer);
     for (const s of this.sessions) s.dispose();
@@ -2679,6 +2721,7 @@ function activate(context) {
     vscode.commands.registerCommand('perch.newClaude', () => perch.addSession('claude')),
     vscode.commands.registerCommand('perch.newClaudeGateway', () => perch.addSession('claude', { gateway: true })),
     vscode.commands.registerCommand('perch.newCodex', () => perch.addSession('codex')),
+    vscode.commands.registerCommand('perch.setUpGateway', () => { perch.setUpGateway(); }),
     vscode.commands.registerCommand('perch.stop', () => { const s = perch.active(); if (s) s.interrupt(); }),
     vscode.commands.registerCommand('perch.closeTab', () => { const s = perch.active(); if (s) perch.closeSession(s.id); }),
     vscode.commands.registerCommand('perch.handoff', () => perch.handoff()),
@@ -2713,6 +2756,7 @@ function activate(context) {
     { dispose: () => perch.dispose() },
   );
   perch.start();
+  perch.syncGatewayContext();   // perch.gateway and perch.gatewayReady from the start, so a gateway already set up counts at once
   // an installer's first start: after the wait for restored tabs, so a tab VS Code brings back counts as open
   perch.firstStartTimer = setTimeout(() => { perch.firstStartTimer = null; perch.firstStart().catch((e) => perch.trace(`first start: ${(e && e.message) || e}`)); }, RESTORE_GRACE_MS);
   if (perch.firstStartTimer.unref) perch.firstStartTimer.unref();
