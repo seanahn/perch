@@ -11,6 +11,7 @@ const { CodeIndex } = require('./codeIndex');
 const { resolveProgram, sdkCodex, sdkClaude, terminalRun } = require('./binaries');
 const codexAuth = require('./codexAuth');
 const Gateway = require('./gateway');
+const { chooseFirstTab } = require('./firstTab');
 const Prices = require('./prices');
 const { shortModel } = require('./relay');
 const { listSessions, renameSession, deleteSession, forkSession, loadTranscript, cleanTitle, ago, titleOf, sessionUsage, claudeSessionUsage } = require('./sessionStore');
@@ -1935,7 +1936,22 @@ class PerchView {
   }
 
   /**
-   * perch.firstStart.openClaudeTab, set by an installer: one Claude tab, in an editor group on the right, once (note 203).
+   * The tab a first start opens, by what this machine can answer with (chooseFirstTab): the gateway when its file is
+   * usable, else Claude when it has a login or key, else Codex when it has one, else Claude, which offers the sign-in.
+   */
+  async firstTab() {
+    let codexReady = false;
+    try { await this.meter.codexKeyReady; codexReady = !!(codexAuth.loggedIn() || this.meter.codexApiKey()); } catch (_) { /* not signed in, as far as can be told */ }
+    let claudeReady = false;
+    try { claudeReady = !!this.meter.canRun(); } catch (_) { /* likewise */ }
+    const pick = chooseFirstTab({ gatewayReady: this.gateway().ok, claudeReady, codexReady });
+    this.trace(`first start: a ${pick.kind === 'codex' ? 'Codex' : pick.gateway ? 'Claude (gateway)' : 'Claude'} tab`);
+    return pick;
+  }
+
+  /**
+   * perch.firstStart.openClaudeTab, set by an installer: one tab, in an editor group on the right, once (note 203). Despite
+   * the setting's name the tab is the agent firstTab picks: Claude, Claude on the gateway, or Codex (Sean, 2026-11-24).
    * False is written first, at the scope that held true, and the key is kept: an installer that writes only missing keys
    * then leaves it alone. A write that fails opens nothing, rather than a tab on every start; so does any Perch tab
    * already open, in an editor or the sidebar, as one the window brought back. Called after the wait for restored tabs.
@@ -1951,7 +1967,9 @@ class PerchView {
     try { await (target === T.WorkspaceFolder ? c : vscode.workspace.getConfiguration('perch')).update(KEY, false, target); }
     catch (e) { this.trace(`perch.${KEY} could not be set back to false, so no tab is opened: ${(e && e.message) || e}`); return; }
     if (this.closing || this.sessions.length) return;
-    const s = this.addSession('claude', { location: 'editor' });   // beside the active group: column() has no Perch tab to follow
+    const pick = await this.firstTab();
+    if (this.closing || this.sessions.length) return;
+    const s = this.addSession(pick.kind, { location: 'editor', gateway: pick.kind === 'claude' ? pick.gateway : undefined });   // beside the active group: column() has no Perch tab to follow
     if (!s) return;
     // VS Code tells the extension of the new tab, and of a group made or closed, a moment later
     const groups = () => (vscode.window.tabGroups && vscode.window.tabGroups.all) || [];

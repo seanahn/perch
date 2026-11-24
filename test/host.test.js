@@ -1750,6 +1750,41 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
       w.perch.dispose();
     }
 
+    // the tab is the agent that can answer: a usable gateway, else Claude signed in, else Codex signed in, else Claude
+    {
+      const fs = require('fs'), os = require('os'), path = require('path');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-first-')), gwFile = path.join(dir, 'env'), half = path.join(dir, 'half');
+      fs.writeFileSync(gwFile, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=t\n');
+      fs.writeFileSync(half, 'export ANTHROPIC_BASE_URL=https://gw.example/llm-api\nexport ANTHROPIC_AUTH_TOKEN=\n');
+      const realFetch = globalThis.fetch; globalThis.fetch = async () => ({ ok: false });
+      const saved = { a: process.env.ANTHROPIC_API_KEY, o: process.env.OPENAI_API_KEY };
+      delete process.env.ANTHROPIC_API_KEY; delete process.env.OPENAI_API_KEY;
+      try {
+        for (const [o, want, why] of [
+          [{ config: { [KEY]: true, 'claude.gatewayEnv': gwFile }, meter: { login: false, codexLoggedIn: false } }, ['claude', true], 'a usable gateway: a Claude tab on it'],
+          [{ config: { [KEY]: true, 'claude.gatewayEnv': half } }, ['claude', false], 'a gateway file with no token: Claude, signed in'],
+          [{ config: { [KEY]: true, 'claude.gatewayEnv': half, 'claude.defaultBackend': 'gateway' } }, ['claude', false], 'nor does a default of the gateway put the first tab on an unusable one'],
+          [{ config: { [KEY]: true }, meter: { login: false } }, ['codex', false], 'Claude not signed in, Codex logged in: Codex'],
+          [{ config: { [KEY]: true }, meter: { login: false, codexLoggedIn: false, secrets: { 'perch.codex.apiKey': 'sk-kept-0123456789abcdefghijklmnop' } } }, ['codex', false], 'Codex on an API key Perch holds'],
+          [{ config: { [KEY]: true }, meter: { login: false, codexLoggedIn: false } }, ['claude', false], 'neither: Claude, which offers the sign-in'],
+        ]) {
+          const m = fresh(o); m.ui.groups = [{ viewColumn: 1, tabs: [] }, { viewColumn: 2, tabs: [] }]; await settle();
+          assert.deepStrictEqual(m.perch.sessions.map((s) => [s.kind, s.kind === 'claude' ? !!s.gateway : false]), [want], why);
+          assert.deepStrictEqual([m.perch.sessions[0].location, m.ui.configUpdates], ['editor', [[KEY, false, m.vscode.ConfigurationTarget.Global]]], why + ': in an editor, false written');
+          m.perch.dispose();
+        }
+        // Claude on an API key in the environment counts as signed in
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+        const k = fresh({ config: { [KEY]: true }, meter: { login: false } }); k.ui.groups = [{ viewColumn: 1, tabs: [] }, { viewColumn: 2, tabs: [] }]; await settle();
+        assert.deepStrictEqual(k.perch.sessions.map((s) => s.kind), ['claude'], 'ANTHROPIC_API_KEY: Claude');
+        k.perch.dispose();
+      } finally {
+        if (saved.a === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved.a;
+        if (saved.o === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = saved.o;
+        globalThis.fetch = realFetch; fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     // false or absent does nothing: no write, no tab
     for (const config of [{ [KEY]: false }, {}]) {
       const m = fresh({ config }); await settle();
