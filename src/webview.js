@@ -234,8 +234,9 @@ ${glyphCss}
   #past .etabs .refresh { margin-left: auto; }
   #past .row .w.st-connected { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
   #past .row .w.st-failed, #past .row .w.st-needs-auth { color: var(--vscode-charts-orange); }
-  #past .row .fork, #past .row .rename { flex: none; visibility: hidden; font-size: 12px; padding: 0 5px; line-height: 16px; border: none; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
+  #past .row .fork, #past .row .rename { flex: none; visibility: hidden; font-size: 12px; padding: 0 2px; line-height: 16px; border: none; background: none; color: var(--vscode-descriptionForeground); cursor: pointer; }
   #past .row:hover .fork, #past .row:hover .rename { visibility: visible; }
+  #past .row .rename + .fork { margin-left: -4px; }   /* the pair sits together: 2px apart, not the row's 6px gap */
   #past .row .fork:hover, #past .row .rename:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); border-radius: 3px; }
 
   /* composer: the message on top, the tools in a row beneath. Each kind of tab takes its own vendor's look. */
