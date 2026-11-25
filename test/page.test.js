@@ -1584,6 +1584,9 @@ window.close();
     const css = pp.d.querySelector('style').textContent;
     assert.match(css, /\.pinned\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--vscode-foreground\) 14%, var\(--vscode-editor-background\)\)/, 'the pinned prompt has a more visible background');
     assert.match(css, /\.pinned\s*\{[^}]*border-left:\s*3px solid var\(--vscode-focusBorder\)/, 'the pinned prompt has a theme-aware accent');
+    // Over the transcript, not beside it: if showing it moved the transcript's top, a prompt just below the top would
+    // cross it, hide the strip, cross back and show it again, every frame (two prompts flickering, Sean 2026-11-25)
+    assert.match(css, /\.pinned\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;/, 'the pinned prompt lies over the transcript, so showing it moves nothing');
     const [u1, u2] = pp.$$('.pane:not([hidden]) .msg.user');
     const at = (n, top, bottom) => { n.getBoundingClientRect = () => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }); };
     const frame = () => new Promise((r) => pp.w.requestAnimationFrame(() => r()));
