@@ -63,6 +63,10 @@ messages, compact tool calls and results, permission requests, questions, notes,
 result line for each turn. A vendor switch inserts a divider and the tab then continues from the
 other vendor's record. Perch does not rewrite the prompt or manufacture a shared agent record.
 
+The top of the transcript pins the prompt whose answer is at the top of the view, once that prompt's own bubble has
+scrolled off (Sean, 2026-11-25: "hard to see what the response is for"; it follows the scrolling, not always the
+latest prompt). A long prompt shows its last two lines after "…"; a click goes to the prompt. Built in 0.7.49.
+
 The bottom of the transcript holds transient work state and panels that need more vertical space:
 
 - what the active agent or its sub-agents are doing;

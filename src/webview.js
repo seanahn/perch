@@ -116,6 +116,9 @@ ${glyphCss}
   /* a message of the user's stands apart from the answers: to the right, a filled tint of the foreground so it shows in any theme, and space above it that marks where a turn begins */
   .user { margin: 18px 0 10px auto; width: fit-content; max-width: 88%; padding: 8px 12px; background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); border-radius: 12px 12px 4px 12px; }
   .user:first-child { margin-top: 4px; }
+  /* the prompt whose answer is at the top of the transcript, while its own bubble is scrolled off: its last two lines */
+  .pinned { flex: none; display: flex; flex-direction: column; justify-content: flex-end; max-height: 2.8em; overflow: hidden; margin: 0 10px; padding: 3px 10px; font-size: 12px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-foreground) 6%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent); border-top: none; border-radius: 0 0 8px 8px; cursor: pointer; }
+  .pinned:hover { color: var(--vscode-foreground); }
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
   .user .unq { float: right; margin: -3px -6px 0 6px; padding: 0 4px; border: none; background: none; color: var(--vscode-descriptionForeground); font-size: 14px; line-height: 1; cursor: pointer; border-radius: 3px; }
@@ -620,18 +623,20 @@ ${glyphCss}
   function makePane(tab) {
     const root = el('div', 'pane'); root.hidden = true;
     const log = el('div', 'log');
+    const pinned = el('div', 'pinned'); pinned.hidden = true; pinned.title = 'The prompt this answer is for. Click to go to it.';
     const work = el('div', 'work'), what = el('span', 'what'), took = el('span', 'for'); work.hidden = true; work.setAttribute('role', 'status');
     work.append(el('span', 'sp'), what, took);
     const subs = el('div', 'subs'); subs.hidden = true;   // the running turn's sub-agents as a table, opened from the count at the foot
     const mx = el('div', 'subs mx'); mx.hidden = true;    // the whole session's usage, thread by thread, opened from the footer
     const ix = el('div', 'subs mx ix'); ix.hidden = true;  // the codebase search index, folder by folder, opened from the footer
     const pu = el('div', 'subs mx pu'); pu.hidden = true;  // the vendor's usage: the plan's windows or the cost, opened from the footer
-    root.append(log, work, subs, mx, ix, pu); $panes.append(root);
+    root.append(pinned, log, work, subs, mx, ix, pu); $panes.append(root);
     const sent = [];                                // what the user has sent in this tab, oldest first, for the arrow keys
-    const p = { sid: tab.id, sent, hist: null, root, log, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, pu, puOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], sentAnyway: new Set(), kind: tab.kind, stick: true };
+    const p = { sid: tab.id, sent, hist: null, root, log, pinned, pinnedTo: null, pinRaf: 0, work, what, took, subs, subsOpen: false, mx, mxOpen: false, mxData: null, mxSort: { key: 'cost', dir: -1 }, ix, ixOpen: false, ixData: null, ixTimer: null, pu, puOpen: false, doing: '', asking: 0, live: null, liveText: '', tools: {}, queued: {}, draft: '', shots: [], sentAnyway: new Set(), kind: tab.kind, stick: true };
     // The transcript keeps to its end until the user scrolls away from it, and returns to keeping to it when they scroll
     // back. It is held there when the pane changes size too: a page is given its transcript before it has its final shape.
-    log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
+    log.addEventListener('scroll', () => { if (log.clientHeight) p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; repin(p); });
+    pinned.addEventListener('click', () => { if (p.pinnedTo) p.pinnedTo.scrollIntoView({ block: 'start' }); });
     if (typeof ResizeObserver === 'function') new ResizeObserver(() => pin(p)).observe(log);
     panes.set(tab.id, p); return p;
   }
@@ -897,7 +902,25 @@ ${glyphCss}
   }
   setInterval(() => { if (active) syncWork(active); }, 1000);
 
-  function pin(p) { if (p.stick) p.log.scrollTop = p.log.scrollHeight; }
+  function pin(p) { if (p.stick) p.log.scrollTop = p.log.scrollHeight; repin(p); }
+  // The pinned prompt, once a frame: the last prompt that starts above the transcript's top, while none of its bubble
+  // is still on screen (Sean, 2026-11-25: "hard to see what the response is for"). A long one shows its last two lines.
+  function repin(p) {
+    if (p.pinRaf) return;
+    p.pinRaf = requestAnimationFrame(() => {
+      p.pinRaf = 0;
+      const top = p.log.getBoundingClientRect().top;
+      let to = null;
+      for (const u of p.log.querySelectorAll('.msg.user')) { if (u.getBoundingClientRect().top < top) to = u; else break; }
+      if (to && to.getBoundingClientRect().bottom > top) to = null;
+      p.pinnedTo = to; p.pinned.hidden = !to;
+      if (!to) return;
+      const lines = (to.promptText || '').replace(/\\s+$/, '').split('\\n');
+      const cut = lines.length > 2;
+      p.pinned.textContent = (cut ? '\\u2026' : '') + lines.slice(-2).join('\\n');
+      p.pinned.classList.toggle('cut', cut);
+    });
+  }
   function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); p.log.append(d); pin(p); return d; }
   /** A line of plain text whose web addresses are links; the webview opens them in the browser. */
   function linkified(text) {
@@ -1374,7 +1397,7 @@ ${glyphCss}
         }
         if (tags.length) d.append(el('span', 'tag', tags.join(' · ')));
         if (thumbs.length) { const row = el('div', 'pics'); for (const t of thumbs) { const i = document.createElement('img'); i.src = t; i.alt = 'pasted image'; i.title = 'Click to see it larger'; i.addEventListener('click', () => { i.classList.toggle('big'); i.title = i.classList.contains('big') ? 'Click to shrink it' : 'Click to see it larger'; }); row.append(i); } d.append(row); }
-        d.append(linkified(m.text)); ticketed(d); break; }
+        d.promptText = m.text || ''; d.append(linkified(m.text)); ticketed(d); break; }
       case 'delta': if (!p.live) p.live = add(p, 'assistant md live', ''); p.liveText += m.text; p.live.textContent = ''; p.live.append(drawn(p.liveText)); copyable(p.live); ticketed(p.live); break;
       case 'text': { endLive(p); const d = add(p, 'assistant md', ''); d.append(drawn(m.text)); copyable(d); ticketed(d); break; }
       case 'thinking': endLive(p); add(p, 'thinking', m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text); break;

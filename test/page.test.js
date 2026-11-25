@@ -1037,7 +1037,7 @@ window.close();
   tabs6();
   assert.deepStrictEqual([foot(0), foot(1)], [null, null], 'nothing is said while nothing is done');
   const kids = [...p6.$$('.pane')[0].children].map((n) => [n.className, n.hidden]);
-  assert.deepStrictEqual(kids, [['log', false], ['work', true], ['subs', true], ['subs mx', true], ['subs mx ix', true], ['subs mx pu', true]], 'under the transcript, above the message; nothing over it, the sub-agents\' table hidden until a turn has some, and the session\'s usage, the index and the vendor\'s usage until the footer opens them');
+  assert.deepStrictEqual(kids, [['pinned', true], ['log', false], ['work', true], ['subs', true], ['subs mx', true], ['subs mx ix', true], ['subs mx pu', true]], 'under the transcript, above the message; over it only the pinned prompt, hidden until a prompt scrolls off; the sub-agents\' table hidden until a turn has some, and the session\'s usage, the index and the vendor\'s usage until the footer opens them');
 
   tabs6({ busy: true, busySince: Date.now() - 75000 });
   assert.deepStrictEqual([foot(0), foot(1)], [['work', 'Working…', '1m 15s'], null], 'each tab for itself');
@@ -1570,6 +1570,37 @@ window.close();
     typeIn('b once more: ' + GHU); enter(); await settle();
     assert.deepStrictEqual(sends(), [{ type: 'send', sid: 'b', text: 'b once more: ' + GHU }], 'off for b at once');
     ps.w.close();
+  }
+
+  // ---- the pinned prompt: the prompt whose answer is at the top of the transcript, while its own bubble is off screen
+  {
+    const pp = page(ICONS);
+    pp.host({ type: 'tabs', tabs: [tab({ id: 'a', kind: 'claude', title: 'A' })], active: 'a' });
+    const pev = (e) => pp.host({ type: 'event', sid: 'a', ev: e });
+    pev({ kind: 'user', text: 'first prompt' }); pev({ kind: 'text', text: 'answer one' });
+    pev({ kind: 'user', text: 'line1\nline2\nline3\nline4\n' }); pev({ kind: 'text', text: 'answer two' });
+    const log = pp.$('.pane:not([hidden]) .log'), strip = pp.$('.pane:not([hidden]) .pinned');
+    assert(strip, 'each pane has a pinned-prompt strip');
+    const [u1, u2] = pp.$$('.pane:not([hidden]) .msg.user');
+    const at = (n, top, bottom) => { n.getBoundingClientRect = () => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }); };
+    const frame = () => new Promise((r) => pp.w.requestAnimationFrame(() => r()));
+    const scrolled = async () => { log.dispatchEvent(new pp.w.Event('scroll')); await frame(); await frame(); };
+    at(log, 100, 600);
+    at(u1, 150, 190); at(u2, 400, 440); await scrolled();
+    assert.strictEqual(strip.hidden, true, 'no prompt above the top: no strip');
+    at(u1, 20, 60); await scrolled();
+    assert.deepStrictEqual([strip.hidden, strip.textContent], [false, 'first prompt'], "answer one at the top, its prompt scrolled off: pinned");
+    at(u1, 60, 120); await scrolled();
+    assert.strictEqual(strip.hidden, true, 'its bubble still partly on screen: not pinned twice');
+    at(u1, -600, -560); at(u2, 40, 90); await scrolled();
+    assert.deepStrictEqual([strip.hidden, strip.textContent, strip.classList.contains('cut')], [false, '…line3\nline4', true], 'a long prompt: its last two lines');
+    let into = null; u2.scrollIntoView = (o) => { into = JSON.parse(JSON.stringify(o)); };
+    strip.click();
+    assert.deepStrictEqual(into, { block: 'start' }, 'a click goes to the prompt itself');
+    pev({ kind: 'user', text: 'third' }); pev({ kind: 'text', text: 'answer three' });
+    const u3 = pp.$$('.pane:not([hidden]) .msg.user')[2]; at(u3, -50, -10); at(u2, -300, -250); await frame(); await frame();
+    assert.strictEqual(strip.textContent, 'third', 'kept up to date as the transcript grows, not only on scroll');
+    pp.w.close();
   }
   console.log('PAGE OK');
 })().catch((e) => { console.error('PAGE FAILED:', e.stack || e.message); process.exit(1); });
