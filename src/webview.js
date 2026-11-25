@@ -117,7 +117,7 @@ ${glyphCss}
   .user { margin: 18px 0 10px auto; width: fit-content; max-width: 88%; padding: 8px 12px; background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent); border-radius: 12px 12px 4px 12px; }
   .user:first-child { margin-top: 4px; }
   /* the prompt whose answer is at the top of the transcript, while its own bubble is scrolled off: its last two lines */
-  .pinned { flex: none; display: flex; flex-direction: column; justify-content: flex-end; max-height: 2.8em; overflow: hidden; margin: 0 10px; padding: 3px 10px; font-size: 12px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-foreground) 6%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent); border-top: none; border-radius: 0 0 8px 8px; cursor: pointer; }
+  .pinned { flex: none; display: flex; flex-direction: column; justify-content: flex-end; max-height: 2.8em; overflow: hidden; margin: 0 10px; padding: 3px 10px; font-size: 12px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-foreground) 14%, var(--vscode-editor-background)); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent); border-top: none; border-left: 3px solid var(--vscode-focusBorder); border-radius: 0 0 8px 8px; cursor: pointer; }
   .pinned:hover { color: var(--vscode-foreground); }
   .user.queued { opacity: .75; border-style: dashed; }
   .user .tag { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); margin-left: 8px; }
@@ -913,12 +913,14 @@ ${glyphCss}
       let to = null;
       for (const u of p.log.querySelectorAll('.msg.user')) { if (u.getBoundingClientRect().top < top) to = u; else break; }
       if (to && to.getBoundingClientRect().bottom > top) to = null;
-      p.pinnedTo = to; p.pinned.hidden = !to;
-      if (!to) return;
+      if (p.pinnedTo === to) return;
+      p.pinnedTo = to;
+      if (!to) { p.pinned.hidden = true; return; }
       const lines = (to.promptText || '').replace(/\\s+$/, '').split('\\n');
       const cut = lines.length > 2;
       p.pinned.textContent = (cut ? '\\u2026' : '') + lines.slice(-2).join('\\n');
       p.pinned.classList.toggle('cut', cut);
+      p.pinned.hidden = false;
     });
   }
   function add(p, cls, text) { const d = el('div', 'msg ' + cls, text); p.log.append(d); pin(p); return d; }
