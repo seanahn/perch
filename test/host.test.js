@@ -4010,5 +4010,31 @@ const LIM = (pct) => [{ kind: 'session', percent: pct, resetsAt: new Date(Date.n
     m.perch.dispose();
   }
 
+  {
+    // the machine's gateway pin changes while a subscription tab runs (Claude Code reads settings.json again on its own):
+    // the tab's next message starts a new process, off the gateway as the file now asks, the conversation resumed
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perch-pin-')), settingsPath = path.join(claudeDir, 'settings.json');
+    fs.writeFileSync(settingsPath, '{}');
+    const m = install(undefined, { meter: { claudeDir, settingsPath } }); await flush();
+    const v = fakeView(); m.registered['perch.main'].resolveWebviewView(v.view); v.fire({ type: 'ready' }); await flush();
+    v.fire({ type: 'new', kind: 'claude' }); const c = v.lastTabs().active;
+    v.fire({ type: 'send', sid: c, text: 'one' }); await flush();
+    const first = created[created.length - 1], n = created.length;
+    assert.strictEqual(first.o.offGateway, undefined, 'no pin: no override');
+    v.fire({ type: 'send', sid: c, text: 'two' }); await flush();
+    assert.strictEqual(created.length, n, 'nothing changed: the same process');
+    fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example' }, apiKeyHelper: '/bin/gw-key' }));
+    v.fire({ type: 'send', sid: c, text: 'three' }); await flush();
+    const second = created[created.length - 1];
+    assert.deepStrictEqual([first.disposed, created.length, second.o.offGateway, second.sent], [true, n + 1, { bedrock: false }, ['three']], 'pinned since: a new process, off the gateway, given the message');
+    assert(second.o.resume, 'the conversation is resumed');
+    assert(v.events(c).some((e) => e.kind === 'note' && /gateway settings changed/.test(e.text)), 'and the tab says why');
+    fs.writeFileSync(settingsPath, '{}');
+    v.fire({ type: 'send', sid: c, text: 'four' }); await flush();
+    assert.deepStrictEqual([second.disposed, created[created.length - 1].o.offGateway], [true, undefined], 'unpinned again: a new process without the override');
+    m.perch.dispose();
+  }
+
   console.log('HOST OK');
 })().catch((e) => { console.error('HOST FAILED:', e.stack || e.message); process.exit(1); });

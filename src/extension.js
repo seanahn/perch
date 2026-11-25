@@ -831,6 +831,7 @@ class Session {
       const gw = this.gateway ? this.view.gateway() : null;
       if (gw) this.view.prices.load();   // the list prices a streamed response is priced at, for the turn's figure
       const pinned = !gw && !!this.view.pinnedGatewayUrl();   // the machine pins a gateway for all Claude Code; a non-gateway tab must escape it
+      this.pinnedAtStart = pinned;   // Claude Code reads settings.json again while it runs; a change to the pin restarts the tab (send)
       const launchCat = this.catalog();
       // a model saved under another backend's name (Bedrock's `us.anthropic.…` on the subscription, say) is given the name
       // this backend has for it, its 1M context kept; the tab keeps the name it runs
@@ -903,6 +904,12 @@ class Session {
     }
     // Claude Code refused the login its process holds: the next message gets a fresh process, which reads the login there now
     if (this.kind === 'claude' && this.relogin && this.agent && !this.busy) { this.relogin = false; this.restart(); }
+    // the machine's gateway pin came or went since this process started: a running Claude Code takes up the file's new
+    // gateway on its own, so a tab off the gateway would end up on it. A new process gets the settings that keep it where it is.
+    if (this.kind === 'claude' && this.agent && !this.busy && !this.gateway && this.pinnedAtStart !== !!this.view.pinnedGatewayUrl()) {
+      this.restart();
+      this.post({ kind: 'note', text: 'Claude Code\'s gateway settings changed, so this tab restarts on its own backend; the conversation continues, the prompt cache starts over.' });
+    }
     // Claude with nothing to authenticate with here, on the backend it would get: hold the message, offer the way in
     if (this.kind === 'claude' && !this.agent && !this.gateway && this.view.meter && !this.view.meter.canRun(this.own || undefined)) {
       const api = (this.own || this.view.meter.backend()) === 'api';
